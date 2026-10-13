@@ -264,10 +264,10 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 **Files:**
 - Create: `README.md`
 
-- [ ] назначение и требования (из шапки старого `main.go`)
-- [ ] запуск: `make build`, опции/env (только `--src`, не `-src` — отличие от старой версии), пример с `.env`; локальная проверка — только `make run` (с хоста rs-имена compose не резолвятся); разработка: `make test`, `make test-integration`, `make lint`, `make down`
-- [ ] гарантии: at-least-once + идемпотентные replace-upsert/delete по `_id`, чекпойнт на цели с `w:majority`, коды выхода
-- [ ] раздел «Ограничения»: (a) updateLookup после rename/drop+recreate; (b) rename/drop+recreate в окне `start-ts` → конец дампа; будущий фикс — `changeStreamPreAndPostImages` + `fullDocument: required`; неподдерживаемые DDL (collMod, views, опции create, шардирование)
+- [x] назначение и требования (из шапки старого `main.go`)
+- [x] запуск: `make build`, опции/env (только `--src`, не `-src` — отличие от старой версии), пример с `.env`; локальная проверка — только `make run` (с хоста rs-имена compose не резолвятся); разработка: `make test`, `make test-integration`, `make lint`, `make down`
+- [x] гарантии: at-least-once + идемпотентные replace-upsert/delete по `_id`, чекпойнт на цели с `w:majority`, коды выхода
+- [x] раздел «Ограничения»: (a) updateLookup после rename/drop+recreate; (b) rename/drop+recreate в окне `start-ts` → конец дампа; будущий фикс — `changeStreamPreAndPostImages` + `fullDocument: required`; неподдерживаемые DDL (collMod, views, опции create, шардирование)
 
 ### Task 11: Verify acceptance criteria
 - [ ] все пункты Overview реализованы, в корне нет старых `main.go`/`main_test.go`
