@@ -155,14 +155,14 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 - Create: `cmd/mongo-replicator/replicator/replicator_test.go`
 - Delete: `main.go`, `main_test.go`
 
-- [ ] разложить код `main.go` по файлам без изменения алгоритма; `replicator` → экспортируемый `Replicator` с `Config`, `New`, `Run`, `Applied`
-- [ ] перенести `r.pending = batch{}` из цикла ретраев в начало `Run`; `applied` → `atomic.Int64`
-- [ ] добавить `IsHistoryLost(err)` поверх `hasCode(err, codeChangeStreamHistoryLost, codeChangeStreamFatal)` и `ErrNoStartPoint` вместо безымянной ошибки в `Run`
-- [ ] заменить `log.Printf` на zerolog со структурными полями (см. Technical Details)
-- [ ] перенести 4 существующих теста в `replicator_test.go` (`package replicator`) без изменения логики
-- [ ] написать тест `IsHistoryLost` / `hasCode` на testify (сразу тянем testify, чтобы он попал в vendor в Task 4): table-driven на `mongo.CommandError{Code: 286|280|26|...}`, обёрнутых через `fmt.Errorf("%w")`, обычной ошибке и `nil`
-- [ ] удалить корневые `main.go`/`main_test.go`
-- [ ] `go mod tidy`, `go test -race ./...` — должно пройти
+- [x] разложить код `main.go` по файлам без изменения алгоритма; `replicator` → экспортируемый `Replicator` с `Config`, `New`, `Run`, `Applied`
+- [x] перенести `r.pending = batch{}` из цикла ретраев в начало `Run`; `applied` → `atomic.Int64`
+- [x] добавить `IsHistoryLost(err)` поверх `hasCode(err, codeChangeStreamHistoryLost, codeChangeStreamFatal)` и `ErrNoStartPoint` вместо безымянной ошибки в `Run`
+- [x] заменить `log.Printf` на zerolog со структурными полями (см. Technical Details)
+- [x] перенести 4 существующих теста в `replicator_test.go` (`package replicator`) без изменения логики
+- [x] написать тест `IsHistoryLost` / `hasCode` на testify (сразу тянем testify, чтобы он попал в vendor в Task 4): table-driven на `mongo.CommandError{Code: 286|280|26|...}`, обёрнутых через `fmt.Errorf("%w")`, обычной ошибке и `nil`
+- [x] удалить корневые `main.go`/`main_test.go`
+- [x] `go mod tidy`, `go test -race ./...` — должно пройти
 
 ### Task 3: CLI `cmd/mongo-replicator/main.go`
 
