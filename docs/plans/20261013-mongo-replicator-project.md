@@ -198,12 +198,14 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 - Create: `docker-compose.yml`
 - Modify: `Makefile`
 
-- [ ] `Dockerfile.dev` на `artifactory.yc.prod.infra.sravni.market/repub/go/build:1.26` (без libwebp/swag)
-- [ ] `docker-compose.yml`: `mongo-src`, `mongo-dst`, `app`, `linter` (см. Technical Details)
-- [ ] Makefile: `default`, `docker-volumes`, `test`, `test-integration`, `lint`, `run`, `down` (детали — в Technical Details)
-- [ ] проверить: `make docker-volumes`, `docker compose up -d mongo-src mongo-dst` → оба healthy за < 30 с, `db.hello().isWritablePrimary` = true
-- [ ] `make test` (не поднимает mongo) и `make lint` — должны пройти. Правки по линтеру не меняют алгоритм: замечания `gocyclo`/`gocritic` на `Run`/`applyDDL` — через `//nolint:<linter> // причина`
-- [ ] ⚠️ если artifactory недоступен локально — зафиксировать в плане и временно проверить на `golang:1.26-alpine`, в файле оставить artifactory-образ
+- [x] `Dockerfile.dev` на `artifactory.yc.prod.infra.sravni.market/repub/go/build:1.26` (без libwebp/swag)
+- [x] `docker-compose.yml`: `mongo-src`, `mongo-dst`, `app`, `linter` (см. Technical Details)
+- [x] Makefile: `default`, `docker-volumes`, `test`, `test-integration`, `lint`, `run`, `down` (детали — в Technical Details)
+- [x] проверить: `make docker-volumes`, `docker compose up -d mongo-src mongo-dst` → оба healthy за < 30 с, `db.hello().isWritablePrimary` = true
+- [x] `make test` (не поднимает mongo) и `make lint` — должны пройти. Правки по линтеру не меняют алгоритм: замечания `gocyclo`/`gocritic` на `Run`/`applyDDL` — через `//nolint:<linter> // причина`
+- [x] (не понадобилось — artifactory доступен, образ собрался) ⚠️ если artifactory недоступен локально — зафиксировать в плане и временно проверить на `golang:1.26-alpine`, в файле оставить artifactory-образ
+- ➕ `make lint` нашёл только `gocritic stringXbytes` в `replicator_test.go` → `bytes.Equal`; на `Run`/`applyDDL` замечаний нет, `//nolint` не понадобился
+- ➕ mongo-src/mongo-dst healthy за ~12 с; `make run` проверен коротким запуском (подключение, `--start-ts` подставляется)
 
 ### Task 6: Интеграционная обвязка + сценарий DML
 

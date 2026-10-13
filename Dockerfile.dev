@@ -1,0 +1,9 @@
+# Dockerfile for development
+FROM artifactory.yc.prod.infra.sravni.market/repub/go/build:1.26
+
+RUN echo go version: "$(go version)"
+
+ENV WORKDIR=/src
+RUN mkdir -p ${WORKDIR}
+
+WORKDIR ${WORKDIR}

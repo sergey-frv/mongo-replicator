@@ -1,0 +1,62 @@
+services:
+  mongo-src:
+    image: mongo:8.0
+    command: --replSet rs8 --bind_ip_all
+    healthcheck:
+      # rs.status().ok = 1 ещё в STARTUP2/SECONDARY, а --eval всегда exit 0 — поэтому явный quit по isWritablePrimary
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "try{rs.status()}catch(e){rs.initiate({_id:'rs8',members:[{_id:0,host:'mongo-src:27017'}]})}; quit(db.hello().isWritablePrimary ? 0 : 1)"
+      interval: 2s
+      start_period: 30s
+      retries: 30
+
+  mongo-dst:
+    image: mongo:5.0
+    command: --replSet rs5 --bind_ip_all
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "try{rs.status()}catch(e){rs.initiate({_id:'rs5',members:[{_id:0,host:'mongo-dst:27017'}]})}; quit(db.hello().isWritablePrimary ? 0 : 1)"
+      interval: 2s
+      start_period: 30s
+      retries: 30
+
+  app:
+    build:
+      context: .
+      dockerfile: ./Dockerfile.dev
+    volumes:
+      - ./:/src
+      - go-build-cache:/root/.cache/go-build
+    working_dir: /src
+    environment:
+      SRC_URI: mongodb://mongo-src:27017/?replicaSet=rs8
+      DST_URI: mongodb://mongo-dst:27017/?replicaSet=rs5
+    depends_on:
+      mongo-src:
+        condition: service_healthy
+      mongo-dst:
+        condition: service_healthy
+
+  linter:
+    build:
+      context: .
+      dockerfile: ./Dockerfile.dev
+    volumes:
+      - ./:/src
+      - go-build-cache:/root/.cache/go-build
+      - go-lint-cache:/root/.cache/golangci-lint
+    working_dir: /src
+
+volumes:
+  go-build-cache:
+    external: true
+  go-lint-cache:
+    external: true

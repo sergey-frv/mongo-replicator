@@ -1,6 +1,7 @@
 package replicator
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"testing"
@@ -78,7 +79,7 @@ func TestDecodeAndModel(t *testing.T) {
 				if c.wantModel != "replace" {
 					t.Fatalf("got replace, want %s", c.wantModel)
 				}
-				if got := mustMarshal(t, mm.Filter); string(got) != string(wantFilter) {
+				if got := mustMarshal(t, mm.Filter); !bytes.Equal(got, wantFilter) {
 					t.Fatalf("filter = %s", bson.Raw(got))
 				}
 				// документ должен дойти байт в байт (порядок полей и типы)
@@ -93,7 +94,7 @@ func TestDecodeAndModel(t *testing.T) {
 				if c.wantModel != "delete" {
 					t.Fatalf("got delete, want %s", c.wantModel)
 				}
-				if got := mustMarshal(t, mm.Filter); string(got) != string(wantFilter) {
+				if got := mustMarshal(t, mm.Filter); !bytes.Equal(got, wantFilter) {
 					t.Fatalf("filter = %s", bson.Raw(got))
 				}
 			default:
