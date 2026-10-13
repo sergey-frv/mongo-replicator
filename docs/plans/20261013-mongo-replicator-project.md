@@ -138,11 +138,11 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 - Create: `.dockerignore`
 - Create: `.golangci.yml`
 
-- [ ] `git init`
-- [ ] `go.mod`: `module mongo-replicator`, `go 1.26`
-- [ ] `.gitignore` и `.dockerignore` по образцу f.sravni.ru + `bin/`
-- [ ] `.golangci.yml` — копия из f.sravni.ru + `run.build-tags: [integration]`, иначе `integration_test.go` не линтуется
-- [ ] проверка: тестов в задаче нет (только конфиги); `go mod edit -json` разбирает `go.mod`
+- [x] `git init` (репозиторий уже был инициализирован)
+- [x] `go.mod`: `module mongo-replicator`, `go 1.26`
+- [x] `.gitignore` и `.dockerignore` по образцу f.sravni.ru + `bin/`
+- [x] `.golangci.yml` — копия из f.sravni.ru + `run.build-tags: [integration]`, иначе `integration_test.go` не линтуется
+- [x] проверка: тестов в задаче нет (только конфиги); `go mod edit -json` разбирает `go.mod`
 
 ### Task 2: Пакет `replicator` — перенос кода
 
