@@ -15,7 +15,7 @@
   - `Makefile` (build/lint/test/run/docker-volumes через `docker compose run`), `Dockerfile.dev` на `artifactory.yc.prod.infra.sravni.market/repub/go/build:1.26`, `docker-compose.yml` с external-volumes `go-build-cache`/`go-lint-cache`, сервис `linter`
   - `.golangci.yml` (v2), `.gitignore`, `.dockerignore`, `vendor/`
 - зависимости: `go.mongodb.org/mongo-driver/v2`, `github.com/jessevdk/go-flags`, `github.com/rs/zerolog`, `github.com/stretchr/testify`
-- каталог — не git-репозиторий
+- каталог — git-репозиторий, в нём только `main.go`, `main_test.go` и `docs/`
 
 ## Development Approach
 - **testing approach**: Regular (код уже есть и покрыт базовыми тестами; переносим, затем дописываем тесты)

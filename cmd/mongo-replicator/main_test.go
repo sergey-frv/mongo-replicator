@@ -18,6 +18,7 @@ func TestMaskURI(t *testing.T) {
 		{"srv", "mongodb+srv://u:p@cluster.example.com/?tls=true", "mongodb+srv://u:xxxxx@cluster.example.com/?tls=true"},
 		{"percent-encoding", "mongodb://u%40x:p%40%3Ass@h1/", "mongodb://u%40x:xxxxx@h1/"},
 		{"сырой @ в пароле", "mongodb://u:p@ss@h1/", "mongodb://u:xxxxx@h1/"},
+		{"? в пароле", "mongodb://u:p?ss@h1/", "mongodb://u:xxxxx@h1/"},
 		{"@ в query", "mongodb://h1/?authSource=a@b", "mongodb://h1/?authSource=a@b"},
 		{"без хоста", "mongodb://u:p@", "mongodb://u:xxxxx@"},
 		{"не URI", "garbage", "garbage"},
@@ -76,16 +77,19 @@ func TestParseOptsErrors(t *testing.T) {
 		name string
 		env  map[string]string
 		args []string
+		want string // подстрока ошибки: случай падает по своей причине
 	}{
-		{"нет --src", nil, []string{"--dst", "mongodb://dst"}},
-		{"нет --dst", nil, []string{"--src", "mongodb://src"}},
-		{"нет обоих", nil, nil},
-		{"пустой SRC_URI", map[string]string{"SRC_URI": ""}, []string{"--dst", "mongodb://dst"}},
-		{"--batch 0", nil, []string{"--src", "s", "--dst", "d", "--batch", "0"}},
-		{"BATCH_SIZE<0", map[string]string{"BATCH_SIZE": "-5"}, []string{"--src", "s", "--dst", "d"}},
-		{"кривой --start-ts", nil, []string{"--src", "s", "--dst", "d", "--start-ts", "-1"}},
-		{"одиночный дефис", nil, []string{"-src", "s", "-dst", "d"}},
-		{"неизвестный флаг", nil, []string{"--src", "s", "--dst", "d", "--foo"}},
+		{"нет --src", nil, []string{"--dst", "mongodb://dst"}, "--src"},
+		{"нет --dst", nil, []string{"--src", "mongodb://src"}, "--dst"},
+		{"нет обоих", nil, nil, "--src"},
+		{"пустой SRC_URI", map[string]string{"SRC_URI": ""}, []string{"--dst", "mongodb://dst"}, "--src"},
+		{"--batch 0", nil, []string{"--src", "s", "--dst", "d", "--batch", "0"}, "--batch должен быть"},
+		{"BATCH_SIZE<0", map[string]string{"BATCH_SIZE": "-5"}, []string{"--src", "s", "--dst", "d"}, "--batch должен быть"},
+		{"--batch больше int32", nil, []string{"--src", "s", "--dst", "d", "--batch", "3000000000"}, "--batch должен быть"},
+		{"отрицательный --start-ts", nil, []string{"--src", "s", "--dst", "d", "--start-ts=-1"}, "--start-ts"},
+		{"нечисловой --start-ts", nil, []string{"--src", "s", "--dst", "d", "--start-ts", "abc"}, "--start-ts"},
+		{"одиночный дефис", nil, []string{"-src", "s", "-dst", "d"}, "unknown flag"},
+		{"неизвестный флаг", nil, []string{"--src", "s", "--dst", "d", "--foo"}, "unknown flag `foo'"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -96,6 +100,7 @@ func TestParseOptsErrors(t *testing.T) {
 			_, err := parseOpts(c.args)
 			require.Error(t, err)
 			assert.False(t, isHelp(err))
+			assert.Contains(t, err.Error(), c.want)
 		})
 	}
 }

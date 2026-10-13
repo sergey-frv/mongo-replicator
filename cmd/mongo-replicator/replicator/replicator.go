@@ -73,7 +73,7 @@ func (r *Replicator) Run(ctx context.Context) error {
 	opts := options.ChangeStream().
 		SetFullDocument(options.UpdateLookup).
 		SetShowExpandedEvents(true).
-		SetBatchSize(int32(r.cfg.BatchSize)). //nolint:gosec // BatchSize валидируется в main
+		SetBatchSize(int32(r.cfg.BatchSize)). //nolint:gosec // main ограничивает BatchSize диапазоном int32
 		SetMaxAwaitTime(time.Second)
 
 	token, err := r.loadToken(ctx)

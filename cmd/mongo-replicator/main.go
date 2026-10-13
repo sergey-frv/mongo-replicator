@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"strings"
@@ -75,8 +76,9 @@ func parseOpts(args []string) (options, error) {
 	if opts.Src == "" || opts.Dst == "" {
 		return opts, errors.New("--src и --dst не могут быть пустыми")
 	}
-	if opts.BatchSize < 1 {
-		return opts, fmt.Errorf("--batch должен быть >= 1, получено %d", opts.BatchSize)
+	// batchSize потока в протоколе — int32
+	if opts.BatchSize < 1 || opts.BatchSize > math.MaxInt32 {
+		return opts, fmt.Errorf("--batch должен быть от 1 до %d, получено %d", math.MaxInt32, opts.BatchSize)
 	}
 	return opts, nil
 }
@@ -158,7 +160,8 @@ func failCode(ctx context.Context, err error, what string) int {
 }
 
 // maskURI заменяет пароль в URI на xxxxx. Разбор строковый, а не url.Parse:
-// multi-host URI (h1:27017,h2:27017) net/url может не разобрать.
+// multi-host URI (h1:27017,h2:27017) net/url может не разобрать. Userinfo
+// ищем до первого "/": драйвер допускает в пароле "?", но не "/".
 func maskURI(uri string) string {
 	i := strings.Index(uri, "://")
 	if i < 0 {
@@ -166,7 +169,7 @@ func maskURI(uri string) string {
 	}
 	start := i + len("://")
 	rest := uri[start:]
-	end := strings.IndexAny(rest, "/?")
+	end := strings.IndexByte(rest, '/')
 	if end < 0 {
 		end = len(rest)
 	}

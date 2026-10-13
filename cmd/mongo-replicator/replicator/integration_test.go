@@ -5,7 +5,6 @@ package replicator
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -174,12 +173,18 @@ type runner struct {
 	err  error // читать только после закрытия done
 }
 
-// start запускает Run в горутине и регистрирует остановку в t.Cleanup:
-// упавший require не оставит репликатор работать в следующих тестах.
+// start запускает Run нового репликатора в горутине и регистрирует остановку
+// в t.Cleanup: упавший require не оставит репликатор работать в следующих тестах.
 func start(t *testing.T, cfg Config) *runner {
 	t.Helper()
+	return startOn(t, New(srcClient, dstClient, cfg))
+}
+
+// startOn — как start, но для уже созданного репликатора (повторный Run, как в ретраях main).
+func startOn(t *testing.T, r *Replicator) *runner {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	rn := &runner{t: t, r: New(srcClient, dstClient, cfg), done: make(chan struct{})}
+	rn := &runner{t: t, r: r, done: make(chan struct{})}
 	go func() {
 		defer close(rn.done)
 		rn.err = rn.r.Run(ctx)
@@ -253,15 +258,9 @@ func (rn *runner) ckptToken() bson.Raw {
 	rn.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var doc struct {
-		Token bson.Raw `bson:"token"`
-	}
-	err := dstClient.Database(ckptDB).Collection(ckptColl).FindOne(ctx, bson.M{"_id": ckptID}).Decode(&doc)
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		return nil
-	}
+	tok, err := rn.r.loadToken(ctx) // читает только dst: безопасно во время Run
 	require.NoError(rn.t, err)
-	return doc.Token
+	return tok
 }
 
 // same сравнивает базу на источнике и цели: списки коллекций, документы по _id
@@ -293,8 +292,12 @@ func same(db string) (ok bool, diff string) {
 	return true, ""
 }
 
+// collNames — обычные коллекции базы: views и system.* не реплицируются.
 func collNames(ctx context.Context, c *mongo.Client, db string) ([]string, error) {
-	names, err := c.Database(db).ListCollectionNames(ctx, bson.D{})
+	names, err := c.Database(db).ListCollectionNames(ctx, bson.M{
+		"type": "collection",
+		"name": bson.M{"$not": bson.Regex{Pattern: `^system\.`}},
+	})
 	slices.Sort(names)
 	return names, err
 }
@@ -547,7 +550,8 @@ func TestIntegrationTransaction(t *testing.T) {
 
 func TestIntegrationResume(t *testing.T) {
 	db := prepare(t)
-	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+	startTS := srcNow(t)
+	rn := start(t, Config{StartTS: startTS, BatchSize: 1000})
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
@@ -573,11 +577,11 @@ func TestIntegrationResume(t *testing.T) {
 	_, err = items.UpdateOne(ctx, bson.M{"_id": 4}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(2)}}}})
 	require.NoError(t, err)
 
-	// без StartTS: успех возможен только при старте с сохранённого токена
-	rn2 := start(t, Config{BatchSize: 1000})
+	// StartTS тот же, что при первом запуске, но при чекпойнте он игнорируется
+	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000})
 	rn2.waitSame(db)
 	rn2.waitQuiet()
-	// ровно n: события до остановки повторно не применялись
+	// ровно n: продолжили с токена, события до остановки повторно не применялись
 	assert.EqualValues(t, n, rn2.r.Applied())
 }
 
@@ -649,6 +653,123 @@ func TestIntegrationNoStartPoint(t *testing.T) {
 	defer cancel()
 	err := New(srcClient, dstClient, Config{BatchSize: 1000}).Run(ctx)
 	require.ErrorIs(t, err, ErrNoStartPoint)
+}
+
+// runErr выполняет Run нового репликатора синхронно: ожидается ошибка от цели, а не таймаут.
+func runErr(t *testing.T, cfg Config) (*Replicator, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	r := New(srcClient, dstClient, cfg)
+	err := r.Run(ctx)
+	require.NoError(t, ctx.Err(), "Run должен вернуть ошибку цели до таймаута")
+	return r, err
+}
+
+// Цель отвергла запись: Run возвращает ошибку, чекпойнт не проходит дальше
+// отвергнутого события, а после исправления цели репликация продолжается.
+func TestIntegrationWriteError(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	// уникальный индекс только на цели: второй документ с тем же code она не примет
+	dstC := dstClient.Database(db).Collection("c")
+	_, err := dstC.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "code", Value: 1}},
+		Options: options.Index().SetName("c_code_u").SetUnique(true),
+	})
+	require.NoError(t, err)
+
+	startTS := srcNow(t)
+	c := srcClient.Database(db).Collection("c")
+	for _, id := range []int32{1, 2} {
+		_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: id}, {Key: "code", Value: "x"}})
+		require.NoError(t, err)
+	}
+
+	// пачка из одной операции: первый документ записан и закоммичен, второй — нет
+	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1})
+	require.ErrorContains(t, err, "bulk write в "+db+".c")
+	assert.True(t, mongo.IsDuplicateKeyError(err), "%v", err)
+	assert.EqualValues(t, 1, r.Applied())
+
+	// с чекпойнта снова упираемся во второй документ: чекпойнт его не прошёл
+	r, err = runErr(t, Config{BatchSize: 1000})
+	assert.True(t, mongo.IsDuplicateKeyError(err), "%v", err)
+	assert.EqualValues(t, 0, r.Applied())
+
+	// цель исправлена; Run того же репликатора, как в ретраях main: хвост
+	// неудачного Run не должен примениться второй раз
+	require.NoError(t, dstC.Indexes().DropOne(ctx, "c_code_u"))
+	rn := startOn(t, r)
+	rn.waitSame(db)
+	rn.waitQuiet()
+	assert.EqualValues(t, 1, rn.r.Applied())
+}
+
+// Цель отвергла DDL: Run возвращает ошибку, чекпойнт остаётся перед событием.
+func TestIntegrationDDLError(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	// индекс с тем же именем, но другим ключом — только на цели: createIndexes
+	// источника она не примет (IndexKeySpecsConflict), и это не «уже есть»
+	_, err := dstClient.Database(db).Collection("c").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "k", Value: 1}},
+		Options: options.Index().SetName("c_k"),
+	})
+	require.NoError(t, err)
+
+	startTS := srcNow(t)
+	c := srcClient.Database(db).Collection("c")
+	_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "k", Value: int32(1)}})
+	require.NoError(t, err)
+	_, err = c.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "k", Value: -1}},
+		Options: options.Index().SetName("c_k"),
+	})
+	require.NoError(t, err)
+
+	// DML перед DDL записан и закоммичен, сам DDL — нет
+	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000})
+	require.ErrorContains(t, err, "createIndexes "+db+".c")
+	assert.EqualValues(t, 1, r.Applied())
+
+	r, err = runErr(t, Config{BatchSize: 1000})
+	require.ErrorContains(t, err, "createIndexes "+db+".c")
+	assert.EqualValues(t, 0, r.Applied())
+}
+
+// Без событий в реплицируемых базах чекпойнт всё равно двигается, а события
+// служебных баз отфильтровываются.
+func TestIntegrationIdleCheckpoint(t *testing.T) {
+	prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	// _replicator на источнике — исключённая база; удаляется после остановки репликатора
+	excluded := srcClient.Database(ckptDB).Collection("it_excluded")
+	t.Cleanup(func() {
+		require.NoError(t, srcClient.Database(ckptDB).Drop(context.Background()))
+		lastSrcSec = srcOpTime(t).T
+	})
+
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+	rn.waitQuiet()
+	tok := rn.ckptToken()
+
+	_, err := excluded.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return !bytes.Equal(rn.ckptToken(), tok) }, waitTimeout, pollEvery,
+		"чекпойнт не двигается на простое")
+	rn.waitQuiet()
+
+	assert.EqualValues(t, 0, rn.r.Applied())
+	names, err := dstClient.Database(ckptDB).ListCollectionNames(ctx, bson.M{"name": "it_excluded"})
+	require.NoError(t, err)
+	assert.Empty(t, names, "событие исключённой базы применено на цели")
 }
 
 // renameColl переименовывает коллекцию на источнике с dropTarget, как mongosh renameCollection(to, true).
@@ -811,6 +932,10 @@ func TestIntegrationUnsupportedDDL(t *testing.T) {
 	_, err = c.UpdateOne(ctx, bson.M{"_id": 1}, bson.D{{Key: "$inc", Value: bson.D{{Key: "v", Value: int32(10)}}}})
 	require.NoError(t, err)
 
+	// view не создаётся, capped создаётся обычной коллекцией
+	require.NoError(t, src.CreateView(ctx, "v", "c", mongo.Pipeline{}))
+	require.NoError(t, src.CreateCollection(ctx, "capped", options.CreateCollection().SetCapped(true).SetSizeInBytes(1<<20)))
+
 	rn.waitSame(db)
 	rn.waitQuiet()
 	assert.EqualValues(t, 3, rn.r.Applied())
@@ -821,6 +946,15 @@ func TestIntegrationUnsupportedDDL(t *testing.T) {
 	require.Len(t, specs, 1)
 	_, err = specs[0].Options.LookupErr("validator")
 	assert.Error(t, err, "collMod не должен переноситься: %s", specs[0].Options)
+
+	names, err := dstClient.Database(db).ListCollectionNames(ctx, bson.M{"name": "v"})
+	require.NoError(t, err)
+	assert.Empty(t, names, "view не должен создаваться")
+	specs, err = dstClient.Database(db).ListCollectionSpecifications(ctx, bson.M{"name": "capped"})
+	require.NoError(t, err)
+	require.Len(t, specs, 1)
+	_, err = specs[0].Options.LookupErr("capped")
+	assert.Error(t, err, "опции create не должны переноситься: %s", specs[0].Options)
 }
 
 // Smoke: рестарт с чекпойнта, сохранённого после rename, не ломает состояние.
