@@ -8,12 +8,14 @@
 - списки баз не делаем (YAGNI, решение пользователя)
 - rename коллекций внутри базы поддерживается; перенос коллекций между базами не предусмотрен (решение пользователя) — описывается в `--help` и README, без отдельной обработки в коде
 - перманентные ситуации режима одной базы — смена базы поверх чекпойнта и `dropDatabase` базы — явный выход с кодом 1 вместо тихого расхождения или вечных ретраев
+- лаг репликации считается заново и честно: от позиции, **применённой** на цели (сохранённый чекпойнт), до текущего времени кластера **источника**; лог прогресса раз в 10 с с лагом, скоростью и временем применённой позиции. Сейчас `lag = time.Since(lastTS)` — от последнего **прочитанного** события по локальным часам: растёт на простаивающем источнике, не учитывает непримененную пачку и зависит от расхождения часов
 
 ## Context (from discovery)
 - `cmd/mongo-replicator/main.go`: go-flags `options` (Src/Dst/StartTS/BatchSize/Debug), `parseOpts`, `maskURI`, `run` с циклом ретраев; перманентные ошибки → exit 1: `replicator.IsHistoryLost`, `errors.Is(err, replicator.ErrNoStartPoint)` (`main.go:117-123`)
 - `cmd/mongo-replicator/main_test.go`: `clearEnv` (`:37-43`) чистит `SRC_URI`, `DST_URI`, `START_TS`, `BATCH_SIZE`, `DEBUG`
 - `cmd/mongo-replicator/replicator/replicator.go`: `Config{StartTS, BatchSize}`, `Run`: `loadToken` → `resumeAfter` / `startAtOperationTime` / `ErrNoStartPoint`; pipeline `$match {"ns.db": {$nin: [admin, config, local, _replicator]}}`; `r.src.Watch`; цикл событий: DML → batch, `default` → `commit()` + `applyDDL` + `saveToken` (`:132-145`)
 - `cmd/mongo-replicator/replicator/checkpoint.go`: `_replicator.checkpoint {_id: "main", token, clusterTime, updatedAt}`, коллекция с `readpref.Primary()`
+- лаг сейчас: `replicator.go:164-168` — `time.Since(time.Unix(lastTS))`, `lastTS` = clusterTime последнего **прочитанного** события; `checkpoint.go:50` пишет его же в `clusterTime` чекпойнта
 - `cmd/mongo-replicator/replicator/ddl.go`: `applyDDL` (drop, dropDatabase, rename через `runCommand` с w:majority, create, createIndexes, dropIndexes; `default` → WARN и пропуск)
 - `cmd/mongo-replicator/replicator/integration_test.go`: `//go:build integration`, `IT_SRC_URI`/`IT_DST_URI`, хелперы `prepare`/`cleanDB`/`srcNow`/`start`/`startOn`/`runner.waitSame`/`waitQuiet`/`ckptToken`/`same`/`dbExists`/`runErr`; `runner.stop` требует `context.Canceled` (`:203`) — тесты, ожидающие ошибку `Run`, используют `runErr` (`:695-703`, как `TestIntegrationWriteError`)
 - команды: `make test`, `make test-integration`, `make lint` (через docker compose)
@@ -48,7 +50,7 @@
 - обратная совместимость не нужна: тулза ещё не применялась, старых чекпойнтов и сценариев запуска нет. С `--all-dbs` поведение и pipeline прежние
 
 ## Testing Strategy
-- **unit tests**: `make test` — чистые функции (`parseOpts`, `streamPipeline`, `checkDB`, `permanent` в `main`)
+- **unit tests**: `make test` — чистые функции (`parseOpts`, `streamPipeline`, `checkDB`, `tokenTime`, `lagOf`, `permanent` в `main`)
 - внутри пакета `replicator` семантика прежняя: `Config.DB == ""` — все базы; обязательность выбора — только на уровне CLI, интеграционные тесты режима всех баз не меняются
 - **integration tests**: `make test-integration` — против `mongo-src` (8.0) и `mongo-dst` (5.0); база теста передаётся как `Config.DB`, вторая база — `<db>_other` через `cleanDB`
 - тесты, ожидающие ошибку от `Run`, — через `runErr` (синхронно), не через `start`
@@ -107,6 +109,23 @@ type Config struct {
 **invalidate**
 - отдельный `case "invalidate"` в цикле `Run` до `default`: `commit()` (сохраняет всё до него, включая применённый `dropDatabase`), затем `return ErrStreamInvalidated`; токен `invalidate` не сохраняется
 - рестарт с чекпойнтом на токене `dropDatabase` снова получает `invalidate` → снова `ErrStreamInvalidated`, пока чекпойнт не удалён (ожидаемо, описать в README)
+
+**Лаг репликации**
+- **применённая позиция** — время токена последнего **сохранённого** чекпойнта: чекпойнт двигается только после записи данных с `w:majority`, значит всё до этой позиции уже на цели. На простое токен — post-batch resume token, он двигается вместе с oplog источника (в т.ч. периодические no-op и записи в другие базы), так что позиция не «застывает»
+- `tokenTime(token bson.Raw) (bson.Timestamp, error)`: `_data` токена — hex; первый байт `0x82` (тип Timestamp в KeyString), затем 8 байт big-endian: `T` (uint32), `I` (uint32). Иначе — ошибка (формат внутренний, но стабилен с 4.2; так же декодируют Debezium и др.)
+- `saveToken`: после успешной записи — `r.appliedTS = tokenTime(token)`; в чекпойнт `clusterTime` пишется он же (вместо `lastTS`). Если токен не декодируется — fallback на `lastTS`, как сейчас, и DEBUG-лог
+- **текущее время источника** — `operationTime` из `ping` на `src` (без привилегий, работает и с правами на одну базу), раз в 10 с, таймаут 5 с. Обе величины — время кластера источника: расхождение часов машины репликатора и источника не влияет
+- `lagOf(srcNow, applied bson.Timestamp) time.Duration` = `srcNow.T − applied.T` секунд, отрицательное → 0; `applied` нулевой (ещё ничего не сохранено) → лаг неизвестен
+- лог раз в 10 с (INFO `прогресс`):
+  | поле | значение |
+  |---|---|
+  | `applied` | всего применено операций (как сейчас) |
+  | `rate` | операций/с за интервал |
+  | `applied_at` | время применённой позиции (RFC3339, UTC) |
+  | `lag` | лаг строкой (`1m5s`) |
+  | `lag_sec` | лаг в секундах, число — для алертов по логам |
+- если `ping` не удался — `lag`/`lag_sec` не пишутся, DEBUG с ошибкой; репликация не прерывается
+- `lastTS` остаётся только как fallback для `clusterTime`
 
 **main**
 - `permanent(err error) bool` — `IsHistoryLost(err)` или `errors.Is` по `ErrNoStartPoint`, `ErrDBMismatch`, `ErrStreamInvalidated`; `run` при `permanent` → лог с подсказкой оператору + exit 1
@@ -186,7 +205,24 @@ type Config struct {
 - [ ] write integration test `TestIntegrationDropDatabaseInvalidates`: база теста заранее создана на цели напрямую (чтобы проверка удаления была содержательной); `srcNow`, DML и `dropDatabase` на источнике; `runErr(Config{StartTS, DB})` → `ErrStreamInvalidated`; база на цели удалена; повторный `runErr(Config{DB})` с сохранённым чекпойнтом → снова `ErrStreamInvalidated`, не `hasCode(err, 260)`
 - [ ] `make test`, `make test-integration`, `make lint` — должно пройти
 
-### Task 5: Rename между базами — закрепить фактическое поведение
+### Task 5: Лаг репликации
+
+**Files:**
+- Create: `cmd/mongo-replicator/replicator/lag.go`
+- Create: `cmd/mongo-replicator/replicator/lag_test.go`
+- Modify: `cmd/mongo-replicator/replicator/checkpoint.go`
+- Modify: `cmd/mongo-replicator/replicator/replicator.go`
+- Modify: `cmd/mongo-replicator/replicator/integration_test.go`
+
+- [ ] `lag.go`: `tokenTime(token)` и `lagOf(srcNow, applied)` (см. Technical Details)
+- [ ] `saveToken`: `r.appliedTS` и `clusterTime` чекпойнта из `tokenTime(token)`, fallback на `lastTS`
+- [ ] лог прогресса: `ping` источника с таймаутом 5 с → `applied`, `rate`, `applied_at`, `lag`, `lag_sec`; при ошибке `ping` — без лага, DEBUG
+- [ ] write unit tests `tokenTime`: реальные токены 8.0 (событие и post-batch, захватить один раз из интеграционного прогона и вписать hex-константами) → ожидаемые `T`/`I`; ошибки: нет `_data`, не hex, первый байт не `0x82`, меньше 9 байт
+- [ ] write unit tests `lagOf`: обычный случай, источник «позади» применённого (часы/округление) → 0, нулевой `applied` → неизвестно
+- [ ] write integration test `TestIntegrationLagPosition`: режим `DB`; запись в базу теста, `waitSame`, `waitQuiet` → `clusterTime` чекпойнта ≥ `operationTime` этой записи; затем запись **только** в `<db>_other` → `require.Eventually`: `clusterTime` чекпойнта ≥ `operationTime` записи в `_other` (позиция двигается без событий своей базы — post-batch token), при этом `Applied()` не изменился
+- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+
+### Task 6: Rename между базами — закрепить фактическое поведение
 
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
@@ -194,7 +230,7 @@ type Config struct {
 - [ ] write integration test `TestIntegrationSingleDBCrossDBRename` (документирует README «перенос между базами не предусмотрен»): режим `DB`; `_other.y` с документами и индексом → rename `_other.y → db.in`; DML в `db.out` → rename `db.out → _other.z`; финальная запись в базу теста; `waitSame(db)`, `waitQuiet()`; на цели `db.in` совпадает с источником (данные и индексы), `db.out` отсутствует, базы `_other` на цели нет, `Run` продолжает работать
 - [ ] `make test-integration` — должно пройти
 
-### Task 6: README
+### Task 7: README
 
 **Files:**
 - Modify: `README.md`
@@ -203,17 +239,19 @@ type Config struct {
 - [ ] таблица прав «режим → источник / цель» (см. Technical Details, включая `dropDatabase` на цели); пояснение, что `_replicator` создаётся на цели автоматически при первом сохранении чекпойнта
 - [ ] проверочные mongosh-запросы: поток по базе (`db.getSiblingDB(X).watch(...)` + `tryNext`), `--start-ts` в окне oplog через `watch` с `startAtOperationTime` (код 286 — выпал), запись в `_replicator` на цели (probe-коллекция с `w: "majority"`, затем drop)
 - [ ] «Ограничения»: rename коллекций внутри базы поддерживается; перенос коллекций между базами не предусмотрен — если всё же случится, на 8.0 перенос наружу = удаление коллекции на цели, внутрь = копия коллекции; `dropDatabase` базы останавливает репликатор (`ErrStreamInvalidated`)
+- [ ] «Мониторинг лага»: поля лога `прогресс` (`applied`, `rate`, `applied_at`, `lag`, `lag_sec`) и что именно измеряется (применённая позиция против времени источника); `clusterTime` в чекпойнте = время применённой позиции и на простое двигается; mongosh: `clusterTime` из чекпойнта на цели и `db.adminCommand({ping: 1}).operationTime` на источнике → разница = лаг
 - [ ] коды выхода: новые причины exit 1; как сменить базу / продолжить после `ErrDBMismatch` и `ErrStreamInvalidated` (остановить, удалить чекпойнт, залить базу заново, новый `--start-ts`); после `dropDatabase` рестарт без удаления чекпойнта снова выходит с 1
 
-### Task 7: Verify acceptance criteria
+### Task 8: Verify acceptance criteria
 - [ ] с `--all-dbs` поведение не изменилось: все прежние интеграционные тесты проходят без правок; без `--db`/`--all-dbs` — exit 2
 - [ ] с `--db` поток открывается на уровне базы, другие базы на цель не попадают, rename внутри базы работает
 - [ ] `ErrDBMismatch` и `ErrStreamInvalidated` → exit 1 без ретраев
+- [ ] лог `прогресс` раз в 10 с содержит `lag`/`lag_sec`; на простаивающем источнике лаг не растёт (проверить вручную через `make run`: 1–2 минуты без записей)
 - [ ] run full test suite: `make test`
 - [ ] run integration tests: `make test-integration`
 - [ ] `make lint` без замечаний
 
-### Task 8: [Final] Update documentation
+### Task 9: [Final] Update documentation
 - [ ] создать CLAUDE.md, только если появились неочевидные договорённости
 - [ ] move this plan to `docs/plans/completed/`
 
