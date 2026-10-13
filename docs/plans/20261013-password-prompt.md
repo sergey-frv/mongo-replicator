@@ -197,11 +197,11 @@ func prepareClients(src, dst side, p prompter, onWarn func(side string)) (srcOpt
 - [x] проверочные mongosh-запросы: `mongosh "$SRC_URI"` с URI без пароля тоже спросит пароль сам — одна строка
 
 ### Task 6: Verify acceptance criteria
-- [ ] пароль не нужен ни в URI, ни в командной строке: оба запрашиваются в терминале
-- [ ] URI с паролем работает: флагом — с WARN, из окружения — без WARN; URI без пользователя (compose, `make run`) — без запроса
-- [ ] run full test suite: `make test`
-- [ ] run integration tests: `make test-integration` (не должны измениться)
-- [ ] `make lint` без замечаний
+- [x] пароль не нужен ни в URI, ни в командной строке: оба запрашиваются в терминале
+- [x] URI с паролем работает: флагом — с WARN, из окружения — без WARN; URI без пользователя (compose, `make run`) — без запроса
+- [x] run full test suite: `make test`
+- [x] run integration tests: `make test-integration` (не должны измениться)
+- [x] `make lint` без замечаний
 
 ### Task 7: [Final] Update documentation
 - [ ] создать CLAUDE.md, только если появились неочевидные договорённости
