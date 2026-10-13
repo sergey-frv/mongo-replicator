@@ -248,13 +248,14 @@ type Config struct {
 - ➕ добавлены проверка права `dropDatabase` на цели через `connectionStatus` + `showPrivileges` и раздел «Восстановление»; mongosh-сниппеты проверены на локальных mongo-src/mongo-dst (на свежем rs без ротации oplog старый `startAtOperationTime` ошибку 286 не даёт)
 
 ### Task 8: Verify acceptance criteria
-- [ ] с `--all-dbs` поведение не изменилось: все прежние интеграционные тесты проходят без правок; без `--db`/`--all-dbs` — exit 2
-- [ ] с `--db` поток открывается на уровне базы, другие базы на цель не попадают, rename внутри базы работает
-- [ ] `ErrDBMismatch` и `ErrStreamInvalidated` → exit 1 без ретраев
-- [ ] лог `прогресс` раз в 10 с содержит `lag`/`lag_sec`; на простаивающем источнике лаг не растёт (проверить вручную через `make run`: 1–2 минуты без записей)
-- [ ] run full test suite: `make test`
-- [ ] run integration tests: `make test-integration`
-- [ ] `make lint` без замечаний
+- [x] с `--all-dbs` поведение не изменилось: все прежние интеграционные тесты проходят без правок; без `--db`/`--all-dbs` — exit 2
+- [x] с `--db` поток открывается на уровне базы, другие базы на цель не попадают, rename внутри базы работает
+- [x] `ErrDBMismatch` и `ErrStreamInvalidated` → exit 1 без ретраев
+- [x] лог `прогресс` раз в 10 с содержит `lag`/`lag_sec`; на простаивающем источнике лаг не растёт (проверить вручную через `make run`: 1–2 минуты без записей) — проверено бинарём `--db` против локальных mongo-src/mongo-dst: 100 с простоя, `lag` 0s, `applied_at` двигается
+- [x] run full test suite: `make test`
+- [x] run integration tests: `make test-integration`
+- [x] `make lint` без замечаний
+- ➕ e2e бинарём: без режима и с обоими режимами — exit 2; `--db` поверх чекпойнта другой базы — exit 1 сразу; `dropDatabase` отслеживаемой базы — exit 1, рестарт с тем же чекпойнтом — снова exit 1; прежние интеграционные тесты не менялись (правки только в хелперах `ckptToken`/`renameColl`)
 
 ### Task 9: [Final] Update documentation
 - [ ] создать CLAUDE.md, только если появились неочевидные договорённости
