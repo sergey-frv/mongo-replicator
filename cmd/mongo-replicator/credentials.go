@@ -141,17 +141,17 @@ func prepareClients(src, dst side, p prompter, onWarn func(side string)) (srcOpt
 	return srcOpts, dstOpts, nil
 }
 
-// uriError — ошибка разбора URI. Если в URI может быть пароль, текст драйвера не
-// выводим: он может цитировать часть пароля (invalid URL escape "%zz").
+// uriError — ошибка разбора URI. Если в URI может быть пароль или секретный параметр,
+// текст драйвера не выводим: он может цитировать часть секрета (invalid URL escape "%zz").
 func uriError(s side, err error) error {
-	masked := maskURI(s.uri)
+	masked, ok := shownURI(s.uri)
 	switch {
-	case masked != s.uri:
-		return fmt.Errorf("%s: некорректный URI %s", s.name, masked)
-	case mayHavePassword(s.uri):
-		// неэкранированный "/" в пароле: maskURI пароль не находит, URI не выводим вовсе
+	case !ok:
+		// неэкранированные "/" или "@" в пароле: пароль (или его хвост) остался бы в тексте
 		return fmt.Errorf("%s: некорректный URI (не выводится: в нём может быть пароль); "+
 			"символы / : @ в пароле экранируйте: %%2F %%3A %%40", s.name)
+	case masked != s.uri:
+		return fmt.Errorf("%s: некорректный URI %s", s.name, masked)
 	}
 	switch mechanism(s.uri) {
 	case "SCRAM-SHA-1", "SCRAM-SHA-256":
@@ -165,11 +165,14 @@ func uriError(s side, err error) error {
 }
 
 // mayHavePassword — грубая проверка для некорректного URI: есть ":" до последнего "@".
-// Ложное срабатывание ("@" в параметрах) лишь прячет текст ошибки.
+// Без схемы в начале (mongodb:user:pw@h, mongodb:user:pw@h://x) проверяется вся строка:
+// лучше спрятать, чем вывести пароль. Ложное срабатывание ("@" в параметрах) лишь прячет текст ошибки.
 func mayHavePassword(uri string) bool {
-	_, rest, ok := strings.Cut(uri, "://")
-	at := strings.LastIndex(rest, "@")
-	return ok && at >= 0 && strings.Contains(rest[:at], ":")
+	if i := schemeEnd(uri); i >= 0 {
+		uri = uri[i:]
+	}
+	at := strings.LastIndex(uri, "@")
+	return at >= 0 && strings.Contains(uri[:at], ":")
 }
 
 // mechanism — значение authMechanism из URI в верхнем регистре, "" — не задан.

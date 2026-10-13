@@ -175,6 +175,16 @@ func TestClientOptionsURIErrors(t *testing.T) {
 			[]string{"источник", "некорректный URI", "connectTimeoutMS"}, []string{"authMechanism"}},
 		{"кривой URI с паролем", "mongodb://repl:p%zzSecret@h1/",
 			[]string{"источник", "некорректный URI", "mongodb://repl:xxxxx@h1/"}, []string{"zz", "Secret", "escape"}},
+		{"@ и / в пароле, маскируется только начало", "mongodb://repl:prefix@x/Secret@h1/?connectTimeoutMS=bad",
+			[]string{"источник", "некорректный URI", "не выводится"}, []string{"Secret", "prefix", "connectTimeoutMS"}},
+		{"пароль ключа TLS в query", "mongodb://h1/?tlsCertificateKeyFilePassword=Secret&connectTimeoutMS=bad",
+			[]string{"источник", "некорректный URI", "tlsCertificateKeyFilePassword=xxxxx&connectTimeoutMS=bad"}, []string{"Secret"}},
+		{"? в пароле ключа TLS", "mongodb://h1/?tlsCertificateKeyFilePassword=alpha?Secret&connectTimeoutMS=bad",
+			[]string{"источник", "некорректный URI", "tlsCertificateKeyFilePassword=xxxxx&connectTimeoutMS=bad"}, []string{"alpha", "Secret"}},
+		{"кривой escape в пароле ключа TLS", "mongodb://h1/?tlsCertificateKeyFilePassword=p%zzSecret",
+			[]string{"источник", "некорректный URI", "tlsCertificateKeyFilePassword=xxxxx"}, []string{"zz", "Secret", "escape"}},
+		{"токен AWS в query", "mongodb://h1/?authMechanism=MONGODB-AWS&authMechanismProperties=AWS_SESSION_TOKEN:Secret&connectTimeoutMS=bad",
+			[]string{"источник", "некорректный URI", "authMechanismProperties=xxxxx"}, []string{"Secret"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -205,6 +215,9 @@ func TestClientOptionsNoPasswordLeak(t *testing.T) {
 		{"из URI", "mongodb://repl:" + pwd + "@h1/", &fakePrompter{terminal: true}},
 		{"кривой URI с паролем", "mongodb://repl:" + pwd + "%zz@h1/", &fakePrompter{terminal: true}},
 		{"неэкранированный / в пароле", "mongodb://repl:" + pwd + "/x@h1/", &fakePrompter{terminal: true}},
+		{"без ://", "mongodb:repl:" + pwd + "@h1/", &fakePrompter{terminal: true}},
+		{":// после пароля", "mongodb:repl:" + pwd + "@h1://bad", &fakePrompter{terminal: true}},
+		{":// после пароля и userinfo за ним", "mongodb:repl:" + pwd + "@h1://u:p@h2/", &fakePrompter{terminal: true}},
 		{"пароль в URI и неверный механизм", "mongodb://repl:" + pwd + "@h1/?authMechanism=BOGUS", &fakePrompter{terminal: true}},
 		{"ошибка чтения", "mongodb://repl@h1/", &fakePrompter{terminal: true, err: errors.New("read")}},
 	}
@@ -340,7 +353,11 @@ func TestMayHavePassword(t *testing.T) {
 	assert.True(t, mayHavePassword("mongodb://repl:a@h1/"))
 	assert.False(t, mayHavePassword("mongodb://repl@h1:27017/"))
 	assert.False(t, mayHavePassword("mongodb://h1:27017/?replicaSet=rs8"))
-	assert.False(t, mayHavePassword("h1:27017@x"), "без схемы")
+	assert.True(t, mayHavePassword("mongodb:repl:a@h1/"), "без :// — проверяется вся строка")
+	assert.True(t, mayHavePassword("mongodb:repl:a@h1://bad"), ":// не в начале — не схема")
+	assert.True(t, mayHavePassword("mongodb://repl:a://b@h1/"), ":// в пароле")
+	assert.False(t, mayHavePassword("mongodb:h1/"))
+	assert.False(t, mayHavePassword("garbage"))
 }
 
 func TestMechanism(t *testing.T) {
