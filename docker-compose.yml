@@ -39,6 +39,8 @@ services:
     environment:
       SRC_URI: mongodb://mongo-src:27017/?replicaSet=rs8
       DST_URI: mongodb://mongo-dst:27017/?replicaSet=rs5
+      IT_SRC_URI: mongodb://mongo-src:27017/?replicaSet=rs8
+      IT_DST_URI: mongodb://mongo-dst:27017/?replicaSet=rs5
     depends_on:
       mongo-src:
         condition: service_healthy

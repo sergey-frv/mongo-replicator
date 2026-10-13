@@ -39,9 +39,11 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	srcURI, dstURI := os.Getenv("SRC_URI"), os.Getenv("DST_URI")
+	// свои переменные, а не SRC_URI/DST_URI: тесты удаляют чекпойнт и базы,
+	// и шелл с загруженным .env не должен направить их на рабочие кластеры
+	srcURI, dstURI := os.Getenv("IT_SRC_URI"), os.Getenv("IT_DST_URI")
 	if srcURI == "" || dstURI == "" {
-		log.Fatal("SRC_URI и DST_URI не заданы: интеграционные тесты запускаются через make test-integration")
+		log.Fatal("IT_SRC_URI и IT_DST_URI не заданы: интеграционные тесты запускаются через make test-integration")
 	}
 
 	var err error
