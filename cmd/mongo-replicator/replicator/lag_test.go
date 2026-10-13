@@ -51,6 +51,15 @@ func TestTokenTimeErrors(t *testing.T) {
 	}
 }
 
+func TestCheckpointAppliedAt(t *testing.T) {
+	stored := bson.Timestamp{T: 1000, I: 3}
+	ck := checkpoint{Token: mustMarshal(t, bson.D{{Key: "_data", Value: eventToken}}), ClusterTime: stored}
+	assert.Equal(t, bson.Timestamp{T: 1791910133, I: 2}, ck.appliedAt(), "время из токена")
+
+	ck.Token = mustMarshal(t, bson.D{{Key: "_data", Value: "zz"}})
+	assert.Equal(t, stored, ck.appliedAt(), "токен не разобран — clusterTime чекпойнта")
+}
+
 func TestLagOf(t *testing.T) {
 	lag := lagOf(bson.Timestamp{T: 1065, I: 1}, bson.Timestamp{T: 1000, I: 7})
 	assert.Equal(t, 65*time.Second, lag)

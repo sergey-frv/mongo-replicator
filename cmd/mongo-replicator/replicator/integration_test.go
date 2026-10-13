@@ -263,9 +263,9 @@ func (rn *runner) ckptToken() bson.Raw {
 	rn.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	tok, _, err := rn.r.loadToken(ctx) // читает только dst: безопасно во время Run
+	ck, err := rn.r.loadCheckpoint(ctx) // читает только dst: безопасно во время Run
 	require.NoError(rn.t, err)
-	return tok
+	return ck.Token
 }
 
 // ckptDB — база, для которой записан чекпойнт ("" — все базы).
@@ -273,9 +273,9 @@ func (rn *runner) ckptDB() string {
 	rn.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, db, err := rn.r.loadToken(ctx)
+	ck, err := rn.r.loadCheckpoint(ctx)
 	require.NoError(rn.t, err)
-	return db
+	return ck.DB
 }
 
 // ckptTime — clusterTime чекпойнта: время применённой позиции.
@@ -283,11 +283,9 @@ func (rn *runner) ckptTime() bson.Timestamp {
 	rn.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var doc struct {
-		ClusterTime bson.Timestamp `bson:"clusterTime"`
-	}
-	require.NoError(rn.t, rn.r.ckpt().FindOne(ctx, bson.M{"_id": ckptID}).Decode(&doc))
-	return doc.ClusterTime
+	ck, err := rn.r.loadCheckpoint(ctx)
+	require.NoError(rn.t, err)
+	return ck.ClusterTime
 }
 
 // same сравнивает базу на источнике и цели: списки коллекций, документы по _id
@@ -676,7 +674,7 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 
 // Чекпойнт читается с primary, даже если в URI цели readPreference=secondary.
 // На single-node replica set secondary нет: унаследованный read preference
-// провалил бы loadToken на выборе сервера.
+// провалил бы loadCheckpoint на выборе сервера.
 func TestIntegrationCheckpointReadsPrimary(t *testing.T) {
 	db := prepare(t)
 	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
@@ -1113,6 +1111,18 @@ func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
 	rn := &runner{t: t, r: r}
 	assert.Equal(t, r.lastTS, rn.ckptTime())
 	assert.Equal(t, db, rn.ckptDB())
+
+	// рестарт: событий ещё нет, lastTS пуст — позиция берётся из чекпойнта
+	// и пустой getMore с неразобранным токеном её не обнуляет
+	r2 := New(srcClient, dstClient, Config{BatchSize: 1000, DB: db})
+	ck, err := r2.loadCheckpoint(ctx)
+	require.NoError(t, err)
+	r2.appliedTS = ck.appliedAt()
+	token2, err := bson.Marshal(bson.M{"_data": "yy"})
+	require.NoError(t, err)
+	require.NoError(t, r2.saveToken(ctx, token2))
+	assert.Equal(t, r.lastTS, r2.appliedTS)
+	assert.Equal(t, r.lastTS, (&runner{t: t, r: r2}).ckptTime())
 }
 
 // dropDatabase отслеживаемой базы: поток закрывается invalidate, Run возвращает

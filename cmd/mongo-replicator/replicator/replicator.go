@@ -116,20 +116,18 @@ func (r *Replicator) Run(ctx context.Context) error {
 		SetBatchSize(int32(r.cfg.BatchSize)). //nolint:gosec // main ограничивает BatchSize диапазоном int32
 		SetMaxAwaitTime(time.Second)
 
-	token, savedDB, err := r.loadToken(ctx)
+	ck, err := r.loadCheckpoint(ctx)
 	switch {
 	case err != nil:
 		return fmt.Errorf("чтение чекпойнта: %w", err)
-	case token != nil:
-		if dbErr := checkDB(savedDB, r.cfg.DB); dbErr != nil {
+	case ck.Token != nil:
+		if dbErr := checkDB(ck.DB, r.cfg.DB); dbErr != nil {
 			return dbErr
 		}
-		opts.SetResumeAfter(token)
+		opts.SetResumeAfter(ck.Token)
 		if r.appliedTS.IsZero() {
 			// после рестарта лаг известен сразу, ещё до первого сохранения
-			if ts, tsErr := tokenTime(token); tsErr == nil {
-				r.appliedTS = ts
-			}
+			r.appliedTS = ck.appliedAt()
 		}
 		log.Info().Msg("продолжаю с сохранённого resume token")
 	case r.cfg.StartTS > 0:

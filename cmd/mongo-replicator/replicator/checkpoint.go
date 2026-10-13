@@ -28,17 +28,29 @@ func (r *Replicator) ckpt() *mongo.Collection {
 		options.Collection().SetReadPreference(readpref.Primary()))
 }
 
-// loadToken возвращает сохранённый токен и базу, для которой он записан ("" — все базы).
-func (r *Replicator) loadToken(ctx context.Context) (token bson.Raw, db string, err error) {
-	var doc struct {
-		Token bson.Raw `bson:"token"`
-		DB    string   `bson:"db"`
-	}
-	err = r.ckpt().FindOne(ctx, bson.M{"_id": ckptID}).Decode(&doc)
+// checkpoint — сохранённая позиция; пустой Token — чекпойнта нет.
+type checkpoint struct {
+	Token       bson.Raw       `bson:"token"`
+	DB          string         `bson:"db"` // база, для которой записан токен ("" — все базы)
+	ClusterTime bson.Timestamp `bson:"clusterTime"`
+}
+
+func (r *Replicator) loadCheckpoint(ctx context.Context) (checkpoint, error) {
+	var c checkpoint
+	err := r.ckpt().FindOne(ctx, bson.M{"_id": ckptID}).Decode(&c)
 	if errors.Is(err, mongo.ErrNoDocuments) {
-		return nil, "", nil
+		return checkpoint{}, nil
 	}
-	return doc.Token, doc.DB, err
+	return c, err
+}
+
+// appliedAt — время применённой позиции: из токена, а если он не разобран —
+// clusterTime, записанный при сохранении по последнему событию.
+func (c checkpoint) appliedAt() bson.Timestamp {
+	if ts, err := tokenTime(c.Token); err == nil {
+		return ts
+	}
+	return c.ClusterTime
 }
 
 func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
@@ -50,6 +62,10 @@ func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
 	if tsErr != nil {
 		log.Debug().Err(tsErr).Msg("время токена не разобрано, clusterTime — по последнему событию")
 		ts = r.lastTS
+		// событий после рестарта ещё не было: позицию не откатываем и не обнуляем
+		if ts.Before(r.appliedTS) {
+			ts = r.appliedTS
+		}
 	}
 	_, err := r.ckpt().ReplaceOne(ctx,
 		bson.M{"_id": ckptID},
