@@ -3,6 +3,7 @@ module mongo-replicator
 go 1.26
 
 require (
+	github.com/jessevdk/go-flags v1.6.1
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
 	go.mongodb.org/mongo-driver/v2 v2.9.2

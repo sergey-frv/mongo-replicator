@@ -170,13 +170,14 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 - Create: `cmd/mongo-replicator/main.go`
 - Create: `cmd/mongo-replicator/main_test.go`
 
-- [ ] `var opts` на go-flags (таблица опций выше), `var revision = "unknown"`, `setupLog` из образца + `.Timestamp()` в JSON-ветке
-- [ ] `parseOpts(args []string) (options, error)` отдельной функцией: ошибка парсинга (кроме `--help`) и `BatchSize < 1` → exit 2
-- [ ] `maskURI(string) string`; debug-дамп опций с маскированными URI
-- [ ] подключение src (`AppName cs-replicator`) и dst (`+ writeconcern.Majority()`) + `Ping` с таймаутом 10 с, ошибка → exit 1; цикл ретраев (пауза 5 с) через `replicator.New(...).Run`; `IsHistoryLost`/`ErrNoStartPoint` → exit 1; сигнал → exit 0 с итоговым `applied`
-- [ ] написать тесты `maskURI`: с паролем, без userinfo, только user, multi-host, multi-host без `/` перед `?` (`mongodb://u:p@h1,h2?replicaSet=x`), `mongodb+srv://`, пароль с `@`/`:` в percent-encoding
-- [ ] написать тесты `parseOpts`: env-переменные, флаги перекрывают env, отсутствие `--src`/`--dst`, `--batch 0`
-- [ ] `go vet ./...`, `go test -race ./...` — должно пройти
+- [x] `var opts` на go-flags (таблица опций выше), `var revision = "unknown"`, `setupLog` из образца + `.Timestamp()` в JSON-ветке
+- [x] `parseOpts(args []string) (options, error)` отдельной функцией: ошибка парсинга (кроме `--help`) и `BatchSize < 1` → exit 2
+- [x] `maskURI(string) string`; debug-дамп опций с маскированными URI
+- [x] подключение src (`AppName cs-replicator`) и dst (`+ writeconcern.Majority()`) + `Ping` с таймаутом 10 с, ошибка → exit 1; цикл ретраев (пауза 5 с) через `replicator.New(...).Run`; `IsHistoryLost`/`ErrNoStartPoint` → exit 1; сигнал → exit 0 с итоговым `applied`
+- [x] написать тесты `maskURI`: с паролем, без userinfo, только user, multi-host, multi-host без `/` перед `?` (`mongodb://u:p@h1,h2?replicaSet=x`), `mongodb+srv://`, пароль с `@`/`:` в percent-encoding
+- [x] написать тесты `parseOpts`: env-переменные, флаги перекрывают env, отсутствие `--src`/`--dst`, `--batch 0`
+- [x] `go vet ./...`, `go test -race ./...` — должно пройти
+- ➕ `--help` → exit 0 (в образце 2); пустые `--src`/`--dst` (например, `SRC_URI=`) тоже ошибка опций → exit 2; сигнал во время `Ping` → exit 0
 
 ### Task 4: Vendor и сборка
 
