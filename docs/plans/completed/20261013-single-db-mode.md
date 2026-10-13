@@ -258,8 +258,8 @@ type Config struct {
 - ➕ e2e бинарём: без режима и с обоими режимами — exit 2; `--db` поверх чекпойнта другой базы — exit 1 сразу; `dropDatabase` отслеживаемой базы — exit 1, рестарт с тем же чекпойнтом — снова exit 1; прежние интеграционные тесты не менялись (правки только в хелперах `ckptToken`/`renameColl`)
 
 ### Task 9: [Final] Update documentation
-- [ ] создать CLAUDE.md, только если появились неочевидные договорённости
-- [ ] move this plan to `docs/plans/completed/`
+- [x] создать CLAUDE.md, только если появились неочевидные договорённости (не создан: неочевидное — синхронный `runErr` для ожидаемых ошибок `Run`, формат resume token в `tokenTime`, `<db>_other` через `cleanDB` — описано комментариями в коде, права и восстановление — в README)
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
