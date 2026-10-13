@@ -270,13 +270,13 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 - [x] раздел «Ограничения»: (a) updateLookup после rename/drop+recreate; (b) rename/drop+recreate в окне `start-ts` → конец дампа; будущий фикс — `changeStreamPreAndPostImages` + `fullDocument: required`; неподдерживаемые DDL (collMod, views, опции create, шардирование)
 
 ### Task 11: Verify acceptance criteria
-- [ ] все пункты Overview реализованы, в корне нет старых `main.go`/`main_test.go`
-- [ ] `make build` собирает бинарь с `revision`
-- [ ] run full test suite: `make test`
-- [ ] run integration tests: `make test-integration`
-- [ ] `make lint` без замечаний
-- [ ] ручной прогон `make run` (с `--start-ts` = сейчас) против локальных mongo: insert в `mongo-src` через `mongosh` доезжает до `mongo-dst`, Ctrl+C → exit 0
-- [ ] `make run` при остановленном `mongo-dst` → exit 1 по `Ping`, без вечных ретраев
+- [x] все пункты Overview реализованы, в корне нет старых `main.go`/`main_test.go`
+- [x] `make build` собирает бинарь с `revision`
+- [x] run full test suite: `make test`
+- [x] run integration tests: `make test-integration`
+- [x] `make lint` без замечаний
+- [x] ручной прогон `make run` (с `--start-ts` = сейчас) против локальных mongo: insert в `mongo-src` через `mongosh` доезжает до `mongo-dst`, Ctrl+C → exit 0 (проверено: `docker compose run` + insert через mongosh, SIGINT процессу → exit 0)
+- [x] `make run` при остановленном `mongo-dst` → exit 1 по `Ping`, без вечных ретраев (проверено с `--no-deps`: иначе compose поднимает mongo-dst по depends_on; exit 1 через ~10 с)
 
 ### Task 12: [Final] Update documentation
 - [ ] update README.md if needed
