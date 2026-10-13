@@ -252,10 +252,12 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] `TestLimitationUpdateLookupAfterRename`: тело воспроизводит потерю (update X в `a`, rename `a → b` до запуска репликатора, на цели в `b` старая версия X); в начале `t.Skip("известное ограничение, см. README#ограничения")`
-- [ ] `TestLimitationRenameInCatchUpWindow`: `StartTS`, DML в `a`, rename `a → b`, «дамп» = копия коллекций источника на цель; прогон уничтожает непотронутые документы `b`; `t.Skip` с той же ссылкой
-- [ ] вручную убрать `t.Skip` локально и убедиться, что оба теста действительно падают (затем вернуть)
-- [ ] `make test-integration` — должно пройти (тесты помечены как skipped)
+- [x] `TestLimitationUpdateLookupAfterRename`: тело воспроизводит потерю (update X в `a`, rename `a → b` до запуска репликатора, на цели в `b` старая версия X); в начале `t.Skip("известное ограничение, см. README#ограничения")`
+- [x] `TestLimitationRenameInCatchUpWindow`: `StartTS`, DML в `a`, rename `a → b`, «дамп» = копия коллекций источника на цель; прогон уничтожает непотронутые документы `b`; `t.Skip` с той же ссылкой
+- [x] вручную убрать `t.Skip` локально и убедиться, что оба теста действительно падают (затем вернуть)
+- [x] `make test-integration` — должно пройти (тесты помечены как skipped)
+- ➕ без `t.Skip` оба падают за ~4 с: (a) на цели в `b` `{_id:"x", v:1}` вместо `v:2`; (b) в `b` на цели только документ окна `10`, документы `0..2` из дампа уничтожены
+- ➕ проверка — `waitQuiet` + `same`, а не `waitSame`: падение сразу с диффом, без 30-секундного таймаута
 
 ### Task 10: README
 
