@@ -225,11 +225,13 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] сценарий 2 `TestIntegrationTransaction`: коллекции создаются **до** транзакции (без неявного `create` внутри); `session.WithTransaction` по двум коллекциям (insert + update + delete)
-- [ ] сценарий 3 `TestIntegrationResume`: прогон до совпадения, `waitQuiet`, `stop`; ещё N простых insert/update (без последующего delete тех же `_id` — update с `fullDocument: null` не считается); новый `Replicator` со `StartTS: 0` (успех доказывает старт с токена) → совпадение и `Applied() == N`
-- [ ] сценарий 4 `TestIntegrationReplayIdempotent`: в окне — insert → update → delete одного `_id` (повтор update с null `fullDocument`), `create`, `createIndexes`, `dropIndexes` (игнорируемые коды 48/26/27); rename сознательно не включаем (ограничение). Прогон до совпадения, `waitQuiet`, `stop`, сброс чекпойнта, повторный прогон с тем же `StartTS`: сначала `Eventually(Applied() >= M)` (M — число DML-событий окна), потом `waitSame`, и `Run` не вернул ошибку
-- [ ] сценарий `TestIntegrationNoStartPoint`: без чекпойнта и без `StartTS` `Run` сразу возвращает `ErrNoStartPoint`
-- [ ] `make test-integration` — должно пройти
+- [x] сценарий 2 `TestIntegrationTransaction`: коллекции создаются **до** транзакции (без неявного `create` внутри); `session.WithTransaction` по двум коллекциям (insert + update + delete)
+- [x] сценарий 3 `TestIntegrationResume`: прогон до совпадения, `waitQuiet`, `stop`; ещё N простых insert/update (без последующего delete тех же `_id` — update с `fullDocument: null` не считается); новый `Replicator` со `StartTS: 0` (успех доказывает старт с токена) → совпадение и `Applied() == N`
+- [x] сценарий 4 `TestIntegrationReplayIdempotent`: в окне — insert → update → delete одного `_id` (повтор update с null `fullDocument`), `create`, `createIndexes`, `dropIndexes` (игнорируемые коды 48/26/27); rename сознательно не включаем (ограничение). Прогон до совпадения, `waitQuiet`, `stop`, сброс чекпойнта, повторный прогон с тем же `StartTS`: сначала `Eventually(Applied() >= M)` (M — число DML-событий окна), потом `waitSame`, и `Run` не вернул ошибку
+- [x] сценарий `TestIntegrationNoStartPoint`: без чекпойнта и без `StartTS` `Run` сразу возвращает `ErrNoStartPoint`
+- [x] `make test-integration` — должно пройти
+- ➕ в `TestIntegrationReplayIdempotent` коды 26/27 при повторе ловятся через «дамп» до окна: коллекции `pre`/`gone` с индексами создаются на обоих кластерах до `StartTS`, в окне — `dropIndexes pre_k`, `dropIndexes gone_k` + `drop gone`; в логе повтора `create c`/`dropIndexes` не пишут «DDL применён» — ошибки проглочены
+- ➕ M = 4 (insert X, delete X, insert Y, update Y): повторный update X приходит с пустым `fullDocument` и в `Applied` не попадает; после `waitQuiet` проверяется точное `Applied() == M`
 
 ### Task 8: Интеграционные сценарии DDL
 

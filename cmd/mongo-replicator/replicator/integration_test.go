@@ -471,3 +471,175 @@ func TestIntegrationDML(t *testing.T) {
 	// 4 insert + 3 update (UpdateOne + UpdateMany на 2) + replace + delete; 3 insert + 2 update + delete
 	assert.EqualValues(t, 15, rn.r.Applied())
 }
+
+func TestIntegrationTransaction(t *testing.T) {
+	db := prepare(t)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	// коллекции заранее: внутри транзакции не должно быть неявного create
+	require.NoError(t, srcClient.Database(db).CreateCollection(ctx, "accounts"))
+	require.NoError(t, srcClient.Database(db).CreateCollection(ctx, "ledger"))
+	accounts := srcClient.Database(db).Collection("accounts")
+	ledger := srcClient.Database(db).Collection("ledger")
+
+	_, err := accounts.InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: "alice"}, {Key: "balance", Value: int64(100)}},
+		bson.D{{Key: "_id", Value: "bob"}, {Key: "balance", Value: int64(50)}},
+	})
+	require.NoError(t, err)
+	_, err = ledger.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "status", Value: "open"}})
+	require.NoError(t, err)
+
+	sess, err := srcClient.StartSession()
+	require.NoError(t, err)
+	defer sess.EndSession(context.Background())
+	_, err = sess.WithTransaction(ctx, func(sc context.Context) (any, error) {
+		ops := []func() error{
+			func() error {
+				_, e := accounts.InsertOne(sc, bson.D{{Key: "_id", Value: "carol"}, {Key: "balance", Value: int64(30)}})
+				return e
+			},
+			func() error {
+				_, e := accounts.UpdateOne(sc, bson.M{"_id": "alice"}, bson.D{{Key: "$inc", Value: bson.D{{Key: "balance", Value: int64(-30)}}}})
+				return e
+			},
+			func() error { _, e := accounts.DeleteOne(sc, bson.M{"_id": "bob"}); return e },
+			func() error {
+				_, e := ledger.UpdateOne(sc, bson.M{"_id": 1}, bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "closed"}}}})
+				return e
+			},
+			func() error {
+				_, e := ledger.InsertOne(sc, bson.D{{Key: "_id", Value: int32(2)}, {Key: "from", Value: "alice"}, {Key: "to", Value: "carol"}})
+				return e
+			},
+		}
+		for _, op := range ops {
+			if e := op(); e != nil {
+				return nil, e
+			}
+		}
+		return nil, nil
+	})
+	require.NoError(t, err)
+
+	rn.waitSame(db)
+
+	n, err := dstClient.Database(db).Collection("accounts").CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, n)
+	n, err = dstClient.Database(db).Collection("ledger").CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, n)
+
+	rn.waitQuiet()
+	// 3 insert до транзакции + insert, update, delete, update, insert в транзакции
+	assert.EqualValues(t, 8, rn.r.Applied())
+}
+
+func TestIntegrationResume(t *testing.T) {
+	db := prepare(t)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	items := srcClient.Database(db).Collection("items")
+
+	for i := range 3 {
+		_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}, {Key: "v", Value: int32(0)}})
+		require.NoError(t, err)
+	}
+	rn.waitSame(db)
+	rn.waitQuiet()
+	rn.stop()
+
+	// пока репликатор стоит: только insert/update без последующего delete,
+	// иначе update придёт с пустым fullDocument и не попадёт в Applied
+	const n = 5
+	for i := 3; i < 6; i++ {
+		_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}, {Key: "v", Value: int32(0)}})
+		require.NoError(t, err)
+	}
+	_, err := items.UpdateOne(ctx, bson.M{"_id": 0}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(1)}}}})
+	require.NoError(t, err)
+	_, err = items.UpdateOne(ctx, bson.M{"_id": 4}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(2)}}}})
+	require.NoError(t, err)
+
+	// без StartTS: успех возможен только при старте с сохранённого токена
+	rn2 := start(t, Config{BatchSize: 1000})
+	rn2.waitSame(db)
+	rn2.waitQuiet()
+	// ровно n: события до остановки повторно не применялись
+	assert.EqualValues(t, n, rn2.r.Applied())
+}
+
+func TestIntegrationReplayIdempotent(t *testing.T) {
+	db := prepare(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	// «дамп» до окна: коллекции с индексами на обоих кластерах. В окне их
+	// индексы и сами коллекции удаляются, и при повторе ловим 26/27.
+	for _, c := range []*mongo.Client{srcClient, dstClient} {
+		for _, coll := range []string{"pre", "gone"} {
+			_, err := c.Database(db).Collection(coll).Indexes().CreateOne(ctx, mongo.IndexModel{
+				Keys:    bson.D{{Key: "k", Value: 1}},
+				Options: options.Index().SetName(coll + "_k"),
+			})
+			require.NoError(t, err)
+		}
+	}
+	lastSrcSec = srcOpTime(t).T
+	startTS := srcNow(t)
+	rn := start(t, Config{StartTS: startTS, BatchSize: 1000})
+
+	src := srcClient.Database(db)
+	require.NoError(t, src.CreateCollection(ctx, "c")) // повтор: 48
+	c := src.Collection("c")
+	// повтор update X идёт с пустым fullDocument (X уже удалён)
+	_, err := c.InsertOne(ctx, bson.D{{Key: "_id", Value: "x"}, {Key: "v", Value: int32(1)}})
+	require.NoError(t, err)
+	_, err = c.UpdateOne(ctx, bson.M{"_id": "x"}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: int32(2)}}}})
+	require.NoError(t, err)
+	_, err = c.DeleteOne(ctx, bson.M{"_id": "x"})
+	require.NoError(t, err)
+	_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: "y"}, {Key: "v", Value: int32(1)}})
+	require.NoError(t, err)
+	_, err = c.UpdateOne(ctx, bson.M{"_id": "y"}, bson.D{{Key: "$inc", Value: bson.D{{Key: "v", Value: int32(1)}}}})
+	require.NoError(t, err)
+
+	_, err = c.Indexes().CreateOne(ctx, mongo.IndexModel{ // повтор: индекс уже есть
+		Keys:    bson.D{{Key: "v", Value: -1}},
+		Options: options.Index().SetName("c_v"),
+	})
+	require.NoError(t, err)
+	require.NoError(t, src.Collection("pre").Indexes().DropOne(ctx, "pre_k"))   // повтор: 27
+	require.NoError(t, src.Collection("gone").Indexes().DropOne(ctx, "gone_k")) // повтор: 26
+	require.NoError(t, src.Collection("gone").Drop(ctx))
+
+	rn.waitSame(db)
+	rn.waitQuiet()
+	rn.stop()
+
+	// сброс чекпойнта: поток перечитывается с того же StartTS поверх готовой цели
+	require.NoError(t, dstClient.Database(ckptDB).Collection(ckptColl).Drop(ctx))
+	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000})
+
+	// цель уже совпадает, поэтому сначала ждём, что повтор действительно прошёл:
+	// insert X, delete X, insert Y, update Y (update X пропущен)
+	const m = 4
+	require.Eventually(t, func() bool { return rn2.r.Applied() >= m }, waitTimeout, pollEvery)
+	rn2.waitSame(db)
+	rn2.waitQuiet()
+	assert.EqualValues(t, m, rn2.r.Applied())
+}
+
+func TestIntegrationNoStartPoint(t *testing.T) {
+	prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	err := New(srcClient, dstClient, Config{BatchSize: 1000}).Run(ctx)
+	require.ErrorIs(t, err, ErrNoStartPoint)
+}
