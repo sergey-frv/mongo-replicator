@@ -20,6 +20,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 )
 
@@ -33,6 +34,7 @@ const (
 
 var (
 	srcClient, dstClient *mongo.Client
+	dstURI               string
 	// секунда последней операции на источнике, сделанной обвязкой предыдущего
 	// теста (или prepare текущего); srcNow ждёт, пока время уйдёт дальше
 	lastSrcSec uint32
@@ -41,7 +43,8 @@ var (
 func TestMain(m *testing.M) {
 	// свои переменные, а не SRC_URI/DST_URI: тесты удаляют чекпойнт и базы,
 	// и шелл с загруженным .env не должен направить их на рабочие кластеры
-	srcURI, dstURI := os.Getenv("IT_SRC_URI"), os.Getenv("IT_DST_URI")
+	srcURI := os.Getenv("IT_SRC_URI")
+	dstURI = os.Getenv("IT_DST_URI")
 	if srcURI == "" || dstURI == "" {
 		log.Fatal("IT_SRC_URI и IT_DST_URI не заданы: интеграционные тесты запускаются через make test-integration")
 	}
@@ -647,6 +650,37 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 	rn2.waitSame(db)
 	rn2.waitQuiet()
 	assert.EqualValues(t, m, rn2.r.Applied())
+}
+
+// Чекпойнт читается с primary, даже если в URI цели readPreference=secondary.
+// На single-node replica set secondary нет: унаследованный read preference
+// провалил бы loadToken на выборе сервера.
+func TestIntegrationCheckpointReadsPrimary(t *testing.T) {
+	db := prepare(t)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	items := srcClient.Database(db).Collection("items")
+	_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	rn.waitSame(db)
+	rn.waitQuiet()
+	rn.stop()
+
+	secDst, err := mongo.Connect(options.Client().ApplyURI(dstURI).
+		SetAppName("cs-replicator").
+		SetWriteConcern(writeconcern.Majority()).
+		SetReadPreference(readpref.Secondary()).
+		SetServerSelectionTimeout(2 * time.Second))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = secDst.Disconnect(context.Background()) })
+
+	// без StartTS: Run обязан прочитать чекпойнт, иначе вернёт ErrNoStartPoint
+	rn2 := startOn(t, New(srcClient, secDst, Config{BatchSize: 1000}))
+	_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
+	require.NoError(t, err)
+	rn2.waitSame(db)
 }
 
 func TestIntegrationNoStartPoint(t *testing.T) {

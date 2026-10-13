@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
 
 // Чекпойнт хранится на цели: он двигается только после успешной записи данных.
@@ -18,8 +19,12 @@ const (
 	ckptID   = "main"
 )
 
+// ckpt читает чекпойнт только с primary, не наследуя read preference из URI цели:
+// устаревший токен с отстающей secondary повторил бы rename с dropTarget поверх
+// уже применённого состояния и уничтожил бы целевую коллекцию.
 func (r *Replicator) ckpt() *mongo.Collection {
-	return r.dst.Database(ckptDB).Collection(ckptColl)
+	return r.dst.Database(ckptDB).Collection(ckptColl,
+		options.Collection().SetReadPreference(readpref.Primary()))
 }
 
 func (r *Replicator) loadToken(ctx context.Context) (bson.Raw, error) {

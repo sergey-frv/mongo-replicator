@@ -5,7 +5,7 @@
 - цель — оформить его как проект по образцу `~/sravni-git/f.sravni.ru`: `cmd/<app>/` + внутренний пакет, go-flags + zerolog, vendor, Makefile, docker-compose, golangci-lint
 - добавить интеграционные тесты на реальных MongoDB 8.0 (источник) и 5.0 (цель) в docker-compose — именно там живут основные риски (повтор DDL, rename/dropTarget, совместимость индексов 8.0 → 5.0)
 - форма — локальная CLI-утилита: прод-Dockerfile, `.k8s/`, `.gitlab-ci.yml`, `catalog-info.yaml`, `/metrics`, health не делаем
-- алгоритм репликации не меняется — только перенос, логирование и одно изменение: сброс `pending` переезжает из `main` в начало `Run`
+- алгоритм репликации не меняется — только перенос, логирование и одно изменение: сброс `pending` переезжает из `main` в начало `Run`. Отступления, найденные ревью и внесённые позже: DDL через `RunCommand` идёт с `w:majority` (коммит `793bf87`), чекпойнт читается только с primary (см. ➕ в Task 2)
 
 ## Context (from discovery)
 - исходники: `main.go` (event/namespace/toModel, batch, replicator с loadToken/saveToken/flush/applyDDL/run, hasCode, main с циклом ретраев), `main_test.go` (`TestDecodeAndModel`, `TestRawIsCopied`, `TestBatchOrder`, `TestDDLDescriptionParsing`)
@@ -35,7 +35,7 @@
 
 ## Testing Strategy
 - **unit tests**: `make test` (или `go test -race ./...` локально) — без MongoDB
-- **integration tests**: `make test-integration` — `go test -count=1 -race -tags integration` в контейнере `app` против `mongo-src` (8.0) и `mongo-dst` (5.0); `-count=1` обязателен, иначе persistent `go-build-cache` отдаёт `(cached)` без обращения к MongoDB
+- **integration tests**: `make test-integration` — `go test -count=1 -race -p 1 -tags integration` в контейнере `app` против `mongo-src` (8.0) и `mongo-dst` (5.0); `-count=1` обязателен, иначе persistent `go-build-cache` отдаёт `(cached)` без обращения к MongoDB
 - e2e UI-тестов в проекте нет
 
 ## Progress Tracking
@@ -56,7 +56,7 @@ mongo-replicator/
       event.go           event, namespace, toModel
       batch.go           batch
       checkpoint.go      константы чекпойнта, loadToken, saveToken
-      ddl.go             applyDDL, hasCode, коды ошибок, IsHistoryLost
+      ddl.go             applyDDL, runCommand (DDL с w:majority), hasCode, коды ошибок, IsHistoryLost
       replicator.go      Config, Replicator, New, Run, Applied, лог прогресса
       *_test.go          перенесённые юнит-тесты + IsHistoryLost
       integration_test.go  //go:build integration
@@ -80,8 +80,8 @@ mongo-replicator/
 | `--batch` | `BATCH_SIZE` | `1000` | валидация `>= 1` |
 | `--dbg` | `DEBUG` | `false` | ConsoleWriter + debug |
 
-- в debug-дампе опций пароль в URI заменяется на `xxxxx`. Маскировка строковая (userinfo между `://` и последним `@` до первого `/` или `?`), а не `url.Parse`: multi-host URI `h1:27017,h2:27017` `net/url` может не разобрать
-- `mongo.Connect` в v2 ленивый (падает только на кривом URI), поэтому после него в `main` — `Ping` с таймаутом 10 с на обоих клиентах; недоступный сервер → exit 1, а не вечные ретраи. Алгоритм `Run` не меняется
+- в debug-дампе опций пароль в URI заменяется на `xxxxx`. Маскировка строковая (userinfo между `://` и последним `@` до первого `/`; `?` в пароле допустим, поэтому границей не считается), а не `url.Parse`: multi-host URI `h1:27017,h2:27017` `net/url` может не разобрать
+- `mongo.Connect` в v2 ленивый (падает только на кривом URI), поэтому после него в `main` — `Ping` с таймаутом 10 с на обоих клиентах; недоступный сервер → exit 1, а не вечные ретраи. Сам `Ping` алгоритм `Run` не меняет
 - «нет чекпойнта и нет `--start-ts`» — перманентная ошибка: `Run` возвращает экспортируемый `ErrNoStartPoint`, `main` по нему выходит с 1 вместо ретраев
 - коды выхода: `0` — остановка по сигналу; `1` — `IsHistoryLost`, `ErrNoStartPoint`, кривой URI или неуспешный `Ping`; `2` — ошибка опций/валидации
 - `setupLog` как в образце, но JSON-ветка с `.With().Timestamp()` — в образце поле `t` объявлено, но не пишется, а для долгоживущей CLI с логом лага время нужно
@@ -110,17 +110,17 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 **Makefile — важные детали**
 - `REVISION := $(shell git describe --always --dirty 2>/dev/null || echo unknown)` и `-ldflags "-X main.revision=$(REVISION)"` (голое `$(git ...)` make развернёт в пустую строку); до первого коммита будет `unknown` — ожидаемо
 - `test`: `docker compose run --rm --no-deps app ...` — юнит-тестам mongo не нужны
-- `test-integration`: `go test -count=1 -race -tags integration ./...`
+- `test-integration`: `go test -count=1 -race -p 1 -tags integration ./...` (`-p 1`: пакеты не параллельно — тесты делят чекпойнт и поток по кластеру)
 - `run`: `go run ./cmd/mongo-replicator --dbg --start-ts $$(date +%s)` (без start-ts на пустом чекпойнте — `ErrNoStartPoint`)
 - `down`: `docker compose down -v` (у mongo-образов `VOLUME /data/db` → иначе сироты)
 
 **Интеграционные тесты (обвязка)**
-- `TestMain`: `SRC_URI`/`DST_URI` обязательны, иначе `log.Fatal` с подсказкой `make test-integration`; клиент цели собирается как в `main` (`writeconcern.Majority()`, тот же AppName)
+- `TestMain`: `IT_SRC_URI`/`IT_DST_URI` обязательны (свои имена, а не `SRC_URI`/`DST_URI`: тесты дропают базы и чекпойнт, и шелл с загруженным `.env` не должен направить их на рабочие кластеры; compose задаёт обе пары), иначе `log.Fatal` с подсказкой `make test-integration`; клиент цели собирается как в `main` (`writeconcern.Majority()`, тот же AppName)
 - тесты строго последовательные (общий чекпойнт, поток со всего кластера); база `it_<snake(t.Name())>`
 - `prepare(t) (db string)`: дропает базу теста на **обоих** кластерах в начале (остатки упавших прогонов — контейнеры живут между запусками) и регистрирует такой же дроп в `t.Cleanup` **до** `start` (LIFO: сначала остановится репликатор, потом дроп); дропает `_replicator.checkpoint`
 - `srcNow(t) uint32`: `operationTime.T` источника; ждёт, пока он станет больше секунды последней операции предыдущего теста, чтобы поток (StartTS округлён до секунды, `startAtOperationTime` включительный) не захватывал хвост предыдущего теста, включая его cleanup-`dropDatabase`
 - `start(t, cfg) *runner`: `Run` в горутине, ошибка сохраняется; `stop()` идемпотентный (`sync.Once`), отменяет ctx, ждёт возврата, проверяет `errors.Is(err, context.Canceled)`; `start` сам регистрирует `t.Cleanup(stop)` — упавший `require` не оставит репликатор работать в следующих тестах
-- `runner.waitSame(db)`: `require.Eventually` на `same(db)`, но сразу `t.Fatal`, если `Run` уже вернулся с ошибкой (не ждать таймаута)
+- `runner.waitSame(db)`: свой цикл опроса `same(db)` (таймаут 30 с, шаг 200 мс) с диффом в сообщении, сразу `t.Fatal`, если `Run` уже вернулся с ошибкой (не ждать таймаута)
 - `runner.waitQuiet()`: чекпойнт-токен и `Applied()` не меняются между двумя чтениями с интервалом > 1.5 с (`maxAwaitTime` = 1 с) — закрывает гонку `flush` → `saveToken`, где данные уже видны, а чекпойнт ещё не сохранён
 - `same(db) (ok bool, diff string)`: списки коллекций, документы по `_id` как `bson.Raw` байт в байт, индексы по `name/key/unique/partialFilterExpression/expireAfterSeconds`
 
@@ -163,6 +163,8 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 - [x] написать тест `IsHistoryLost` / `hasCode` на testify (сразу тянем testify, чтобы он попал в vendor в Task 4): table-driven на `mongo.CommandError{Code: 286|280|26|...}`, обёрнутых через `fmt.Errorf("%w")`, обычной ошибке и `nil`
 - [x] удалить корневые `main.go`/`main_test.go`
 - [x] `go mod tidy`, `go test -race ./...` — должно пройти
+- ➕ (ревью, коммит `793bf87`) DDL через `RunCommand` (`renameCollection`, `createIndexes`, `dropIndexes`) идёт через `runCommand` с `writeConcern: {w: "majority"}`: иначе при failover цели DDL мог откатиться, а записанный после него w:majority-чекпойнт — выжить. Отступление от «алгоритм не меняется»
+- ➕ (ревью revmux) чекпойнт читается с `readpref.Primary()`, а не с read preference из URI цели: устаревший токен с отстающей secondary повторил бы rename с `dropTarget` и уничтожил бы целевую коллекцию. Тест — `TestIntegrationCheckpointReadsPrimary`
 
 ### Task 3: CLI `cmd/mongo-replicator/main.go`
 
@@ -226,7 +228,7 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
 - [x] сценарий 2 `TestIntegrationTransaction`: коллекции создаются **до** транзакции (без неявного `create` внутри); `session.WithTransaction` по двум коллекциям (insert + update + delete)
-- [x] сценарий 3 `TestIntegrationResume`: прогон до совпадения, `waitQuiet`, `stop`; ещё N простых insert/update (без последующего delete тех же `_id` — update с `fullDocument: null` не считается); новый `Replicator` со `StartTS: 0` (успех доказывает старт с токена) → совпадение и `Applied() == N`
+- [x] сценарий 3 `TestIntegrationResume`: прогон до совпадения, `waitQuiet`, `stop`; ещё N простых insert/update (без последующего delete тех же `_id` — update с `fullDocument: null` не считается); новый `Replicator` с тем же `StartTS`, что при первом запуске (при наличии чекпойнта он игнорируется; `Applied() == N` доказывает старт с токена) → совпадение и `Applied() == N`
 - [x] сценарий 4 `TestIntegrationReplayIdempotent`: в окне — insert → update → delete одного `_id` (повтор update с null `fullDocument`), `create`, `createIndexes`, `dropIndexes` (игнорируемые коды 48/26/27); rename сознательно не включаем (ограничение). Прогон до совпадения, `waitQuiet`, `stop`, сброс чекпойнта, повторный прогон с тем же `StartTS`: сначала `Eventually(Applied() >= M)` (M — число DML-событий окна), потом `waitSame`, и `Run` не вернул ошибку
 - [x] сценарий `TestIntegrationNoStartPoint`: без чекпойнта и без `StartTS` `Run` сразу возвращает `ErrNoStartPoint`
 - [x] `make test-integration` — должно пройти
