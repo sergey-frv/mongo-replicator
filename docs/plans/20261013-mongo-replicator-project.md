@@ -212,11 +212,13 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 **Files:**
 - Create: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] `//go:build integration`, `TestMain`, хелперы `prepare`, `srcNow`, `start`/`runner` (`stop`, `waitSame`, `waitQuiet`), `same` (см. Technical Details)
-- [ ] сценарий 1 `TestIntegrationDML`: insert/update(`$set`, `$unset`, `$inc`)/replace/delete в двух коллекциях; документы с Decimal128, датами, вложенными документами и массивами, нестандартным порядком полей
-- [ ] проверить обвязку: тест с заведомо падающим `require` до `stop` не оставляет работающий репликатор (следующий тест проходит)
-- [ ] `go mod tidy && go mod vendor`, если добавились зависимости (иначе `inconsistent vendoring`)
-- [ ] проверить `make test-integration` — должно пройти; `make test` не цепляет интеграционные тесты
+- [x] `//go:build integration`, `TestMain`, хелперы `prepare`, `srcNow`, `start`/`runner` (`stop`, `waitSame`, `waitQuiet`), `same` (см. Technical Details)
+- [x] сценарий 1 `TestIntegrationDML`: insert/update(`$set`, `$unset`, `$inc`)/replace/delete в двух коллекциях; документы с Decimal128, датами, вложенными документами и массивами, нестандартным порядком полей
+- [x] проверить обвязку: тест с заведомо падающим `require` до `stop` не оставляет работающий репликатор (следующий тест проходит)
+- [x] `go mod tidy && go mod vendor`, если добавились зависимости (иначе `inconsistent vendoring`) — новых зависимостей нет, не понадобилось
+- [x] проверить `make test-integration` — должно пройти; `make test` не цепляет интеграционные тесты
+- ➕ `srcOpTime` пишет no-op через `appendOplogNote`: на простаивающем источнике `operationTime` иначе двигается раз в ~10 с
+- ➕ обвязка проверяется и автоматически: `TestIntegrationStopOnCleanup` (репликатор из подтеста остановлен его cleanup-ом); вручную — временный падающий тест перед `TestIntegrationDML`, DML прошёл
 
 ### Task 7: Интеграционные сценарии: транзакция, resume, повтор
 
