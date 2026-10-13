@@ -143,13 +143,13 @@ func prepareClients(src, dst side, p prompter, onWarn func(side string)) (srcOpt
 - Create: `cmd/mongo-replicator/credentials.go`
 - Create: `cmd/mongo-replicator/credentials_test.go`
 
-- [ ] `side`, `prompter`, `clientOptions` (порядок 1–7 из Technical Details), `flagGiven`
-- [ ] write tests `flagGiven`: `--src x`, `--src=x` → true; только env / `--srcfoo` / значение другой опции, равное `--src`, после `--` → разумное поведение зафиксировать тестом
-- [ ] write tests (fake `prompter` с записью вызовов): нет пользователя → prompter не вызван, `Auth` не тронут; `authMechanism=MONGODB-X509` (и `mongodb-x509`) → без запроса; пароль в URI и `fromFlag` → используется, `warn`, prompter не вызван; пароль в URI из окружения (`fromFlag=false`) → используется, без `warn`; `user:@host` (пустой пароль в URI) → без `warn`, запрос в терминале
-- [ ] write tests: терминал → приглашение содержит `user@host` и сторону, `Password`/`PasswordSet` выставлены; нет терминала → ошибка с именем `SRC_URI`/`DST_URI` и подсказкой; пустой ввод → ошибка; `io.EOF` → «ввод пароля прерван»; прочая ошибка `ReadPassword` → ошибка
-- [ ] write tests разбора URI: `?authMechanism=SCRAM-SHA-256` без пароля → exit-2-ошибка с подсказкой убрать `authMechanism`; кривой URI без пароля → текст драйвера есть; кривой URI с паролем (`user:p%zz@h`) → текста драйвера нет, пароля нет
-- [ ] write test-проверку во всех случаях: пароль не встречается в тексте приглашения и ошибок
-- [ ] `make test` и `make lint` — должно пройти
+- [x] `side`, `prompter`, `clientOptions` (порядок 1–7 из Technical Details), `flagGiven`
+- [x] write tests `flagGiven`: `--src x`, `--src=x` → true; только env / `--srcfoo` / значение другой опции, равное `--src`, после `--` → разумное поведение зафиксировать тестом
+- [x] write tests (fake `prompter` с записью вызовов): нет пользователя → prompter не вызван, `Auth` не тронут; `authMechanism=MONGODB-X509` (и `mongodb-x509`) → без запроса; пароль в URI и `fromFlag` → используется, `warn`, prompter не вызван; пароль в URI из окружения (`fromFlag=false`) → используется, без `warn`; `user:@host` (пустой пароль в URI) → без `warn`, запрос в терминале
+- [x] write tests: терминал → приглашение содержит `user@host` и сторону, `Password`/`PasswordSet` выставлены; нет терминала → ошибка с именем `SRC_URI`/`DST_URI` и подсказкой; пустой ввод → ошибка; `io.EOF` → «ввод пароля прерван»; прочая ошибка `ReadPassword` → ошибка
+- [x] write tests разбора URI: `?authMechanism=SCRAM-SHA-256` без пароля → exit-2-ошибка с подсказкой убрать `authMechanism`; кривой URI без пароля → текст драйвера есть; кривой URI с паролем (`user:p%zz@h`) → текста драйвера нет, пароля нет
+- [x] write test-проверку во всех случаях: пароль не встречается в тексте приглашения и ошибок
+- [x] `make test` и `make lint` — должно пройти
 
 ### Task 2: Две стороны
 

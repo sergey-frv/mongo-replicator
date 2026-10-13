@@ -1,0 +1,96 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+
+	mongoopts "go.mongodb.org/mongo-driver/v2/mongo/options"
+)
+
+// side — одна из строк подключения: источник или цель.
+type side struct {
+	name     string // "источник" | "цель"
+	uri      string
+	envName  string // "SRC_URI" | "DST_URI" — для подсказок
+	fromFlag bool   // URI передан флагом --src/--dst, а не из окружения
+}
+
+// prompter — ввод пароля в терминале; в тестах подменяется фейком.
+type prompter interface {
+	IsTerminal() bool
+	ReadPassword(prompt string) (string, error)
+}
+
+// clientOptions разбирает URI стороны и находит пароль: из URI или из терминала.
+// warn — пароль в URI, переданном флагом (вызывающий пишет WARN).
+// Пароль не попадает ни в приглашение, ни в текст ошибок.
+func clientOptions(s side, p prompter) (opts *mongoopts.ClientOptions, warn bool, err error) {
+	opts = mongoopts.Client().ApplyURI(s.uri)
+	if err = opts.Validate(); err != nil {
+		return nil, false, uriError(s, err)
+	}
+
+	auth := opts.Auth
+	if auth == nil || auth.Username == "" {
+		return opts, false, nil // без авторизации
+	}
+	if strings.EqualFold(auth.AuthMechanism, "MONGODB-X509") || strings.EqualFold(auth.AuthMechanism, "MONGODB-OIDC") {
+		return opts, false, nil // пароль не нужен
+	}
+	// пустой пароль в URI (user:@host) считаем незаданным
+	if auth.PasswordSet && auth.Password != "" {
+		return opts, s.fromFlag, nil
+	}
+
+	who := auth.Username
+	if len(opts.Hosts) > 0 {
+		who += "@" + opts.Hosts[0]
+	}
+	if !p.IsTerminal() {
+		return nil, false, fmt.Errorf("нет пароля для %s (%s) и нет терминала: "+
+			"запустите в терминале или передайте URI с паролем через окружение %s", who, s.name, s.envName)
+	}
+	pwd, err := p.ReadPassword(fmt.Sprintf("Пароль %s (%s): ", who, s.name))
+	switch {
+	case errors.Is(err, io.EOF):
+		return nil, false, fmt.Errorf("ввод пароля прерван (%s)", s.name)
+	case err != nil:
+		return nil, false, fmt.Errorf("чтение пароля для %s (%s): %w", who, s.name, err)
+	case pwd == "":
+		return nil, false, fmt.Errorf("пустой пароль для %s (%s)", who, s.name)
+	}
+	auth.Password, auth.PasswordSet = pwd, true
+	return opts, false, nil
+}
+
+// uriError — ошибка разбора URI. Если в URI есть пароль, текст драйвера не
+// выводим: он может цитировать часть пароля (invalid URL escape "%zz").
+func uriError(s side, err error) error {
+	masked := maskURI(s.uri)
+	if masked != s.uri {
+		return fmt.Errorf("%s: некорректный URI %s", s.name, masked)
+	}
+	if strings.Contains(strings.ToLower(s.uri), "authmechanism=") {
+		return fmt.Errorf("%s: некорректный URI %s: %w; уберите authMechanism из URI: "+
+			"механизм по умолчанию сам выберет SCRAM, пароль будет запрошен", s.name, masked, err)
+	}
+	return fmt.Errorf("%s: некорректный URI %s: %w", s.name, masked, err)
+}
+
+// flagGiven сообщает, передана ли длинная опция в командной строке: "--name" или "--name=...".
+// Аргументы после "--" — позиционные. Значение другой опции, равное "--name",
+// go-flags не пропустит ("expected argument"), поэтому разбор по арности опций не нужен.
+func flagGiven(args []string, name string) bool {
+	opt := "--" + name
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == opt || strings.HasPrefix(a, opt+"=") {
+			return true
+		}
+	}
+	return false
+}
