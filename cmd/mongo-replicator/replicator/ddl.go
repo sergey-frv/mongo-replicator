@@ -42,11 +42,11 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 		if ev.To == nil {
 			return fmt.Errorf("rename %s: в событии нет поля to", ev.NS)
 		}
-		err = r.dst.Database("admin").RunCommand(ctx, bson.D{
+		err = runCommand(ctx, r.dst.Database("admin"), bson.D{
 			{Key: "renameCollection", Value: ev.NS.String()},
 			{Key: "to", Value: ev.To.String()},
 			{Key: "dropTarget", Value: true},
-		}).Err()
+		})
 
 	case "create":
 		// Опции (view, capped, validator, collation, timeseries) не переносим:
@@ -64,10 +64,10 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 		err = db.CreateCollection(ctx, ev.NS.Coll)
 
 	case "createIndexes":
-		err = db.RunCommand(ctx, bson.D{
+		err = runCommand(ctx, db, bson.D{
 			{Key: "createIndexes", Value: ev.NS.Coll},
 			{Key: "indexes", Value: ev.OpDesc.Lookup("indexes")},
-		}).Err()
+		})
 
 	case "dropIndexes":
 		specs, valuesErr := ev.OpDesc.Lookup("indexes").Array().Values()
@@ -76,10 +76,10 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 		}
 		for _, spec := range specs {
 			name := spec.Document().Lookup("name").StringValue()
-			err = db.RunCommand(ctx, bson.D{
+			err = runCommand(ctx, db, bson.D{
 				{Key: "dropIndexes", Value: ev.NS.Coll},
 				{Key: "index", Value: name},
-			}).Err()
+			})
 			if err != nil && !hasCode(err, codeNamespaceNotFound, codeIndexNotFound) {
 				break
 			}
@@ -104,6 +104,14 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 	}
 	l.Msg("DDL применён")
 	return nil
+}
+
+// runCommand выполняет DDL-команду с w:majority. RunCommand не берёт
+// write concern клиента, а без него DDL может откатиться при failover,
+// тогда как следующий за ним чекпойнт (w:majority) сохранится.
+func runCommand(ctx context.Context, db *mongo.Database, cmd bson.D) error {
+	cmd = append(cmd, bson.E{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}})
+	return db.RunCommand(ctx, cmd).Err()
 }
 
 func hasCode(err error, codes ...int) bool {
