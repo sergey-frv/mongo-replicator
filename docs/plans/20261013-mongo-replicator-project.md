@@ -238,11 +238,14 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] сценарий 5 `TestIntegrationDDL`: `create`; `createIndexes` (обычный, unique, partial, TTL, составной); `dropIndexes`; `rename a → b` в существующую `b` (`dropTarget`); `drop`; `dropDatabase` отдельной базы; DML между DDL. TTL-индекс — на поле, которого нет в документах (иначе TTL-монитор удаляет документы на кластерах в разное время)
-- [ ] проверить совпадение индексов 8.0 → 5.0; если 5.0 отвергает поле спецификации — ⚠️ зафиксировать и обсудить фильтрацию полей (алгоритм без согласования не менять)
-- [ ] сценарий 6 `TestIntegrationUnsupportedDDL`: `collMod` на источнике → событие пропущено, последующий DML доезжает
-- [ ] smoke-сценарий `TestIntegrationRestartAfterDDL`: rename `a → b`, `waitQuiet`, `stop`; новые insert в новую `a`; рестарт → состояние совпадает. Это не проверка «чекпойнт сохраняется сразу после DDL» — окно между `applyDDL` и `saveToken` из теста не поймать
-- [ ] `make test-integration` — должно пройти
+- [x] сценарий 5 `TestIntegrationDDL`: `create`; `createIndexes` (обычный, unique, partial, TTL, составной); `dropIndexes`; `rename a → b` в существующую `b` (`dropTarget`); `drop`; `dropDatabase` отдельной базы; DML между DDL. TTL-индекс — на поле, которого нет в документах (иначе TTL-монитор удаляет документы на кластерах в разное время)
+- [x] проверить совпадение индексов 8.0 → 5.0; если 5.0 отвергает поле спецификации — ⚠️ зафиксировать и обсудить фильтрацию полей (алгоритм без согласования не менять)
+- [x] сценарий 6 `TestIntegrationUnsupportedDDL`: `collMod` на источнике → событие пропущено, последующий DML доезжает
+- [x] smoke-сценарий `TestIntegrationRestartAfterDDL`: rename `a → b`, `waitQuiet`, `stop`; новые insert в новую `a`; рестарт → состояние совпадает. Это не проверка «чекпойнт сохраняется сразу после DDL» — окно между `applyDDL` и `saveToken` из теста не поймать
+- [x] `make test-integration` — должно пройти
+- ➕ 5.0 принял все спецификации индексов 8.0 (обычный, unique, partial, TTL, составной) — фильтрация полей не нужна, алгоритм не менялся
+- ➕ `CreateMany` на 8.0 даёт отдельное событие `createIndexes` на каждый индекс; в `TestIntegrationDDL` до rename — `waitSame`, иначе update в `a`, прочитанный после rename, придёт с пустым `fullDocument` (ограничение updateLookup)
+- ➕ `prepare` разделён: дроп базы на обоих кластерах + cleanup вынесены в `cleanDB`, им же готовится вторая база для `dropDatabase`
 
 ### Task 9: Тесты известных ограничений
 

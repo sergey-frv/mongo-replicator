@@ -149,13 +149,20 @@ func dropDB(t *testing.T, db string) {
 func prepare(t *testing.T) (db string) {
 	t.Helper()
 	db = "it_" + snake(t.Name())
-	dropDB(t, db) // остатки упавших прогонов: контейнеры живут между запусками
-	t.Cleanup(func() { dropDB(t, db) })
+	cleanDB(t, db)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	require.NoError(t, dstClient.Database(ckptDB).Collection(ckptColl).Drop(ctx))
 	return db
+}
+
+// cleanDB дропает базу на обоих кластерах сейчас и в cleanup теста.
+// Как и prepare, вызывать до start.
+func cleanDB(t *testing.T, db string) {
+	t.Helper()
+	dropDB(t, db) // остатки упавших прогонов: контейнеры живут между запусками
+	t.Cleanup(func() { dropDB(t, db) })
 }
 
 // runner — репликатор, запущенный в горутине.
@@ -642,4 +649,213 @@ func TestIntegrationNoStartPoint(t *testing.T) {
 	defer cancel()
 	err := New(srcClient, dstClient, Config{BatchSize: 1000}).Run(ctx)
 	require.ErrorIs(t, err, ErrNoStartPoint)
+}
+
+// renameColl переименовывает коллекцию на источнике с dropTarget, как mongosh renameCollection(to, true).
+func renameColl(ctx context.Context, t *testing.T, db, from, to string) {
+	t.Helper()
+	require.NoError(t, srcClient.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "renameCollection", Value: db + "." + from},
+		{Key: "to", Value: db + "." + to},
+		{Key: "dropTarget", Value: true},
+	}).Err())
+}
+
+func indexNames(ctx context.Context, t *testing.T, c *mongo.Client, db, coll string) []string {
+	t.Helper()
+	names, err := c.Database(db).Collection(coll).Indexes().ListSpecifications(ctx)
+	require.NoError(t, err)
+	out := make([]string, 0, len(names))
+	for _, s := range names {
+		out = append(out, s.Name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func dbExists(ctx context.Context, t *testing.T, c *mongo.Client, db string) bool {
+	t.Helper()
+	names, err := c.ListDatabaseNames(ctx, bson.M{"name": db})
+	require.NoError(t, err)
+	return len(names) > 0
+}
+
+func TestIntegrationDDL(t *testing.T) {
+	db := prepare(t)
+	other := db + "_other" // для dropDatabase
+	cleanDB(t, other)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*waitTimeout)
+	defer cancel()
+	src := srcClient.Database(db)
+	a, b := src.Collection("a"), src.Collection("b")
+
+	// create + все виды индексов. TTL — на поле, которого нет в документах:
+	// иначе TTL-монитор удалит документы на кластерах в разное время.
+	require.NoError(t, src.CreateCollection(ctx, "a"))
+	_, err := a.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "k", Value: 1}}, Options: options.Index().SetName("a_k")},
+		{Keys: bson.D{{Key: "code", Value: 1}}, Options: options.Index().SetName("a_code_u").SetUnique(true)},
+	})
+	require.NoError(t, err)
+	_, err = a.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "status", Value: 1}},
+		Options: options.Index().SetName("a_status_p").
+			SetPartialFilterExpression(bson.D{{Key: "status", Value: bson.D{{Key: "$eq", Value: "active"}}}}),
+	})
+	require.NoError(t, err)
+	_, err = a.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "expireAt", Value: 1}},
+		Options: options.Index().SetName("a_ttl").SetExpireAfterSeconds(3600),
+	})
+	require.NoError(t, err)
+	_, err = a.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "k", Value: 1}, {Key: "n", Value: -1}},
+		Options: options.Index().SetName("a_k_n"),
+	})
+	require.NoError(t, err)
+
+	// DML между DDL
+	for i := range 5 {
+		_, err = a.InsertOne(ctx, bson.D{
+			{Key: "_id", Value: int32(i)},
+			{Key: "code", Value: fmt.Sprintf("c%d", i)},
+			{Key: "k", Value: int32(i % 2)},
+			{Key: "n", Value: int32(i)},
+			{Key: "status", Value: []string{"active", "idle"}[i%2]},
+		})
+		require.NoError(t, err)
+	}
+	_, err = a.UpdateOne(ctx, bson.M{"_id": 1}, bson.D{{Key: "$set", Value: bson.D{{Key: "status", Value: "active"}}}})
+	require.NoError(t, err)
+	_, err = a.DeleteOne(ctx, bson.M{"_id": 4})
+	require.NoError(t, err)
+
+	// b — цель rename: коллекция со своими документами и индексом, всё это уйдёт по dropTarget
+	_, err = b.InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: int32(100)}, {Key: "old", Value: true}},
+		bson.D{{Key: "_id", Value: int32(101)}, {Key: "old", Value: true}},
+	})
+	require.NoError(t, err)
+	_, err = b.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "old", Value: 1}}, Options: options.Index().SetName("b_old")})
+	require.NoError(t, err)
+
+	require.NoError(t, a.Indexes().DropOne(ctx, "a_k"))
+
+	// до rename ждём совпадения: update в a, прочитанный после rename, придёт
+	// с пустым fullDocument (известное ограничение updateLookup)
+	rn.waitSame(db)
+	assert.Equal(t, []string{"_id_", "a_code_u", "a_k_n", "a_status_p", "a_ttl"}, indexNames(ctx, t, dstClient, db, "a"),
+		"индексы 8.0 приняты целью 5.0")
+
+	renameColl(ctx, t, db, "a", "b")
+
+	_, err = b.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(10)}, {Key: "code", Value: "c10"}, {Key: "status", Value: "idle"}})
+	require.NoError(t, err)
+	_, err = b.UpdateOne(ctx, bson.M{"_id": 0}, bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(10)}}}})
+	require.NoError(t, err)
+	_, err = b.DeleteOne(ctx, bson.M{"_id": 2})
+	require.NoError(t, err)
+
+	// неявный create + drop
+	_, err = src.Collection("tmp").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	require.NoError(t, src.Collection("tmp").Drop(ctx))
+
+	// dropDatabase отдельной базы: сначала убеждаемся, что она доехала до цели
+	for _, coll := range []string{"x", "y"} {
+		_, err = srcClient.Database(other).Collection(coll).InsertOne(ctx, bson.D{{Key: "_id", Value: coll}})
+		require.NoError(t, err)
+	}
+	rn.waitSame(other)
+	require.True(t, dbExists(ctx, t, dstClient, other))
+	require.NoError(t, srcClient.Database(other).Drop(ctx))
+
+	rn.waitSame(db)
+	require.Eventually(t, func() bool { return !dbExists(ctx, t, dstClient, other) }, waitTimeout, pollEvery,
+		"база %s не удалена на цели", other)
+
+	colls, err := dstClient.Database(db).ListCollectionNames(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b"}, colls)
+	assert.Equal(t, []string{"_id_", "a_code_u", "a_k_n", "a_status_p", "a_ttl"}, indexNames(ctx, t, dstClient, db, "b"),
+		"индексы b заменены индексами a")
+	n, err := dstClient.Database(db).Collection("b").CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 4, n, "0, 1, 3 из a и 10; документы старой b удалены dropTarget")
+}
+
+func TestIntegrationUnsupportedDDL(t *testing.T) {
+	db := prepare(t)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	src := srcClient.Database(db)
+	c := src.Collection("c")
+
+	_, err := c.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: int32(1)}})
+	require.NoError(t, err)
+	rn.waitSame(db)
+
+	// collMod: validator не влияет на сравнение документов и индексов
+	require.NoError(t, src.RunCommand(ctx, bson.D{
+		{Key: "collMod", Value: "c"},
+		{Key: "validator", Value: bson.D{{Key: "v", Value: bson.D{{Key: "$type", Value: "int"}}}}},
+		{Key: "validationLevel", Value: "moderate"},
+	}).Err())
+
+	_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: int32(2)}})
+	require.NoError(t, err)
+	_, err = c.UpdateOne(ctx, bson.M{"_id": 1}, bson.D{{Key: "$inc", Value: bson.D{{Key: "v", Value: int32(10)}}}})
+	require.NoError(t, err)
+
+	rn.waitSame(db)
+	rn.waitQuiet()
+	assert.EqualValues(t, 3, rn.r.Applied())
+
+	// событие modify пропущено: на цели валидатора нет
+	specs, err := dstClient.Database(db).ListCollectionSpecifications(ctx, bson.M{"name": "c"})
+	require.NoError(t, err)
+	require.Len(t, specs, 1)
+	_, err = specs[0].Options.LookupErr("validator")
+	assert.Error(t, err, "collMod не должен переноситься: %s", specs[0].Options)
+}
+
+// Smoke: рестарт с чекпойнта, сохранённого после rename, не ломает состояние.
+// Окно между applyDDL и saveToken отсюда не поймать.
+func TestIntegrationRestartAfterDDL(t *testing.T) {
+	db := prepare(t)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	a := srcClient.Database(db).Collection("a")
+
+	for i := range 3 {
+		_, err := a.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}, {Key: "gen", Value: "old"}})
+		require.NoError(t, err)
+	}
+	renameColl(ctx, t, db, "a", "b")
+	rn.waitSame(db)
+	rn.waitQuiet()
+	rn.stop()
+
+	// новая a с теми же _id: повтор rename поверх неё уничтожил бы b
+	const n = 3
+	for i := range n {
+		_, err := a.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}, {Key: "gen", Value: "new"}})
+		require.NoError(t, err)
+	}
+
+	rn2 := start(t, Config{BatchSize: 1000})
+	rn2.waitSame(db)
+	rn2.waitQuiet()
+	assert.EqualValues(t, n, rn2.r.Applied())
+
+	colls, err := dstClient.Database(db).ListCollectionNames(ctx, bson.D{})
+	require.NoError(t, err)
+	slices.Sort(colls)
+	assert.Equal(t, []string{"a", "b"}, colls)
 }
