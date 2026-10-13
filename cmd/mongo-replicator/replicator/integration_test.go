@@ -278,6 +278,18 @@ func (rn *runner) ckptDB() string {
 	return db
 }
 
+// ckptTime — clusterTime чекпойнта: время применённой позиции.
+func (rn *runner) ckptTime() bson.Timestamp {
+	rn.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var doc struct {
+		ClusterTime bson.Timestamp `bson:"clusterTime"`
+	}
+	require.NoError(rn.t, rn.r.ckpt().FindOne(ctx, bson.M{"_id": ckptID}).Decode(&doc))
+	return doc.ClusterTime
+}
+
 // same сравнивает базу на источнике и цели: списки коллекций, документы по _id
 // байт в байт и индексы по name/key/unique/partialFilterExpression/expireAfterSeconds.
 func same(db string) (ok bool, diff string) {
@@ -1098,6 +1110,40 @@ func TestIntegrationDropDatabaseInvalidates(t *testing.T) {
 	require.ErrorIs(t, err, ErrStreamInvalidated)
 	assert.False(t, hasCode(err, 260), "%v", err)
 	assert.EqualValues(t, 0, r.Applied())
+}
+
+// insertAt вставляет документ на источнике и возвращает operationTime записи.
+func insertAt(ctx context.Context, t *testing.T, c *mongo.Collection, id any) bson.Timestamp {
+	t.Helper()
+	sess, err := srcClient.StartSession()
+	require.NoError(t, err)
+	defer sess.EndSession(ctx)
+	_, err = c.InsertOne(mongo.NewSessionContext(ctx, sess), bson.D{{Key: "_id", Value: id}})
+	require.NoError(t, err)
+	return *sess.OperationTime()
+}
+
+// Применённая позиция (clusterTime чекпойнта) — время токена, а не последнего
+// события: на записях только в другие базы она двигается по post-batch token.
+func TestIntegrationLagPosition(t *testing.T) {
+	db := prepare(t)
+	other := db + "_other"
+	cleanDB(t, other)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*waitTimeout)
+	defer cancel()
+
+	own := insertAt(ctx, t, srcClient.Database(db).Collection("items"), int32(1))
+	rn.waitSame(db)
+	rn.waitQuiet()
+	assert.False(t, rn.ckptTime().Before(own), "чекпойнт %v позади записи %v", rn.ckptTime(), own)
+	n := rn.r.Applied()
+
+	foreign := insertAt(ctx, t, srcClient.Database(other).Collection("c"), int32(1))
+	require.Eventually(t, func() bool { return !rn.ckptTime().Before(foreign) }, waitTimeout, pollEvery,
+		"применённая позиция не дошла до записи в другую базу %v", foreign)
+	assert.Equal(t, n, rn.r.Applied(), "событие другой базы применено")
 }
 
 func TestIntegrationUnsupportedDDL(t *testing.T) {

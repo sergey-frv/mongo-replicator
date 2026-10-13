@@ -216,13 +216,14 @@ type Config struct {
 - Modify: `cmd/mongo-replicator/replicator/replicator.go`
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] `lag.go`: `tokenTime(token)` и `lagOf(srcNow, applied)` (см. Technical Details)
-- [ ] `saveToken`: `r.appliedTS` и `clusterTime` чекпойнта из `tokenTime(token)`, fallback на `lastTS`
-- [ ] лог прогресса: `ping` источника с таймаутом 5 с → `applied`, `rate`, `applied_at`, `lag`, `lag_sec`; при ошибке `ping` — без лага, DEBUG
-- [ ] write unit tests `tokenTime`: реальные токены 8.0 (событие и post-batch, захватить один раз из интеграционного прогона и вписать hex-константами) → ожидаемые `T`/`I`; ошибки: нет `_data`, не hex, первый байт не `0x82`, меньше 9 байт
-- [ ] write unit tests `lagOf`: обычный случай, источник «позади» применённого (часы/округление) → 0, нулевой `applied` → неизвестно
-- [ ] write integration test `TestIntegrationLagPosition`: режим `DB`; запись в базу теста, `waitSame`, `waitQuiet` → `clusterTime` чекпойнта ≥ `operationTime` этой записи; затем запись **только** в `<db>_other` → `require.Eventually`: `clusterTime` чекпойнта ≥ `operationTime` записи в `_other` (позиция двигается без событий своей базы — post-batch token), при этом `Applied()` не изменился
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] `lag.go`: `tokenTime(token)` и `lagOf(srcNow, applied)` (см. Technical Details)
+- [x] `saveToken`: `r.appliedTS` и `clusterTime` чекпойнта из `tokenTime(token)`, fallback на `lastTS`
+- [x] лог прогресса: `ping` источника с таймаутом 5 с → `applied`, `rate`, `applied_at`, `lag`, `lag_sec`; при ошибке `ping` — без лага, DEBUG
+- [x] write unit tests `tokenTime`: реальные токены 8.0 (событие и post-batch, захватить один раз из интеграционного прогона и вписать hex-константами) → ожидаемые `T`/`I`; ошибки: нет `_data`, не hex, первый байт не `0x82`, меньше 9 байт
+- [x] write unit tests `lagOf`: обычный случай, источник «позади» применённого (часы/округление) → 0, нулевой `applied` → неизвестно
+- [x] write integration test `TestIntegrationLagPosition`: режим `DB`; запись в базу теста, `waitSame`, `waitQuiet` → `clusterTime` чекпойнта ≥ `operationTime` этой записи; затем запись **только** в `<db>_other` → `require.Eventually`: `clusterTime` чекпойнта ≥ `operationTime` записи в `_other` (позиция двигается без событий своей базы — post-batch token), при этом `Applied()` не изменился
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
+- ➕ `lastTS` хранится как `bson.Timestamp` (fallback для `clusterTime` с `I`); `rate` округлён до 0.1; время источника — `srcTime` (ping на `admin`) в `lag.go`, лог — `logProgress`
 
 ### Task 6: Rename между базами — закрепить фактическое поведение
 

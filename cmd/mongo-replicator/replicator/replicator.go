@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -51,7 +52,9 @@ type Replicator struct {
 	pending batch
 	saved   bson.Raw // последний записанный в чекпойнт токен
 	applied atomic.Int64
-	lastTS  uint32 // clusterTime последнего прочитанного события
+	lastTS  bson.Timestamp // clusterTime последнего прочитанного события
+
+	appliedTS bson.Timestamp // время последнего сохранённого токена: всё до него на цели
 }
 
 // New создаёт репликатор. dst должен быть подключён с w:majority,
@@ -147,14 +150,14 @@ func (r *Replicator) Run(ctx context.Context) error {
 		return r.saveToken(ctx, lastToken)
 	}
 
-	lastLog := time.Now()
+	lastLog, lastN := time.Now(), r.applied.Load()
 	for {
 		if cs.TryNext(ctx) {
 			var ev event
 			if err := cs.Decode(&ev); err != nil {
 				return fmt.Errorf("разбор события: %w", err)
 			}
-			r.lastTS = ev.ClusterTime.T
+			r.lastTS = ev.ClusterTime
 
 			switch ev.OperationType {
 			case "insert", "replace", "update", "delete":
@@ -206,12 +209,26 @@ func (r *Replicator) Run(ctx context.Context) error {
 		}
 
 		if time.Since(lastLog) >= 10*time.Second {
-			lag := time.Duration(0)
-			if r.lastTS > 0 {
-				lag = time.Since(time.Unix(int64(r.lastTS), 0)).Round(time.Second)
-			}
-			log.Info().Int64("applied", r.applied.Load()).Str("lag", lag.String()).Msg("прогресс")
-			lastLog = time.Now()
+			n := r.applied.Load()
+			r.logProgress(ctx, n, lastN, time.Since(lastLog))
+			lastLog, lastN = time.Now(), n
 		}
 	}
+}
+
+// logProgress пишет прогресс и лаг: применённая позиция против текущего времени
+// источника. Обе величины — время кластера источника, часы репликатора не участвуют.
+func (r *Replicator) logProgress(ctx context.Context, n, prevN int64, elapsed time.Duration) {
+	e := log.Info().Int64("applied", n).
+		Float64("rate", math.Round(float64(n-prevN)/elapsed.Seconds()*10)/10)
+	if !r.appliedTS.IsZero() {
+		e = e.Time("applied_at", time.Unix(int64(r.appliedTS.T), 0).UTC())
+	}
+	now, err := r.srcTime(ctx)
+	if err != nil {
+		log.Debug().Err(err).Msg("ping источника: лаг неизвестен")
+	} else if lag, ok := lagOf(now, r.appliedTS); ok {
+		e = e.Str("lag", lag.String()).Int64("lag_sec", int64(lag/time.Second))
+	}
+	e.Msg("прогресс")
 }

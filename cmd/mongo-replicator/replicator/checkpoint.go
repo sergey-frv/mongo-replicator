@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -44,18 +45,25 @@ func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
 	if len(token) == 0 || bytes.Equal(token, r.saved) {
 		return nil // нечего сохранять: поток не продвинулся
 	}
+	// clusterTime — время применённой позиции: всё до токена уже на цели
+	ts, tsErr := tokenTime(token)
+	if tsErr != nil {
+		log.Debug().Err(tsErr).Msg("время токена не разобрано, clusterTime — по последнему событию")
+		ts = r.lastTS
+	}
 	_, err := r.ckpt().ReplaceOne(ctx,
 		bson.M{"_id": ckptID},
 		bson.M{
 			"_id":         ckptID,
 			"token":       token,
-			"clusterTime": bson.Timestamp{T: r.lastTS},
+			"clusterTime": ts,
 			"updatedAt":   time.Now().UTC(),
 			"db":          r.cfg.DB,
 		},
 		options.Replace().SetUpsert(true))
 	if err == nil {
 		r.saved = token
+		r.appliedTS = ts
 	}
 	return err
 }
