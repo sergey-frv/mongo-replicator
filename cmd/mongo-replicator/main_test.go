@@ -192,6 +192,7 @@ func TestPermanent(t *testing.T) {
 		{"history lost", fmt.Errorf("run: %w", mongo.CommandError{Code: 286}), true},
 		{"нет точки старта", fmt.Errorf("run: %w", replicator.ErrNoStartPoint), true},
 		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), true},
+		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), true},
 		{"обычная ошибка", errors.New("boom"), false},
 		{"отмена", context.Canceled, false},
 	}

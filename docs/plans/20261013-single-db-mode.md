@@ -202,10 +202,10 @@ type Config struct {
 - Modify: `cmd/mongo-replicator/main.go`
 - Modify: `cmd/mongo-replicator/main_test.go`
 
-- [ ] `ErrStreamInvalidated`; `case "invalidate"` в цикле `Run` до `default`: `commit()`, затем возврат ошибки; токен `invalidate` не сохраняется
-- [ ] добавить `ErrStreamInvalidated` в `permanent`; дополнить тест `permanent`
-- [ ] write integration test `TestIntegrationDropDatabaseInvalidates`: база теста заранее создана на цели напрямую (чтобы проверка удаления была содержательной); `srcNow`, DML и `dropDatabase` на источнике; `runErr(Config{StartTS, DB})` → `ErrStreamInvalidated`; база на цели удалена; повторный `runErr(Config{DB})` с сохранённым чекпойнтом → снова `ErrStreamInvalidated`, не `hasCode(err, 260)`
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] `ErrStreamInvalidated`; `case "invalidate"` в цикле `Run` до `default`: `commit()`, затем возврат ошибки; токен `invalidate` не сохраняется
+- [x] добавить `ErrStreamInvalidated` в `permanent`; дополнить тест `permanent`
+- [x] write integration test `TestIntegrationDropDatabaseInvalidates`: база теста заранее создана на цели напрямую (чтобы проверка удаления была содержательной); `srcNow`, DML и `dropDatabase` на источнике; `runErr(Config{StartTS, DB})` → `ErrStreamInvalidated`; база на цели удалена; повторный `runErr(Config{DB})` с сохранённым чекпойнтом → снова `ErrStreamInvalidated`, не `hasCode(err, 260)`
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
 
 ### Task 5: Лаг репликации
 

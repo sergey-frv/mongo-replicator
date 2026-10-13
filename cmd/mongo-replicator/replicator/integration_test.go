@@ -1068,6 +1068,38 @@ func TestIntegrationDBMismatch(t *testing.T) {
 	require.ErrorIs(t, err, ErrDBMismatch)
 }
 
+// dropDatabase отслеживаемой базы: поток закрывается invalidate, Run возвращает
+// ErrStreamInvalidated, применив всё до него; рестарт с чекпойнта — то же самое.
+func TestIntegrationDropDatabaseInvalidates(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	// база на цели заранее: иначе проверка её удаления ничего не доказывает
+	_, err := dstClient.Database(db).Collection("pre").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+
+	startTS := srcNow(t)
+	items := srcClient.Database(db).Collection("items")
+	for i := range 2 {
+		_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
+		require.NoError(t, err)
+	}
+	require.NoError(t, srcClient.Database(db).Drop(ctx))
+
+	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
+	require.ErrorIs(t, err, ErrStreamInvalidated)
+	assert.EqualValues(t, 2, r.Applied())
+	assert.False(t, dbExists(ctx, t, dstClient, db), "база %s не удалена на цели", db)
+
+	// чекпойнт стоит на dropDatabase, а не на invalidate: сервер снова отдаёт
+	// invalidate, а не отвергает токен (260)
+	r, err = runErr(t, Config{BatchSize: 1000, DB: db})
+	require.ErrorIs(t, err, ErrStreamInvalidated)
+	assert.False(t, hasCode(err, 260), "%v", err)
+	assert.EqualValues(t, 0, r.Applied())
+}
+
 func TestIntegrationUnsupportedDDL(t *testing.T) {
 	db := prepare(t)
 	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})

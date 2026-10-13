@@ -173,6 +173,9 @@ func hint(err error) string {
 	case errors.Is(err, replicator.ErrDBMismatch):
 		return "чекпойнт на цели записан для другой базы: верните прежние --db/--all-dbs " +
 			"или остановите репликатор, удалите чекпойнт и залейте цель заново"
+	case errors.Is(err, replicator.ErrStreamInvalidated):
+		return "база удалена на источнике (dropDatabase), поток закрыт: " +
+			"удалите чекпойнт на цели и запустите заново с --start-ts"
 	}
 	return ""
 }

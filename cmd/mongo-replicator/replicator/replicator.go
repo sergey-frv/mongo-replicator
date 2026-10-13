@@ -29,6 +29,10 @@ var ErrNoStartPoint = errors.New("чекпойнта нет и start-ts не з�
 // чем задана: продолжать с него значило бы тихо разойтись с источником.
 var ErrDBMismatch = errors.New("чекпойнт записан для другой базы")
 
+// ErrStreamInvalidated — поток закрыт сервером событием invalidate (dropDatabase
+// отслеживаемой базы): продолжить его нельзя, токен invalidate не сохраняется.
+var ErrStreamInvalidated = errors.New("поток инвалидирован (dropDatabase базы)")
+
 // SystemDBs — служебные базы, которые не реплицируются.
 var SystemDBs = []string{"admin", "config", "local", ckptDB}
 
@@ -163,6 +167,13 @@ func (r *Replicator) Run(ctx context.Context) error {
 						return err
 					}
 				}
+			case "invalidate":
+				// Всё до invalidate, включая применённый dropDatabase, уже на цели.
+				// Его токен не сохраняем: resumeAfter с ним сервер отвергает (260).
+				if err := commit(); err != nil {
+					return err
+				}
+				return ErrStreamInvalidated
 			default:
 				// DDL: сначала всё накопленное, затем само изменение схемы,
 				// и сразу чекпойнт — повтор rename/drop после рестарта опасен.
