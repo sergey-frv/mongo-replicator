@@ -833,9 +833,15 @@ func TestIntegrationIdleCheckpoint(t *testing.T) {
 // renameColl переименовывает коллекцию на источнике с dropTarget, как mongosh renameCollection(to, true).
 func renameColl(ctx context.Context, t *testing.T, db, from, to string) {
 	t.Helper()
+	renameNS(ctx, t, db+"."+from, db+"."+to)
+}
+
+// renameNS — renameCollection по полным namespace, в том числе между базами.
+func renameNS(ctx context.Context, t *testing.T, from, to string) {
+	t.Helper()
 	require.NoError(t, srcClient.Database("admin").RunCommand(ctx, bson.D{
-		{Key: "renameCollection", Value: db + "." + from},
-		{Key: "to", Value: db + "." + to},
+		{Key: "renameCollection", Value: from},
+		{Key: "to", Value: to},
 		{Key: "dropTarget", Value: true},
 	}).Err())
 }
@@ -1144,6 +1150,57 @@ func TestIntegrationLagPosition(t *testing.T) {
 	require.Eventually(t, func() bool { return !rn.ckptTime().Before(foreign) }, waitTimeout, pollEvery,
 		"применённая позиция не дошла до записи в другую базу %v", foreign)
 	assert.Equal(t, n, rn.r.Applied(), "событие другой базы применено")
+}
+
+// Rename между базами в режиме одной базы не предусмотрен; тест фиксирует, во что
+// он фактически превращается на 8.0: внутрь — копия через временную коллекцию
+// (create, createIndexes, insert, rename), наружу — drop.
+func TestIntegrationSingleDBCrossDBRename(t *testing.T) {
+	db := prepare(t)
+	other := db + "_other"
+	cleanDB(t, other)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*waitTimeout)
+	defer cancel()
+
+	// внутрь: other.y с документами и индексом → db.in
+	y := srcClient.Database(other).Collection("y")
+	_, err := y.InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "k", Value: "a"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "k", Value: "b"}},
+		bson.D{{Key: "_id", Value: int32(3)}, {Key: "k", Value: "c"}},
+	})
+	require.NoError(t, err)
+	_, err = y.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "k", Value: 1}}, Options: options.Index().SetName("y_k")})
+	require.NoError(t, err)
+	renameNS(ctx, t, other+".y", db+".in")
+
+	// наружу: db.out → other.z
+	_, err = srcClient.Database(db).Collection("out").InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: int32(1)}},
+		bson.D{{Key: "_id", Value: int32(2)}},
+	})
+	require.NoError(t, err)
+	renameNS(ctx, t, db+".out", other+".z")
+
+	// финальная запись: когда она на цели, все события выше пройдены
+	_, err = srcClient.Database(db).Collection("final").InsertOne(ctx, bson.D{{Key: "_id", Value: "final"}})
+	require.NoError(t, err)
+
+	rn.waitSame(db) // in совпадает с источником по документам и индексам
+	rn.waitQuiet()
+
+	colls, err := collNames(ctx, dstClient, db)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"final", "in"}, colls, "out удалена на цели, временной коллекции нет")
+	assert.Equal(t, []string{"_id_", "y_k"}, indexNames(ctx, t, dstClient, db, "in"))
+	n, err := dstClient.Database(db).Collection("in").CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, n)
+	assert.False(t, dbExists(ctx, t, dstClient, other), "база %s попала на цель", other)
+	done, err := rn.exited()
+	assert.False(t, done, "Run вернулся: %v", err)
 }
 
 func TestIntegrationUnsupportedDDL(t *testing.T) {

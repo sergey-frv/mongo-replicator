@@ -230,8 +230,9 @@ type Config struct {
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] write integration test `TestIntegrationSingleDBCrossDBRename` (документирует README «перенос между базами не предусмотрен»): режим `DB`; `_other.y` с документами и индексом → rename `_other.y → db.in`; DML в `db.out` → rename `db.out → _other.z`; финальная запись в базу теста; `waitSame(db)`, `waitQuiet()`; на цели `db.in` совпадает с источником (данные и индексы), `db.out` отсутствует, базы `_other` на цели нет, `Run` продолжает работать
-- [ ] `make test-integration` — должно пройти
+- [x] write integration test `TestIntegrationSingleDBCrossDBRename` (документирует README «перенос между базами не предусмотрен»): режим `DB`; `_other.y` с документами и индексом → rename `_other.y → db.in`; DML в `db.out` → rename `db.out → _other.z`; финальная запись в базу теста; `waitSame(db)`, `waitQuiet()`; на цели `db.in` совпадает с источником (данные и индексы), `db.out` отсутствует, базы `_other` на цели нет, `Run` продолжает работать
+- [x] `make test-integration` — должно пройти
+- ➕ хелпер `renameNS(from, to)` по полным namespace; `renameColl` теперь вызывает его
 
 ### Task 7: README
 
