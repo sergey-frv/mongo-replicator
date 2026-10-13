@@ -25,6 +25,10 @@ import (
 // ErrNoStartPoint — на цели нет чекпойнта и StartTS не задан: неизвестно, откуда читать поток.
 var ErrNoStartPoint = errors.New("чекпойнта нет и start-ts не задан: неизвестно, откуда читать")
 
+// ErrDBMismatch — чекпойнт на цели записан для другой базы (или другого режима),
+// чем задана: продолжать с него значило бы тихо разойтись с источником.
+var ErrDBMismatch = errors.New("чекпойнт записан для другой базы")
+
 // SystemDBs — служебные базы, которые не реплицируются.
 var SystemDBs = []string{"admin", "config", "local", ckptDB}
 
@@ -80,6 +84,14 @@ func streamPipeline(db string) mongo.Pipeline {
 	}}}}
 }
 
+// checkDB сверяет базу чекпойнта с заданной; "" — все базы.
+func checkDB(saved, want string) error {
+	if saved != want {
+		return fmt.Errorf("%w: в чекпойнте %q, задано %q", ErrDBMismatch, saved, want)
+	}
+	return nil
+}
+
 // Run открывает поток и работает до ошибки или отмены контекста.
 // Несохранённый хвост прошлого запуска отбрасывается: его перечитаем с чекпойнта.
 func (r *Replicator) Run(ctx context.Context) error {
@@ -91,11 +103,14 @@ func (r *Replicator) Run(ctx context.Context) error {
 		SetBatchSize(int32(r.cfg.BatchSize)). //nolint:gosec // main ограничивает BatchSize диапазоном int32
 		SetMaxAwaitTime(time.Second)
 
-	token, err := r.loadToken(ctx)
+	token, savedDB, err := r.loadToken(ctx)
 	switch {
 	case err != nil:
 		return fmt.Errorf("чтение чекпойнта: %w", err)
 	case token != nil:
+		if dbErr := checkDB(savedDB, r.cfg.DB); dbErr != nil {
+			return dbErr
+		}
 		opts.SetResumeAfter(token)
 		log.Info().Msg("продолжаю с сохранённого resume token")
 	case r.cfg.StartTS > 0:

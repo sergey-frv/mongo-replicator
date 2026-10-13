@@ -184,14 +184,15 @@ type Config struct {
 - Modify: `cmd/mongo-replicator/main.go`
 - Modify: `cmd/mongo-replicator/main_test.go`
 
-- [ ] `saveToken` пишет `db`; `loadToken` возвращает `(token, db, err)`; обновить вызовы (`Run`, `runner.ckptToken`); тестовый хелпер `ckptDB(t)` читает поле `db` чекпойнта
-- [ ] `ErrDBMismatch` + `checkDB(saved, want)`; проверка в `Run` после `loadToken`, если токен есть, до `Watch`
-- [ ] в `main`: `permanent(err)` (`IsHistoryLost`, `ErrNoStartPoint`, `ErrDBMismatch`); `run` использует его, сообщение оператору по каждой ошибке
-- [ ] write unit tests `checkDB`: совпадение (в т.ч. `""`/`""`), расхождение имён, `""` → имя, имя → `""`; `errors.Is(err, ErrDBMismatch)` и текст с обоими значениями
-- [ ] write unit tests `permanent`: каждая ошибка, обёрнутая через `fmt.Errorf("%w")` → true; обычная ошибка и `context.Canceled` → false
-- [ ] write integration test `TestIntegrationSingleDBResume`: прогон с `DB` через `start`, `waitQuiet`, `stop`; `ckptDB` = база теста; рестарт без `StartTS` продолжает с токена, `Applied() == N` новых событий
-- [ ] write integration test `TestIntegrationDBMismatch`: чекпойнты записываются тестом напрямую (произвольный токен; `checkDB` идёт до `Watch`): `db: "A"` + запуск с `""` и с `"B"`; `db: ""` + запуск с `DB` → `runErr` сразу возвращает `ErrDBMismatch`
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] `saveToken` пишет `db`; `loadToken` возвращает `(token, db, err)`; обновить вызовы (`Run`, `runner.ckptToken`); тестовый хелпер `ckptDB(t)` читает поле `db` чекпойнта
+- [x] `ErrDBMismatch` + `checkDB(saved, want)`; проверка в `Run` после `loadToken`, если токен есть, до `Watch`
+- [x] в `main`: `permanent(err)` (`IsHistoryLost`, `ErrNoStartPoint`, `ErrDBMismatch`); `run` использует его, сообщение оператору по каждой ошибке
+- [x] write unit tests `checkDB`: совпадение (в т.ч. `""`/`""`), расхождение имён, `""` → имя, имя → `""`; `errors.Is(err, ErrDBMismatch)` и текст с обоими значениями
+- [x] write unit tests `permanent`: каждая ошибка, обёрнутая через `fmt.Errorf("%w")` → true; обычная ошибка и `context.Canceled` → false
+- [x] write integration test `TestIntegrationSingleDBResume`: прогон с `DB` через `start`, `waitQuiet`, `stop`; `ckptDB` = база теста; рестарт без `StartTS` продолжает с токена, `Applied() == N` новых событий
+- [x] write integration test `TestIntegrationDBMismatch`: чекпойнты записываются тестом напрямую (произвольный токен; `checkDB` идёт до `Watch`): `db: "A"` + запуск с `""` и с `"B"`; `db: ""` + запуск с `DB` → `runErr` сразу возвращает `ErrDBMismatch`
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
+- ➕ хелпер чтения базы чекпойнта — метод `runner.ckptDB()` рядом с `ckptToken()`: функция `ckptDB(t)` конфликтует с константой `ckptDB` пакета; подсказки оператору вынесены в `hint(err)`, `permanent(err)` = `hint(err) != ""`
 
 ### Task 4: `ErrStreamInvalidated`
 

@@ -233,3 +233,26 @@ func TestStreamPipeline(t *testing.T) {
 		assert.Empty(t, streamPipeline("urlshrinker"))
 	})
 }
+
+func TestCheckDB(t *testing.T) {
+	for _, c := range []struct{ name, saved, want string }{
+		{"все базы", "", ""},
+		{"та же база", "urlshrinker", "urlshrinker"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			assert.NoError(t, checkDB(c.saved, c.want))
+		})
+	}
+	for _, c := range []struct{ name, saved, want string }{
+		{"другая база", "a", "b"},
+		{"все базы → база", "", "urlshrinker"},
+		{"база → все базы", "urlshrinker", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := checkDB(c.saved, c.want)
+			require.ErrorIs(t, err, ErrDBMismatch)
+			assert.Contains(t, err.Error(), fmt.Sprintf("в чекпойнте %q", c.saved))
+			assert.Contains(t, err.Error(), fmt.Sprintf("задано %q", c.want))
+		})
+	}
+}

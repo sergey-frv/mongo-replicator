@@ -27,15 +27,17 @@ func (r *Replicator) ckpt() *mongo.Collection {
 		options.Collection().SetReadPreference(readpref.Primary()))
 }
 
-func (r *Replicator) loadToken(ctx context.Context) (bson.Raw, error) {
+// loadToken возвращает сохранённый токен и базу, для которой он записан ("" — все базы).
+func (r *Replicator) loadToken(ctx context.Context) (token bson.Raw, db string, err error) {
 	var doc struct {
 		Token bson.Raw `bson:"token"`
+		DB    string   `bson:"db"`
 	}
-	err := r.ckpt().FindOne(ctx, bson.M{"_id": ckptID}).Decode(&doc)
+	err = r.ckpt().FindOne(ctx, bson.M{"_id": ckptID}).Decode(&doc)
 	if errors.Is(err, mongo.ErrNoDocuments) {
-		return nil, nil
+		return nil, "", nil
 	}
-	return doc.Token, err
+	return doc.Token, doc.DB, err
 }
 
 func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
@@ -49,6 +51,7 @@ func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
 			"token":       token,
 			"clusterTime": bson.Timestamp{T: r.lastTS},
 			"updatedAt":   time.Now().UTC(),
+			"db":          r.cfg.DB,
 		},
 		options.Replace().SetUpsert(true))
 	if err == nil {

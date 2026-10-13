@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+
+	"mongo-replicator/cmd/mongo-replicator/replicator"
 )
 
 func TestMaskURI(t *testing.T) {
@@ -175,4 +181,23 @@ func TestParseOptsHelp(t *testing.T) {
 	assert.Contains(t, err.Error(), "SRC_URI")
 	assert.Contains(t, err.Error(), "--start-ts")
 	assert.Contains(t, err.Error(), "--all-dbs")
+}
+
+func TestPermanent(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"history lost", fmt.Errorf("run: %w", mongo.CommandError{Code: 286}), true},
+		{"нет точки старта", fmt.Errorf("run: %w", replicator.ErrNoStartPoint), true},
+		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), true},
+		{"обычная ошибка", errors.New("boom"), false},
+		{"отмена", context.Canceled, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, permanent(c.err))
+		})
+	}
 }

@@ -145,12 +145,8 @@ func run(opts options) int {
 		if ctx.Err() != nil {
 			break
 		}
-		if replicator.IsHistoryLost(err) {
-			log.Error().Err(err).Msg("точка возобновления выпала из oplog источника — нужна новая полная заливка цели")
-			return 1
-		}
-		if errors.Is(err, replicator.ErrNoStartPoint) {
-			log.Error().Err(err).Msg("задайте --start-ts")
+		if permanent(err) {
+			log.Error().Err(err).Msg(hint(err))
 			return 1
 		}
 		log.Warn().Err(err).Str("retry", retryTimeout.String()).Msg("ошибка репликации, повтор")
@@ -162,6 +158,23 @@ func run(opts options) int {
 	log.Info().Int64("applied", r.Applied()).
 		Msg("остановлен по сигналу; незаписанный хвост будет перечитан при следующем запуске")
 	return 0
+}
+
+// permanent сообщает, что ретраи ошибку не исправят и нужен оператор.
+func permanent(err error) bool { return hint(err) != "" }
+
+// hint — подсказка оператору по перманентной ошибке; "" — ошибка временная.
+func hint(err error) string {
+	switch {
+	case replicator.IsHistoryLost(err):
+		return "точка возобновления выпала из oplog источника — нужна новая полная заливка цели"
+	case errors.Is(err, replicator.ErrNoStartPoint):
+		return "задайте --start-ts"
+	case errors.Is(err, replicator.ErrDBMismatch):
+		return "чекпойнт на цели записан для другой базы: верните прежние --db/--all-dbs " +
+			"или остановите репликатор, удалите чекпойнт и залейте цель заново"
+	}
+	return ""
 }
 
 // connect создаёт клиента и проверяет доступность сервера: mongo.Connect ленивый

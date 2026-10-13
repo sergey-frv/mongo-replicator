@@ -263,9 +263,19 @@ func (rn *runner) ckptToken() bson.Raw {
 	rn.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	tok, err := rn.r.loadToken(ctx) // читает только dst: безопасно во время Run
+	tok, _, err := rn.r.loadToken(ctx) // читает только dst: безопасно во время Run
 	require.NoError(rn.t, err)
 	return tok
+}
+
+// ckptDB — база, для которой записан чекпойнт ("" — все базы).
+func (rn *runner) ckptDB() string {
+	rn.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, db, err := rn.r.loadToken(ctx)
+	require.NoError(rn.t, err)
+	return db
 }
 
 // same сравнивает базу на источнике и цели: списки коллекций, документы по _id
@@ -998,6 +1008,64 @@ func TestIntegrationSingleDB(t *testing.T) {
 	assert.False(t, dbExists(ctx, t, dstClient, other), "база %s попала на цель", other)
 	// 3 insert + update + delete + финальный insert; события other не считаются
 	assert.EqualValues(t, 6, rn.r.Applied())
+}
+
+// Режим одной базы: чекпойнт помнит базу, рестарт продолжает с токена.
+func TestIntegrationSingleDBResume(t *testing.T) {
+	db := prepare(t)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	items := srcClient.Database(db).Collection("items")
+
+	for i := range 3 {
+		_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
+		require.NoError(t, err)
+	}
+	rn.waitSame(db)
+	rn.waitQuiet()
+	rn.stop()
+	assert.Equal(t, db, rn.ckptDB())
+
+	const n = 2
+	for i := 3; i < 3+n; i++ {
+		_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
+		require.NoError(t, err)
+	}
+
+	// без StartTS: продолжить можно только с чекпойнта
+	rn2 := start(t, Config{BatchSize: 1000, DB: db})
+	rn2.waitSame(db)
+	rn2.waitQuiet()
+	assert.EqualValues(t, n, rn2.r.Applied())
+	assert.Equal(t, db, rn2.ckptDB())
+}
+
+// Чекпойнт другой базы или другого режима: Run отказывается стартовать.
+// Токен произвольный: проверка идёт до открытия потока.
+func TestIntegrationDBMismatch(t *testing.T) {
+	prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	writeCkpt := func(db string) {
+		_, err := dstClient.Database(ckptDB).Collection(ckptColl).ReplaceOne(ctx,
+			bson.M{"_id": ckptID},
+			bson.M{"_id": ckptID, "token": bson.M{"_data": "00"}, "db": db},
+			options.Replace().SetUpsert(true))
+		require.NoError(t, err)
+	}
+
+	writeCkpt("it_mismatch_a")
+	for _, want := range []string{"", "it_mismatch_b"} {
+		_, err := runErr(t, Config{BatchSize: 1000, DB: want})
+		require.ErrorIs(t, err, ErrDBMismatch, "DB %q", want)
+	}
+
+	writeCkpt("")
+	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
+	require.ErrorIs(t, err, ErrDBMismatch)
 }
 
 func TestIntegrationUnsupportedDDL(t *testing.T) {
