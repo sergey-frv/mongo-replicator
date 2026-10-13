@@ -169,11 +169,12 @@ func prepareClients(src, dst side, p prompter, onWarn func(side string)) (srcOpt
 - Modify: `cmd/mongo-replicator/main_test.go`
 - Modify: `go.mod`, `go.sum`, `vendor/`
 
-- [ ] `termPrompter` (Technical Details: `done`-канал, SIGINT+SIGTERM, `term.Restore`, exit 130, `//nolint:gosec` на `int(fd)`) — сначала код с импортом `golang.org/x/term`
-- [ ] затем на хосте: `go get golang.org/x/term && go mod tidy && go mod vendor` (x/term станет прямой зависимостью, x/sys обновится до v0.48.0 — большой diff в `vendor/` ожидаем); в обратном порядке `tidy` выкинет неиспользуемый модуль и `make test` (сборка из `vendor/`) не соберётся
-- [ ] `main`: `prepareClients` после `setupLog`; ошибка → exit 2; `run(opts, srcOpts, dstOpts)`, `ApplyURI` из `run` убран; `fromFlag` через `flagGiven`; описания `--src`/`--dst` дополнены фразой про запрос пароля и `SRC_URI`/`DST_URI`
-- [ ] write/update tests в `main_test.go`, если затронуты сигнатуры (`run` юнит-тестами не покрыт — проверить, что `parseOpts`-тесты не меняются)
-- [ ] `make test`, `make lint`, `make build`; ручная проверка: `bin/mongo-replicator --src "mongodb://u@127.0.0.1:1/" --dst "mongodb://127.0.0.1:2/" --all-dbs </dev/null` → exit 2 с подсказкой про терминал и `SRC_URI`
+- [x] `termPrompter` (Technical Details: `done`-канал, SIGINT+SIGTERM, `term.Restore`, exit 130, `//nolint:gosec` на `int(fd)`) — сначала код с импортом `golang.org/x/term`
+- [x] затем на хосте: `go get golang.org/x/term && go mod tidy && go mod vendor` (x/term станет прямой зависимостью, x/sys обновится до v0.48.0 — большой diff в `vendor/` ожидаем); в обратном порядке `tidy` выкинет неиспользуемый модуль и `make test` (сборка из `vendor/`) не соберётся
+- [x] `main`: `prepareClients` после `setupLog`; ошибка → exit 2; `run(opts, srcOpts, dstOpts)`, `ApplyURI` из `run` убран; `fromFlag` через `flagGiven`; описания `--src`/`--dst` дополнены фразой про запрос пароля и `SRC_URI`/`DST_URI`
+- [x] write/update tests в `main_test.go`, если затронуты сигнатуры (`run` юнит-тестами не покрыт — проверить, что `parseOpts`-тесты не меняются)
+- [x] `make test`, `make lint`, `make build`; ручная проверка: `bin/mongo-replicator --src "mongodb://u@127.0.0.1:1/" --dst "mongodb://127.0.0.1:2/" --all-dbs </dev/null` → exit 2 с подсказкой про терминал и `SRC_URI`
+- ⚠️ фактически `go get` поставил x/term v0.47.0 и x/sys v0.49.0 (новее, чем в Context), а директиву `go 1.26` переписал в `go 1.26.0` — эквивалентно, образ `go/build:1.26` собирает
 
 ### Task 4: Подсказка при неверном пароле
 

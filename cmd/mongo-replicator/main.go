@@ -30,8 +30,8 @@ import (
 )
 
 type options struct {
-	Src       string `long:"src" env:"SRC_URI" description:"URI источника (replica set, MongoDB 6.0+)" required:"true"`
-	Dst       string `long:"dst" env:"DST_URI" description:"URI цели" required:"true"`
+	Src       string `long:"src" env:"SRC_URI" description:"URI источника (replica set, MongoDB 6.0+); без пароля в URI он будет запрошен в терминале; URI с паролем передавайте через SRC_URI, не флагом" required:"true"`
+	Dst       string `long:"dst" env:"DST_URI" description:"URI цели; без пароля в URI он будет запрошен в терминале; URI с паролем передавайте через DST_URI, не флагом" required:"true"`
 	StartTS   uint32 `long:"start-ts" env:"START_TS" default:"0" description:"unix-сек, с которых читать поток при отсутствии чекпойнта (раньше начала полного дампа)"`
 	BatchSize int    `long:"batch" env:"BATCH_SIZE" default:"1000" description:"максимум операций в одной пачке записи"`
 	Debug     bool   `long:"dbg" env:"DEBUG" description:"Debug mode"`
@@ -66,7 +66,22 @@ func main() {
 	masked.Src, masked.Dst = maskURI(opts.Src), maskURI(opts.Dst)
 	log.Debug().Any("options", masked).Send()
 
-	os.Exit(run(opts))
+	args := os.Args[1:]
+	srcOpts, dstOpts, err := prepareClients(
+		side{name: "источник", uri: opts.Src, envName: "SRC_URI", fromFlag: flagGiven(args, "src")},
+		side{name: "цель", uri: opts.Dst, envName: "DST_URI", fromFlag: flagGiven(args, "dst")},
+		termPrompter{},
+		func(name string) {
+			log.Warn().Str("cluster", name).Msg("пароль передан в --src/--dst: он остаётся в истории шелла и виден в ps; " +
+				"передавайте URI с паролем через SRC_URI/DST_URI или без пароля")
+		},
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+
+	os.Exit(run(opts, srcOpts, dstOpts))
 }
 
 // parseOpts разбирает аргументы и env. Любая ошибка означает выход с кодом 2
@@ -123,20 +138,19 @@ func isHelp(err error) bool {
 }
 
 // run подключается к кластерам и крутит репликацию с ретраями. Возвращает код выхода.
-func run(opts options) int {
+// srcOpts/dstOpts — разобранные URI с найденными паролями (prepareClients).
+func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	src, err := connect(ctx, mongoopts.Client().ApplyURI(opts.Src).SetAppName(appName))
+	src, err := connect(ctx, srcOpts.SetAppName(appName))
 	if err != nil {
 		return failCode(ctx, err, "источник")
 	}
 	defer src.Disconnect(context.Background()) //nolint:errcheck // выходим, ошибка не важна
 
 	// w:majority на цели: чекпойнт не должен обогнать данные при failover.
-	dst, err := connect(ctx, mongoopts.Client().ApplyURI(opts.Dst).
-		SetAppName(appName).
-		SetWriteConcern(writeconcern.Majority()))
+	dst, err := connect(ctx, dstOpts.SetAppName(appName).SetWriteConcern(writeconcern.Majority()))
 	if err != nil {
 		return failCode(ctx, err, "цель")
 	}

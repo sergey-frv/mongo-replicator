@@ -4,9 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	mongoopts "go.mongodb.org/mongo-driver/v2/mongo/options"
+	"golang.org/x/term"
 )
 
 // side — одна из строк подключения: источник или цель.
@@ -21,6 +25,43 @@ type side struct {
 type prompter interface {
 	IsTerminal() bool
 	ReadPassword(prompt string) (string, error)
+}
+
+// termPrompter читает пароль из терминала на stdin без эха.
+type termPrompter struct{}
+
+func stdinFd() int { return int(os.Stdin.Fd()) } //nolint:gosec // дескриптор stdin помещается в int
+
+func (termPrompter) IsTerminal() bool { return term.IsTerminal(stdinFd()) }
+
+// ReadPassword выводит приглашение в stderr и читает строку без эха.
+// SIGINT/SIGTERM во время ввода по умолчанию убили бы процесс с выключенным
+// эхом, поэтому перехватываем их: восстанавливаем терминал и выходим с 130.
+func (termPrompter) ReadPassword(prompt string) (string, error) {
+	fd := stdinFd()
+	fmt.Fprint(os.Stderr, prompt)
+	state, _ := term.GetState(fd)
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-sig:
+			if state != nil {
+				_ = term.Restore(fd, state)
+			}
+			fmt.Fprintln(os.Stderr)
+			os.Exit(130)
+		case <-done:
+		}
+	}()
+
+	pwd, err := term.ReadPassword(fd)
+	close(done)
+	signal.Stop(sig)
+	fmt.Fprintln(os.Stderr) // ввод без эха перевод строки не печатает
+	return string(pwd), err
 }
 
 // clientOptions разбирает URI стороны и находит пароль: из URI или из терминала.

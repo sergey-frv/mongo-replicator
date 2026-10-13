@@ -181,6 +181,8 @@ func TestParseOptsHelp(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, isHelp(err))
 	assert.Contains(t, err.Error(), "SRC_URI")
+	assert.Contains(t, err.Error(), "DST_URI")
+	assert.Contains(t, err.Error(), "запрошен") // описание --src/--dst: пароль спросят в терминале
 	assert.Contains(t, err.Error(), "--start-ts")
 	assert.Contains(t, err.Error(), "--all-dbs")
 }
