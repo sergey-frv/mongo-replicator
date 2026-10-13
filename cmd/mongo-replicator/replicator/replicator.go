@@ -55,12 +55,16 @@ type Replicator struct {
 	lastTS  bson.Timestamp // clusterTime последнего прочитанного события
 
 	appliedTS bson.Timestamp // время последнего сохранённого токена: всё до него на цели
+
+	// лог прогресса переживает перезапуски Run: при ретраях лаг тоже виден
+	lastLog time.Time
+	lastN   int64
 }
 
 // New создаёт репликатор. dst должен быть подключён с w:majority,
 // чтобы чекпойнт не обогнал данные при failover.
 func New(src, dst *mongo.Client, cfg Config) *Replicator {
-	return &Replicator{src: src, dst: dst, cfg: cfg}
+	return &Replicator{src: src, dst: dst, cfg: cfg, lastLog: time.Now()}
 }
 
 // Applied возвращает число применённых на цели DML-операций.
@@ -103,6 +107,8 @@ func checkDB(saved, want string) error {
 // Несохранённый хвост прошлого запуска отбрасывается: его перечитаем с чекпойнта.
 func (r *Replicator) Run(ctx context.Context) error {
 	r.pending = batch{}
+	// и при ошибке: если Run раз за разом падает, лаг в логе всё равно растёт
+	defer r.logProgress(ctx)
 
 	opts := options.ChangeStream().
 		SetFullDocument(options.UpdateLookup).
@@ -119,6 +125,12 @@ func (r *Replicator) Run(ctx context.Context) error {
 			return dbErr
 		}
 		opts.SetResumeAfter(token)
+		if r.appliedTS.IsZero() {
+			// после рестарта лаг известен сразу, ещё до первого сохранения
+			if ts, tsErr := tokenTime(token); tsErr == nil {
+				r.appliedTS = ts
+			}
+		}
 		log.Info().Msg("продолжаю с сохранённого resume token")
 	case r.cfg.StartTS > 0:
 		opts.SetStartAtOperationTime(&bson.Timestamp{T: r.cfg.StartTS})
@@ -150,7 +162,6 @@ func (r *Replicator) Run(ctx context.Context) error {
 		return r.saveToken(ctx, lastToken)
 	}
 
-	lastLog, lastN := time.Now(), r.applied.Load()
 	for {
 		if cs.TryNext(ctx) {
 			var ev event
@@ -208,17 +219,19 @@ func (r *Replicator) Run(ctx context.Context) error {
 			}
 		}
 
-		if time.Since(lastLog) >= 10*time.Second {
-			n := r.applied.Load()
-			r.logProgress(ctx, n, lastN, time.Since(lastLog))
-			lastLog, lastN = time.Now(), n
-		}
+		r.logProgress(ctx)
 	}
 }
 
-// logProgress пишет прогресс и лаг: применённая позиция против текущего времени
-// источника. Обе величины — время кластера источника, часы репликатора не участвуют.
-func (r *Replicator) logProgress(ctx context.Context, n, prevN int64, elapsed time.Duration) {
+// logProgress раз в 10 с пишет прогресс и лаг: применённая позиция против текущего
+// времени источника. Обе величины — время кластера источника, часы репликатора не участвуют.
+func (r *Replicator) logProgress(ctx context.Context) {
+	elapsed := time.Since(r.lastLog)
+	if elapsed < 10*time.Second || ctx.Err() != nil {
+		return
+	}
+	n, prevN := r.applied.Load(), r.lastN
+	r.lastLog, r.lastN = time.Now(), n
 	e := log.Info().Int64("applied", n).
 		Float64("rate", math.Round(float64(n-prevN)/elapsed.Seconds()*10)/10)
 	// ещё ничего не сохранено — лаг неизвестен, ping не нужен
