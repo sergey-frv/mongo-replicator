@@ -81,7 +81,7 @@ AllDBs bool   `long:"all-dbs" env:"ALL_DBS" description:"реплицирова�
 - `parseOpts` → ошибка (exit 2):
   - ни `--db`, ни `--all-dbs` (`DB=` пустая — то же, что не задана): «укажите --db <база> или --all-dbs»
   - оба сразу
-  - имя базы содержит любой из `/\. "$` или NUL; длиннее 64 байт; служебная база (`admin`, `config`, `local`, `_replicator`)
+  - имя базы содержит любой из `/\. "$` или NUL; длиннее 63 байт (MongoDB: короче 64); служебная база (`admin`, `config`, `local`, `_replicator`)
 - в `Config.DB` передаётся имя базы или `""` при `--all-dbs`
 
 **Config**
@@ -152,14 +152,15 @@ type Config struct {
 - Modify: `cmd/mongo-replicator/replicator/replicator.go`
 - Modify: `Makefile`
 
-- [ ] добавить `DB` и `AllDBs` в `options` (description из Technical Details) и валидацию в `parseOpts`: ровно одно из двух, плюс проверка имени
-- [ ] `Makefile`: в цель `run` добавить `--all-dbs` (иначе `make run` упадёт с exit 2)
-- [ ] добавить `DB string` в `replicator.Config`, передать из `run`
-- [ ] добавить `DB` и `ALL_DBS` в `clearEnv` в `main_test.go`; обновить существующие тесты `parseOpts`, которые разбирают опции без `--db`/`--all-dbs` (добавить `--all-dbs`)
-- [ ] write tests `parseOpts`: `--db urlshrinker`, `DB=urlshrinker` из env, флаг перекрывает env, `--all-dbs` → `DB == ""`, `ALL_DBS=true` из env
-- [ ] write tests `parseOpts` выбора режима: ничего не задано → ошибка с подсказкой; `DB=` пустая без `--all-dbs` → ошибка; `--db x --all-dbs` → ошибка
-- [ ] write tests `parseOpts` ошибок: `a.b`, `a/b`, `a b`, `a$b`, `a"b`, `a\b`, NUL, 65 байт, `admin`, `config`, `local`, `_replicator`
-- [ ] `make test` и `make lint` — должно пройти
+- [x] добавить `DB` и `AllDBs` в `options` (description из Technical Details) и валидацию в `parseOpts`: ровно одно из двух, плюс проверка имени
+- [x] `Makefile`: в цель `run` добавить `--all-dbs` (иначе `make run` упадёт с exit 2)
+- [x] добавить `DB string` в `replicator.Config`, передать из `run`
+- [x] добавить `DB` и `ALL_DBS` в `clearEnv` в `main_test.go`; обновить существующие тесты `parseOpts`, которые разбирают опции без `--db`/`--all-dbs` (добавить `--all-dbs`)
+- [x] write tests `parseOpts`: `--db urlshrinker`, `DB=urlshrinker` из env, флаг перекрывает env, `--all-dbs` → `DB == ""`, `ALL_DBS=true` из env
+- [x] write tests `parseOpts` выбора режима: ничего не задано → ошибка с подсказкой; `DB=` пустая без `--all-dbs` → ошибка; `--db x --all-dbs` → ошибка
+- [x] write tests `parseOpts` ошибок: `a.b`, `a/b`, `a b`, `a$b`, `a"b`, `a\b`, NUL, 64 и 65 байт, `admin`, `config`, `local`, `_replicator`
+- [x] `make test` и `make lint` — должно пройти
+- ➕ лимит длины имени — 63 байта (MongoDB: имя базы короче 64 байт), а не 64; список служебных баз вынесен в `replicator.SystemDBs` и используется и в `parseOpts`, и в `$match` потока
 
 ### Task 2: Поток уровня базы
 

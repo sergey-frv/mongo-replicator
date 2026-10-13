@@ -25,10 +25,14 @@ import (
 // ErrNoStartPoint — на цели нет чекпойнта и StartTS не задан: неизвестно, откуда читать поток.
 var ErrNoStartPoint = errors.New("чекпойнта нет и start-ts не задан: неизвестно, откуда читать")
 
+// SystemDBs — служебные базы, которые не реплицируются.
+var SystemDBs = []string{"admin", "config", "local", ckptDB}
+
 // Config — параметры репликации.
 type Config struct {
 	StartTS   uint32 // unix-сек, старт при отсутствии чекпойнта
 	BatchSize int    // максимум операций в одной пачке записи
+	DB        string // "" — все базы, кроме служебных
 }
 
 // Replicator переносит изменения из src в dst.
@@ -92,7 +96,7 @@ func (r *Replicator) Run(ctx context.Context) error {
 
 	// Служебные базы не реплицируем.
 	pipeline := mongo.Pipeline{{{Key: "$match", Value: bson.M{
-		"ns.db": bson.M{"$nin": bson.A{"admin", "config", "local", ckptDB}},
+		"ns.db": bson.M{"$nin": SystemDBs},
 	}}}}
 
 	cs, err := r.src.Watch(ctx, pipeline, opts)

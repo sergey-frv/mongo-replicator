@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -34,6 +35,8 @@ type options struct {
 	StartTS   uint32 `long:"start-ts" env:"START_TS" default:"0" description:"unix-сек, с которых читать поток при отсутствии чекпойнта (раньше начала полного дампа)"`
 	BatchSize int    `long:"batch" env:"BATCH_SIZE" default:"1000" description:"максимум операций в одной пачке записи"`
 	Debug     bool   `long:"dbg" env:"DEBUG" description:"Debug mode"`
+	DB        string `long:"db" env:"DB" description:"реплицировать только эту базу: поток уровня базы, права на источнике — только на неё. Rename коллекций внутри базы поддерживается, перенос коллекций между базами не предусмотрен"`
+	AllDBs    bool   `long:"all-dbs" env:"ALL_DBS" description:"реплицировать все базы, кроме служебных (нужна readAnyDatabase на источнике)"`
 }
 
 var revision = "unknown"
@@ -42,6 +45,7 @@ const (
 	appName      = "cs-replicator"
 	pingTimeout  = 10 * time.Second
 	retryTimeout = 5 * time.Second
+	maxDBNameLen = 63 // MongoDB: имя базы короче 64 байт
 )
 
 func main() {
@@ -80,7 +84,32 @@ func parseOpts(args []string) (options, error) {
 	if opts.BatchSize < 1 || opts.BatchSize > math.MaxInt32 {
 		return opts, fmt.Errorf("--batch должен быть от 1 до %d, получено %d", math.MaxInt32, opts.BatchSize)
 	}
+	// режим всех баз — только явно, чтобы не запустить его случайно
+	switch {
+	case opts.DB == "" && !opts.AllDBs:
+		return opts, errors.New("укажите --db <база> или --all-dbs")
+	case opts.DB != "" && opts.AllDBs:
+		return opts, errors.New("--db и --all-dbs взаимоисключающие")
+	case opts.DB != "":
+		if err := checkDBName(opts.DB); err != nil {
+			return opts, err
+		}
+	}
 	return opts, nil
+}
+
+// checkDBName проверяет имя базы по ограничениям MongoDB и запрещает служебные базы.
+func checkDBName(name string) error {
+	if strings.ContainsAny(name, "/\\. \"$\x00") {
+		return fmt.Errorf("--db %q: имя базы не может содержать /\\. \"$ и NUL", name)
+	}
+	if len(name) > maxDBNameLen {
+		return fmt.Errorf("--db %q: имя базы длиннее %d байт", name, maxDBNameLen)
+	}
+	if slices.Contains(replicator.SystemDBs, name) {
+		return fmt.Errorf("--db %q: служебная база не реплицируется", name)
+	}
+	return nil
 }
 
 func isHelp(err error) bool {
@@ -108,7 +137,9 @@ func run(opts options) int {
 	}
 	defer dst.Disconnect(context.Background()) //nolint:errcheck // выходим, ошибка не важна
 
-	r := replicator.New(src, dst, replicator.Config{StartTS: opts.StartTS, BatchSize: opts.BatchSize})
+	r := replicator.New(src, dst, replicator.Config{
+		StartTS: opts.StartTS, BatchSize: opts.BatchSize, DB: opts.DB,
+	})
 	for ctx.Err() == nil {
 		err := r.Run(ctx)
 		if ctx.Err() != nil {
