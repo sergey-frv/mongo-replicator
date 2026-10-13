@@ -201,3 +201,102 @@ func TestClientOptionsNoPasswordLeak(t *testing.T) {
 		})
 	}
 }
+
+func dstSide(uri string, fromFlag bool) side {
+	return side{name: "цель", uri: uri, envName: "DST_URI", fromFlag: fromFlag}
+}
+
+// warnRecorder записывает вызовы onWarn вместе с числом запросов пароля на момент вызова.
+type warnRecorder struct {
+	p     *fakePrompter
+	sides []string
+	at    []int
+}
+
+func (w *warnRecorder) onWarn(name string) {
+	w.sides = append(w.sides, name)
+	w.at = append(w.at, len(w.p.prompts))
+}
+
+func TestPrepareClientsBothPrompted(t *testing.T) {
+	// одинаковый пользователь на обеих сторонах — всё равно два запроса
+	p := &fakePrompter{terminal: true, answers: []string{"src-pass", "dst-pass"}}
+	w := &warnRecorder{p: p}
+	srcOpts, dstOpts, err := prepareClients(
+		srcSide("mongodb://repl@s1:27017/?authSource=admin", false),
+		dstSide("mongodb://repl@d1:27017/?authSource=admin", false), p, w.onWarn)
+	require.NoError(t, err)
+	require.Len(t, p.prompts, 2)
+	assert.Contains(t, p.prompts[0], "repl@s1:27017")
+	assert.Contains(t, p.prompts[0], "источник")
+	assert.Contains(t, p.prompts[1], "repl@d1:27017")
+	assert.Contains(t, p.prompts[1], "цель")
+	assert.Equal(t, "src-pass", srcOpts.Auth.Password)
+	assert.Equal(t, "dst-pass", dstOpts.Auth.Password)
+	assert.Empty(t, w.sides)
+}
+
+func TestPrepareClientsMixed(t *testing.T) {
+	// источник — пароль в URI из окружения, цель — из терминала
+	p := &fakePrompter{terminal: true, answers: []string{"dst-pass"}}
+	w := &warnRecorder{p: p}
+	srcOpts, dstOpts, err := prepareClients(
+		srcSide("mongodb://repl:src-pass@s1/", false),
+		dstSide("mongodb://repl@d1/", false), p, w.onWarn)
+	require.NoError(t, err)
+	require.Len(t, p.prompts, 1)
+	assert.Contains(t, p.prompts[0], "цель")
+	assert.Equal(t, "src-pass", srcOpts.Auth.Password)
+	assert.Equal(t, "dst-pass", dstOpts.Auth.Password)
+	assert.Empty(t, w.sides, "пароль из окружения — без WARN")
+}
+
+func TestPrepareClientsWarnBeforeDstPrompt(t *testing.T) {
+	p := &fakePrompter{terminal: true, answers: []string{"dst-pass"}}
+	w := &warnRecorder{p: p}
+	_, dstOpts, err := prepareClients(
+		srcSide("mongodb://repl:src-pass@s1/", true),
+		dstSide("mongodb://repl@d1/", false), p, w.onWarn)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"источник"}, w.sides)
+	assert.Equal(t, []int{0}, w.at, "WARN источника — до запроса пароля цели")
+	assert.Equal(t, "dst-pass", dstOpts.Auth.Password)
+}
+
+func TestPrepareClientsWarnBothSides(t *testing.T) {
+	p := &fakePrompter{terminal: true}
+	w := &warnRecorder{p: p}
+	_, _, err := prepareClients(
+		srcSide("mongodb://repl:a@s1/", true),
+		dstSide("mongodb://repl:b@d1/", true), p, w.onWarn)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"источник", "цель"}, w.sides)
+	assert.Empty(t, p.prompts)
+}
+
+func TestPrepareClientsErrors(t *testing.T) {
+	t.Run("ошибка источника — цель не запрашивается", func(t *testing.T) {
+		p := &fakePrompter{terminal: true, answers: []string{""}}
+		w := &warnRecorder{p: p}
+		srcOpts, dstOpts, err := prepareClients(
+			srcSide("mongodb://repl@s1/", false),
+			dstSide("mongodb://repl@d1/", false), p, w.onWarn)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "источник")
+		assert.Nil(t, srcOpts)
+		assert.Nil(t, dstOpts)
+		require.Len(t, p.prompts, 1)
+		assert.Contains(t, p.prompts[0], "источник")
+	})
+	t.Run("ошибка цели", func(t *testing.T) {
+		p := &fakePrompter{terminal: true, answers: []string{"src-pass"}}
+		w := &warnRecorder{p: p}
+		srcOpts, dstOpts, err := prepareClients(
+			srcSide("mongodb://repl@s1/", false),
+			dstSide("mongodb://h1/?connectTimeoutMS=abc", false), p, w.onWarn)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "цель")
+		assert.Nil(t, srcOpts)
+		assert.Nil(t, dstOpts)
+	})
+}

@@ -65,6 +65,31 @@ func clientOptions(s side, p prompter) (opts *mongoopts.ClientOptions, warn bool
 	return opts, false, nil
 }
 
+// prepareClients готовит обе стороны по очереди: источник, затем цель.
+// onWarn вызывается сразу для стороны, чей пароль взят из URI, переданного флагом.
+// Ошибки clientOptions уже содержат имя стороны.
+func prepareClients(src, dst side, p prompter, onWarn func(side string)) (srcOpts, dstOpts *mongoopts.ClientOptions, _ error) {
+	prepare := func(s side) (*mongoopts.ClientOptions, error) {
+		opts, warn, err := clientOptions(s, p)
+		if err != nil {
+			return nil, err
+		}
+		if warn {
+			onWarn(s.name)
+		}
+		return opts, nil
+	}
+	srcOpts, err := prepare(src)
+	if err != nil {
+		return nil, nil, err
+	}
+	dstOpts, err = prepare(dst)
+	if err != nil {
+		return nil, nil, err
+	}
+	return srcOpts, dstOpts, nil
+}
+
 // uriError — ошибка разбора URI. Если в URI есть пароль, текст драйвера не
 // выводим: он может цитировать часть пароля (invalid URL escape "%zz").
 func uriError(s side, err error) error {
