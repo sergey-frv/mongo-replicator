@@ -185,10 +185,11 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 - Create: `Makefile`
 - Create: `vendor/` (генерируется)
 
-- [ ] `go mod tidy && go mod vendor`
-- [ ] `Makefile`: `REVISION := $(shell ...)` и цель `build` (`tidy`, `vendor`, `go build -ldflags "-X main.revision=$(REVISION)" -o bin/mongo-replicator ./cmd/mongo-replicator`)
-- [ ] проверить `make build`; `bin/mongo-replicator --help` показывает опции и env-переменные; без `--src` — exit 2; в логе `revision` = `unknown` (коммитов ещё нет), не пустая строка
-- [ ] `go test -race ./...` — должно пройти
+- [x] `go mod tidy && go mod vendor`
+- [x] `Makefile`: `REVISION := $(shell ...)` и цель `build` (`tidy`, `vendor`, `go build -ldflags "-X main.revision=$(REVISION)" -o bin/mongo-replicator ./cmd/mongo-replicator`)
+- [x] проверить `make build`; `bin/mongo-replicator --help` показывает опции и env-переменные; без `--src` — exit 2; в логе `revision` = `unknown` (коммитов ещё нет), не пустая строка
+- [x] `go test -race ./...` — должно пройти
+- ➕ коммиты к этому моменту уже есть, поэтому в логе `revision` = хэш (`6e39141`); `unknown` проверен сборкой копии дерева без `.git`
 
 ### Task 5: Окружение разработки: Dockerfile.dev и docker-compose
 
