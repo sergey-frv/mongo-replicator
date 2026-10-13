@@ -204,8 +204,8 @@ func prepareClients(src, dst side, p prompter, onWarn func(side string)) (srcOpt
 - [x] `make lint` без замечаний
 
 ### Task 7: [Final] Update documentation
-- [ ] создать CLAUDE.md, только если появились неочевидные договорённости
-- [ ] move this plan to `docs/plans/completed/`
+- [x] создать CLAUDE.md, только если появились неочевидные договорённости (не создан: неочевидное — перехват SIGINT/SIGTERM в `termPrompter`, скрытие текста драйвера для URI с паролем, разбор `flagGiven`, код 18 в `isAuthFailed` — описано комментариями в коде, запуск без терминала и коды выхода — в README)
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
