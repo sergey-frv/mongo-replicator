@@ -279,9 +279,9 @@ var ErrNoStartPoint = errors.New(...)               // вместо безымя
 - [x] `make run` при остановленном `mongo-dst` → exit 1 по `Ping`, без вечных ретраев (проверено с `--no-deps`: иначе compose поднимает mongo-dst по depends_on; exit 1 через ~10 с)
 
 ### Task 12: [Final] Update documentation
-- [ ] update README.md if needed
-- [ ] создать CLAUDE.md, только если появились неочевидные договорённости (сейчас его нет)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] update README.md if needed (добавлено: `make run` после `make test-integration` продолжает с оставшегося чекпойнта, сброс — `make down`)
+- [x] создать CLAUDE.md, только если появились неочевидные договорённости (не создан: неочевидное — `-count=1`, `-p 1`, `quit` в healthcheck — описано комментариями в Makefile/compose и в README)
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
