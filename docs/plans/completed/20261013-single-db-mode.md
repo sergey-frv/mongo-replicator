@@ -115,7 +115,7 @@ type Config struct {
 - `tokenTime(token bson.Raw) (bson.Timestamp, error)`: `_data` токена — hex; первый байт `0x82` (тип Timestamp в KeyString), затем 8 байт big-endian: `T` (uint32), `I` (uint32). Иначе — ошибка (формат внутренний, но стабилен с 4.2; так же декодируют Debezium и др.)
 - `saveToken`: после успешной записи — `r.appliedTS = tokenTime(token)`; в чекпойнт `clusterTime` пишется он же (вместо `lastTS`). Если токен не декодируется — fallback на `lastTS`, как сейчас, и DEBUG-лог
 - **текущее время источника** — `operationTime` из `ping` на `src` (без привилегий, работает и с правами на одну базу), раз в 10 с, таймаут 5 с. Обе величины — время кластера источника: расхождение часов машины репликатора и источника не влияет
-- `lagOf(srcNow, applied bson.Timestamp) time.Duration` = `srcNow.T − applied.T` секунд, отрицательное → 0; `applied` нулевой (ещё ничего не сохранено) → лаг неизвестен
+- `lagOf(srcNow, applied bson.Timestamp) time.Duration` = `srcNow.T − applied.T` секунд, отрицательное → 0; `appliedTS` нулевой (ещё ничего не сохранено) → `logProgress` не пишет лаг и не шлёт ping
 - лог раз в 10 с (INFO `прогресс`):
   | поле | значение |
   |---|---|
@@ -133,7 +133,7 @@ type Config struct {
 **Права**
 | Режим | Источник | Цель |
 |---|---|---|
-| без `--db` | `readAnyDatabase` (`find` + `changeStream` на всех базах) | `readWrite` на реплицируемые базы и `_replicator` + `dropDatabase` |
+| `--all-dbs` | `readAnyDatabase` (`find` + `changeStream` на всех базах) | `readWrite` на реплицируемые базы и `_replicator` + `dropDatabase` |
 | `--db X` | `read` на `X` | `readWrite` на `X` и `_replicator` + `dropDatabase` на `X` (`dbAdmin@X` или своя роль) |
 
 Без `dropDatabase` на цели событие `dropDatabase` источника падает с 13 (не перманентная) → вечные ретраи, до `ErrStreamInvalidated` дело не доходит.
@@ -220,7 +220,7 @@ type Config struct {
 - [x] `saveToken`: `r.appliedTS` и `clusterTime` чекпойнта из `tokenTime(token)`, fallback на `lastTS`
 - [x] лог прогресса: `ping` источника с таймаутом 5 с → `applied`, `rate`, `applied_at`, `lag`, `lag_sec`; при ошибке `ping` — без лага, DEBUG
 - [x] write unit tests `tokenTime`: реальные токены 8.0 (событие и post-batch, захватить один раз из интеграционного прогона и вписать hex-константами) → ожидаемые `T`/`I`; ошибки: нет `_data`, не hex, первый байт не `0x82`, меньше 9 байт
-- [x] write unit tests `lagOf`: обычный случай, источник «позади» применённого (часы/округление) → 0, нулевой `applied` → неизвестно
+- [x] write unit tests `lagOf`: обычный случай, источник «позади» применённого (часы/округление) → 0
 - [x] write integration test `TestIntegrationLagPosition`: режим `DB`; запись в базу теста, `waitSame`, `waitQuiet` → `clusterTime` чекпойнта ≥ `operationTime` этой записи; затем запись **только** в `<db>_other` → `require.Eventually`: `clusterTime` чекпойнта ≥ `operationTime` записи в `_other` (позиция двигается без событий своей базы — post-batch token), при этом `Applied()` не изменился
 - [x] `make test`, `make test-integration`, `make lint` — должно пройти
 - ➕ `lastTS` хранится как `bson.Timestamp` (fallback для `clusterTime` с `I`); `rate` округлён до 0.1; время источника — `srcTime` (ping на `admin`) в `lag.go`, лог — `logProgress`

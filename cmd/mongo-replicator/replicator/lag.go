@@ -34,16 +34,12 @@ func tokenTime(token bson.Raw) (bson.Timestamp, error) {
 }
 
 // lagOf — лаг применённой позиции относительно текущего времени источника.
-// ok == false: ещё ничего не сохранено, лаг неизвестен. Источник «позади»
-// применённой позиции (округление до секунды) — лаг 0.
-func lagOf(srcNow, applied bson.Timestamp) (lag time.Duration, ok bool) {
-	if applied.IsZero() {
-		return 0, false
-	}
+// Источник «позади» применённой позиции (округление до секунды) — лаг 0.
+func lagOf(srcNow, applied bson.Timestamp) time.Duration {
 	if srcNow.T <= applied.T {
-		return 0, true
+		return 0
 	}
-	return time.Duration(srcNow.T-applied.T) * time.Second, true
+	return time.Duration(srcNow.T-applied.T) * time.Second
 }
 
 // srcTime — текущее время кластера источника: operationTime ответа ping.

@@ -84,7 +84,12 @@ func parseOpts(args []string) (options, error) {
 	if opts.BatchSize < 1 || opts.BatchSize > math.MaxInt32 {
 		return opts, fmt.Errorf("--batch должен быть от 1 до %d, получено %d", math.MaxInt32, opts.BatchSize)
 	}
-	// режим всех баз — только явно, чтобы не запустить его случайно
+	// режим всех баз — только явно, чтобы не запустить его случайно. go-flags
+	// читает пустую bool-переменную как true: ALL_DBS= из шаблона деплоя
+	// включил бы все базы.
+	if v, ok := os.LookupEnv("ALL_DBS"); ok && v == "" {
+		return opts, errors.New("ALL_DBS задан пустым: укажите true/false или уберите переменную")
+	}
 	switch {
 	case opts.DB == "" && !opts.AllDBs:
 		return opts, errors.New("укажите --db <база> или --all-dbs")
@@ -172,7 +177,8 @@ func hint(err error) string {
 		return "задайте --start-ts"
 	case errors.Is(err, replicator.ErrDBMismatch):
 		return "чекпойнт на цели записан для другой базы: верните прежние --db/--all-dbs " +
-			"или остановите репликатор, удалите чекпойнт и залейте цель заново"
+			"или остановите репликатор, удалите чекпойнт и залейте цель заново; " +
+			"если на эту цель пишет второй экземпляр — у каждого должна быть своя цель"
 	case errors.Is(err, replicator.ErrStreamInvalidated):
 		return "база удалена на источнике (dropDatabase), поток закрыт: " +
 			"удалите чекпойнт на цели и запустите заново с --start-ts"

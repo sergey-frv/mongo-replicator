@@ -132,6 +132,8 @@ func TestParseOptsErrors(t *testing.T) {
 		{"пустой DB без --all-dbs", map[string]string{"DB": ""}, []string{"--src", "s", "--dst", "d"}, "укажите --db <база> или --all-dbs"},
 		{"--db и --all-dbs", nil, []string{"--src", "s", "--dst", "d", "--db", "x", "--all-dbs"}, "взаимоисключающие"},
 		{"DB из env и --all-dbs", map[string]string{"DB": "x"}, []string{"--src", "s", "--dst", "d", "--all-dbs"}, "взаимоисключающие"},
+		{"пустой ALL_DBS", map[string]string{"ALL_DBS": "", "DB": ""}, []string{"--src", "s", "--dst", "d"}, "ALL_DBS задан пустым"},
+		{"пустой ALL_DBS и --db", map[string]string{"ALL_DBS": ""}, []string{"--src", "s", "--dst", "d", "--db", "x"}, "ALL_DBS задан пустым"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -187,18 +189,23 @@ func TestPermanent(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
-		want bool
+		hint string // подстрока подсказки; "" — ошибка временная
 	}{
-		{"history lost", fmt.Errorf("run: %w", mongo.CommandError{Code: 286}), true},
-		{"нет точки старта", fmt.Errorf("run: %w", replicator.ErrNoStartPoint), true},
-		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), true},
-		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), true},
-		{"обычная ошибка", errors.New("boom"), false},
-		{"отмена", context.Canceled, false},
+		{"history lost", fmt.Errorf("run: %w", mongo.CommandError{Code: 286}), "выпала из oplog"},
+		{"нет точки старта", fmt.Errorf("run: %w", replicator.ErrNoStartPoint), "--start-ts"},
+		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), "другой базы"},
+		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), "dropDatabase"},
+		{"обычная ошибка", errors.New("boom"), ""},
+		{"отмена", context.Canceled, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, permanent(c.err))
+			assert.Equal(t, c.hint != "", permanent(c.err))
+			if c.hint == "" {
+				assert.Empty(t, hint(c.err))
+			} else {
+				assert.Contains(t, hint(c.err), c.hint)
+			}
 		})
 	}
 }

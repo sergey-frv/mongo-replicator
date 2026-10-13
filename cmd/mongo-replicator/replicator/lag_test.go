@@ -52,19 +52,10 @@ func TestTokenTimeErrors(t *testing.T) {
 }
 
 func TestLagOf(t *testing.T) {
-	lag, ok := lagOf(bson.Timestamp{T: 1065, I: 1}, bson.Timestamp{T: 1000, I: 7})
-	assert.True(t, ok)
+	lag := lagOf(bson.Timestamp{T: 1065, I: 1}, bson.Timestamp{T: 1000, I: 7})
 	assert.Equal(t, 65*time.Second, lag)
 	assert.Equal(t, "1m5s", lag.String())
 
-	lag, ok = lagOf(bson.Timestamp{T: 1000, I: 1}, bson.Timestamp{T: 1000, I: 9})
-	assert.True(t, ok)
-	assert.Zero(t, lag, "та же секунда")
-
-	lag, ok = lagOf(bson.Timestamp{T: 999, I: 1}, bson.Timestamp{T: 1000, I: 1})
-	assert.True(t, ok)
-	assert.Zero(t, lag, "источник позади применённой позиции")
-
-	_, ok = lagOf(bson.Timestamp{T: 1000, I: 1}, bson.Timestamp{})
-	assert.False(t, ok, "ничего не сохранено — лаг неизвестен")
+	assert.Zero(t, lagOf(bson.Timestamp{T: 1000, I: 1}, bson.Timestamp{T: 1000, I: 9}), "та же секунда")
+	assert.Zero(t, lagOf(bson.Timestamp{T: 999, I: 1}, bson.Timestamp{T: 1000, I: 1}), "источник позади применённой позиции")
 }

@@ -221,14 +221,15 @@ func (r *Replicator) Run(ctx context.Context) error {
 func (r *Replicator) logProgress(ctx context.Context, n, prevN int64, elapsed time.Duration) {
 	e := log.Info().Int64("applied", n).
 		Float64("rate", math.Round(float64(n-prevN)/elapsed.Seconds()*10)/10)
+	// ещё ничего не сохранено — лаг неизвестен, ping не нужен
 	if !r.appliedTS.IsZero() {
 		e = e.Time("applied_at", time.Unix(int64(r.appliedTS.T), 0).UTC())
-	}
-	now, err := r.srcTime(ctx)
-	if err != nil {
-		log.Debug().Err(err).Msg("ping источника: лаг неизвестен")
-	} else if lag, ok := lagOf(now, r.appliedTS); ok {
-		e = e.Str("lag", lag.String()).Int64("lag_sec", int64(lag/time.Second))
+		if now, err := r.srcTime(ctx); err != nil {
+			log.Debug().Err(err).Msg("ping источника: лаг неизвестен")
+		} else {
+			lag := lagOf(now, r.appliedTS)
+			e = e.Str("lag", lag.String()).Int64("lag_sec", int64(lag/time.Second))
+		}
 	}
 	e.Msg("прогресс")
 }

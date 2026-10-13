@@ -1084,6 +1084,35 @@ func TestIntegrationDBMismatch(t *testing.T) {
 	writeCkpt("")
 	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
 	require.ErrorIs(t, err, ErrDBMismatch)
+
+	// чекпойнт версии до --db: поля db нет, это режим всех баз
+	_, err = dstClient.Database(ckptDB).Collection(ckptColl).ReplaceOne(ctx,
+		bson.M{"_id": ckptID}, bson.M{"_id": ckptID, "token": bson.M{"_data": "00"}},
+		options.Replace().SetUpsert(true))
+	require.NoError(t, err)
+	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
+	require.ErrorIs(t, err, ErrDBMismatch)
+	_, err = runErr(t, Config{BatchSize: 1000})
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrDBMismatch, "чекпойнт без db принят не за режим всех баз")
+}
+
+// Токен не разобран: clusterTime чекпойнта — время последнего события.
+func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	r := New(srcClient, dstClient, Config{BatchSize: 1000, DB: db})
+	r.lastTS = bson.Timestamp{T: 1000, I: 3}
+	token, err := bson.Marshal(bson.M{"_data": "zz"})
+	require.NoError(t, err)
+	require.NoError(t, r.saveToken(ctx, token))
+
+	assert.Equal(t, r.lastTS, r.appliedTS)
+	rn := &runner{t: t, r: r}
+	assert.Equal(t, r.lastTS, rn.ckptTime())
+	assert.Equal(t, db, rn.ckptDB())
 }
 
 // dropDatabase отслеживаемой базы: поток закрывается invalidate, Run возвращает
@@ -1145,6 +1174,11 @@ func TestIntegrationLagPosition(t *testing.T) {
 	rn.waitQuiet()
 	assert.False(t, rn.ckptTime().Before(own), "чекпойнт %v позади записи %v", rn.ckptTime(), own)
 	n := rn.r.Applied()
+
+	// время источника для лага: ping с правами на одну базу
+	now, err := rn.r.srcTime(ctx)
+	require.NoError(t, err)
+	assert.False(t, now.Before(own), "время источника %v позади записи %v", now, own)
 
 	foreign := insertAt(ctx, t, srcClient.Database(other).Collection("c"), int32(1))
 	require.Eventually(t, func() bool { return !rn.ckptTime().Before(foreign) }, waitTimeout, pollEvery,
