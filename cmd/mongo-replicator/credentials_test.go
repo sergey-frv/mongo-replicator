@@ -2,7 +2,9 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -201,6 +203,25 @@ func TestClientOptionsURIErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestURIErrorDNS: ошибка DNS выводится с причиной и даже при пароле в URI, сам пароль — нет.
+func TestURIErrorDNS(t *testing.T) {
+	dnsErr := &net.DNSError{Err: "no such host", Name: "_mongodb._tcp.cluster.example.com", IsNotFound: true}
+	wrapped := fmt.Errorf("error parsing uri: see https://pkg.go.dev/x: %w", dnsErr)
+
+	err := uriError(srcSide("mongodb+srv://repl:Secret@cluster.example.com/?authSource=admin", false), wrapped)
+	assert.Contains(t, err.Error(), "источник")
+	assert.Contains(t, err.Error(), "mongodb+srv://repl:xxxxx@cluster.example.com/")
+	assert.Contains(t, err.Error(), "no such host")
+	assert.Contains(t, err.Error(), "_mongodb._tcp.cluster.example.com")
+	assert.NotContains(t, err.Error(), "Secret")
+	assert.ErrorIs(t, err, dnsErr)
+
+	err = uriError(srcSide("mongodb+srv://repl:pre@x/Secret@cluster.example.com/", false), wrapped)
+	assert.Contains(t, err.Error(), "no such host")
+	assert.NotContains(t, err.Error(), "Secret")
+	assert.NotContains(t, err.Error(), "pre")
 }
 
 // TestClientOptionsNoPasswordLeak: пароль не встречается ни в приглашении, ни в ошибках.

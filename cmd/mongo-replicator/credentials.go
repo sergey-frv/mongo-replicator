@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -145,7 +146,14 @@ func prepareClients(src, dst side, p prompter, onWarn func(side string)) (srcOpt
 // текст драйвера не выводим: он может цитировать часть секрета (invalid URL escape "%zz").
 func uriError(s side, err error) error {
 	masked, ok := shownURI(s.uri)
+	var dnsErr *net.DNSError
 	switch {
+	case errors.As(err, &dnsErr):
+		// ошибка DNS (mongodb+srv) — только имена хостов, секретов в ней нет; URI корректен
+		if !ok {
+			masked = "(не выводится: в нём может быть пароль)"
+		}
+		return fmt.Errorf("%s: ошибка DNS для URI %s: %w", s.name, masked, dnsErr)
 	case !ok:
 		// неэкранированные "/" или "@" в пароле: пароль (или его хвост) остался бы в тексте
 		return fmt.Errorf("%s: некорректный URI (не выводится: в нём может быть пароль); "+
