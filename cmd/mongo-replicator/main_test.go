@@ -211,3 +211,21 @@ func TestPermanent(t *testing.T) {
 		})
 	}
 }
+
+func TestIsAuthFailed(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"неверный пароль", fmt.Errorf("ping: %w", mongo.CommandError{Code: 18, Wrapped: errors.New("auth")}), true},
+		{"другой код", fmt.Errorf("ping: %w", mongo.CommandError{Code: 13}), false},
+		{"обычная ошибка", errors.New("boom"), false},
+		{"nil", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, isAuthFailed(c.err))
+		})
+	}
+}

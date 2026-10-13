@@ -182,9 +182,9 @@ func prepareClients(src, dst side, p prompter, onWarn func(side string)) (srcOpt
 - Modify: `cmd/mongo-replicator/main.go`
 - Modify: `cmd/mongo-replicator/main_test.go`
 
-- [ ] `isAuthFailed(err)` на `mongo.ServerError.HasErrorCode(18)`; в `failCode` — `.Str("hint", "проверьте пользователя и пароль")`
-- [ ] write tests `isAuthFailed`: форма реальной цепочки — `fmt.Errorf("ping: %w", mongo.CommandError{Code: 18, Wrapped: errors.New("auth")})` → true; `mongo.CommandError{Code: 13}` → false; обычная ошибка и nil → false
-- [ ] `make test` и `make lint` — должно пройти
+- [x] `isAuthFailed(err)` на `mongo.ServerError.HasErrorCode(18)`; в `failCode` — `.Str("hint", "проверьте пользователя и пароль")`
+- [x] write tests `isAuthFailed`: форма реальной цепочки — `fmt.Errorf("ping: %w", mongo.CommandError{Code: 18, Wrapped: errors.New("auth")})` → true; `mongo.CommandError{Code: 13}` → false; обычная ошибка и nil → false
+- [x] `make test` и `make lint` — должно пройти
 
 ### Task 5: README
 

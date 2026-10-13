@@ -222,8 +222,19 @@ func failCode(ctx context.Context, err error, what string) int {
 		log.Info().Msg("остановлен по сигналу")
 		return 0
 	}
-	log.Error().Err(err).Str("cluster", what).Msg("не удалось подключиться")
+	e := log.Error().Err(err).Str("cluster", what)
+	if isAuthFailed(err) {
+		e = e.Str("hint", "проверьте пользователя и пароль")
+	}
+	e.Msg("не удалось подключиться")
 	return 1
+}
+
+// isAuthFailed сообщает, что сервер отверг аутентификацию (AuthenticationFailed, код 18):
+// Ping возвращает её как mongo.CommandError.
+func isAuthFailed(err error) bool {
+	var se mongo.ServerError
+	return errors.As(err, &se) && se.HasErrorCode(18)
 }
 
 // maskURI заменяет пароль в URI на xxxxx. Разбор строковый, а не url.Parse:
