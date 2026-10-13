@@ -69,6 +69,17 @@ func (r *Replicator) flush(ctx context.Context) error {
 	return nil
 }
 
+// streamPipeline — pipeline потока. Поток уровня кластера (db == "") отсекает
+// служебные базы; поток уровня базы сервер сам ограничивает этой базой.
+func streamPipeline(db string) mongo.Pipeline {
+	if db != "" {
+		return mongo.Pipeline{}
+	}
+	return mongo.Pipeline{{{Key: "$match", Value: bson.M{
+		"ns.db": bson.M{"$nin": SystemDBs},
+	}}}}
+}
+
 // Run открывает поток и работает до ошибки или отмены контекста.
 // Несохранённый хвост прошлого запуска отбрасывается: его перечитаем с чекпойнта.
 func (r *Replicator) Run(ctx context.Context) error {
@@ -94,12 +105,16 @@ func (r *Replicator) Run(ctx context.Context) error {
 		return ErrNoStartPoint
 	}
 
-	// Служебные базы не реплицируем.
-	pipeline := mongo.Pipeline{{{Key: "$match", Value: bson.M{
-		"ns.db": bson.M{"$nin": SystemDBs},
-	}}}}
-
-	cs, err := r.src.Watch(ctx, pipeline, opts)
+	// Поток уровня базы требует прав только на неё, уровня кластера — на все базы.
+	pipeline := streamPipeline(r.cfg.DB)
+	var cs *mongo.ChangeStream
+	if r.cfg.DB == "" {
+		log.Info().Str("db", "all").Msg("открываю поток уровня кластера")
+		cs, err = r.src.Watch(ctx, pipeline, opts)
+	} else {
+		log.Info().Str("db", r.cfg.DB).Msg("открываю поток уровня базы")
+		cs, err = r.src.Database(r.cfg.DB).Watch(ctx, pipeline, opts)
+	}
 	if err != nil {
 		return fmt.Errorf("открытие change stream: %w", err)
 	}

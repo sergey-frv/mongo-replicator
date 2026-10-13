@@ -943,6 +943,63 @@ func TestIntegrationDDL(t *testing.T) {
 	assert.EqualValues(t, 4, n, "0, 1, 3 из a и 10; документы старой b удалены dropTarget")
 }
 
+// Поток уровня базы: события других баз (DML и DDL) на цель не попадают,
+// rename внутри базы применяется.
+func TestIntegrationSingleDB(t *testing.T) {
+	db := prepare(t)
+	other := db + "_other"
+	cleanDB(t, other)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*waitTimeout)
+	defer cancel()
+
+	// сначала события другой базы: они в oplog раньше событий базы теста
+	o := srcClient.Database(other).Collection("c")
+	require.NoError(t, srcClient.Database(other).CreateCollection(ctx, "c"))
+	_, err := o.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "k", Value: 1}}, Options: options.Index().SetName("c_k")})
+	require.NoError(t, err)
+	_, err = o.InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "k", Value: int32(1)}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "k", Value: int32(2)}},
+	})
+	require.NoError(t, err)
+	_, err = o.UpdateOne(ctx, bson.M{"_id": 1}, bson.D{{Key: "$set", Value: bson.D{{Key: "k", Value: int32(10)}}}})
+	require.NoError(t, err)
+
+	// база теста: insert, rename x → y, update и delete уже в y
+	x := srcClient.Database(db).Collection("x")
+	_, err = x.InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "v", Value: "a"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "v", Value: "b"}},
+		bson.D{{Key: "_id", Value: int32(3)}, {Key: "v", Value: "c"}},
+	})
+	require.NoError(t, err)
+	renameColl(ctx, t, db, "x", "y")
+	y := srcClient.Database(db).Collection("y")
+	_, err = y.UpdateOne(ctx, bson.M{"_id": 1}, bson.D{{Key: "$set", Value: bson.D{{Key: "v", Value: "a2"}}}})
+	require.NoError(t, err)
+	_, err = y.DeleteOne(ctx, bson.M{"_id": 3})
+	require.NoError(t, err)
+
+	// финальная запись: когда она на цели, события other уже пройдены
+	_, err = srcClient.Database(db).Collection("z").InsertOne(ctx, bson.D{{Key: "_id", Value: "final"}})
+	require.NoError(t, err)
+
+	rn.waitSame(db)
+	rn.waitQuiet()
+
+	colls, err := collNames(ctx, dstClient, db)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"y", "z"}, colls)
+	n, err := dstClient.Database(db).Collection("y").CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, n)
+	assert.False(t, dbExists(ctx, t, dstClient, other), "база %s попала на цель", other)
+	// 3 insert + update + delete + финальный insert; события other не считаются
+	assert.EqualValues(t, 6, rn.r.Applied())
+}
+
 func TestIntegrationUnsupportedDDL(t *testing.T) {
 	db := prepare(t)
 	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})

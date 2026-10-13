@@ -169,10 +169,10 @@ type Config struct {
 - Modify: `cmd/mongo-replicator/replicator/replicator_test.go`
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] вынести `streamPipeline(db)`; в `Run` выбрать `r.src.Watch` или `r.src.Database(db).Watch`; лог режима при старте
-- [ ] write unit tests `streamPipeline`: `""` → `$match` с `$nin` (сверка с bson), имя базы → пустой pipeline
-- [ ] write integration test `TestIntegrationSingleDB`: `cleanDB(t, db+"_other")`; сначала DML + `create` + `createIndexes` в `_other`, затем DML и rename `x → y` внутри базы теста, затем финальная запись в базу теста; `waitSame(db)`, `waitQuiet()`, и только потом `!dbExists(dst, db+"_other")` — события упорядочены, значит события `_other` пройдены
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти (прежние тесты режима всех баз не меняются)
+- [x] вынести `streamPipeline(db)`; в `Run` выбрать `r.src.Watch` или `r.src.Database(db).Watch`; лог режима при старте
+- [x] write unit tests `streamPipeline`: `""` → `$match` с `$nin` (сверка с bson), имя базы → пустой pipeline
+- [x] write integration test `TestIntegrationSingleDB`: `cleanDB(t, db+"_other")`; сначала DML + `create` + `createIndexes` в `_other`, затем DML и rename `x → y` внутри базы теста, затем финальная запись в базу теста; `waitSame(db)`, `waitQuiet()`, и только потом `!dbExists(dst, db+"_other")` — события упорядочены, значит события `_other` пройдены
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти (прежние тесты режима всех баз не меняются)
 
 ### Task 3: База в чекпойнте, `ErrDBMismatch`, `permanent` в main
 

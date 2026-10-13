@@ -216,3 +216,20 @@ func TestErrNoStartPoint(t *testing.T) {
 	require.ErrorIs(t, fmt.Errorf("run: %w", ErrNoStartPoint), ErrNoStartPoint)
 	assert.False(t, IsHistoryLost(ErrNoStartPoint))
 }
+
+func TestStreamPipeline(t *testing.T) {
+	t.Run("all dbs", func(t *testing.T) {
+		got, err := bson.Marshal(bson.D{{Key: "p", Value: streamPipeline("")}})
+		require.NoError(t, err)
+		want, err := bson.Marshal(bson.D{{Key: "p", Value: bson.A{
+			bson.D{{Key: "$match", Value: bson.D{{Key: "ns.db", Value: bson.D{
+				{Key: "$nin", Value: bson.A{"admin", "config", "local", "_replicator"}},
+			}}}}},
+		}}})
+		require.NoError(t, err)
+		assert.Equal(t, bson.Raw(want).String(), bson.Raw(got).String())
+	})
+	t.Run("single db", func(t *testing.T) {
+		assert.Empty(t, streamPipeline("urlshrinker"))
+	})
+}
