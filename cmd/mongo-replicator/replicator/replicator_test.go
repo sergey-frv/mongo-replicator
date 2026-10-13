@@ -2,10 +2,15 @@ package replicator
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -255,4 +260,32 @@ func TestCheckDB(t *testing.T) {
 			assert.Contains(t, err.Error(), fmt.Sprintf("задано %q", c.want))
 		})
 	}
+}
+
+// Прогресс пишется не чаще раза в 10 с; пока ничего не сохранено, лага нет и ping не нужен
+// (src == nil упал бы на ping).
+func TestLogProgressBeforeFirstSave(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Logger
+	log.Logger = zerolog.New(&buf)
+	defer func() { log.Logger = prev }()
+
+	r := New(nil, nil, Config{})
+	r.applied.Store(50)
+	r.logProgress(context.Background())
+	assert.Empty(t, buf.String(), "10 с ещё не прошло")
+
+	r.lastLog = time.Now().Add(-20 * time.Second)
+	r.logProgress(context.Background())
+	var rec map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &rec))
+	assert.InDelta(t, 50.0, rec["applied"], 0)
+	assert.InDelta(t, 2.5, rec["rate"], 0.1)
+	assert.NotContains(t, rec, "applied_at")
+	assert.NotContains(t, rec, "lag")
+	assert.NotContains(t, rec, "lag_sec")
+
+	buf.Reset()
+	r.logProgress(context.Background())
+	assert.Empty(t, buf.String(), "сразу после записи — тишина")
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	mongoopts "go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // fakePrompter отдаёт заданный ответ и записывает приглашения.
@@ -30,6 +31,19 @@ func (f *fakePrompter) ReadPassword(prompt string) (string, error) {
 	a := f.answers[0]
 	f.answers = f.answers[1:]
 	return a, nil
+}
+
+// clientOptions — разбор URI и поиск пароля одной стороны, как в prepareClients.
+func clientOptions(s side, p prompter) (*mongoopts.ClientOptions, bool, error) {
+	opts, err := parseURI(s)
+	if err != nil {
+		return nil, false, err
+	}
+	warn, err := resolvePassword(s, opts, p)
+	if err != nil {
+		return nil, false, err
+	}
+	return opts, warn, nil
 }
 
 func srcSide(uri string, fromFlag bool) side {
@@ -153,6 +167,10 @@ func TestClientOptionsURIErrors(t *testing.T) {
 	}{
 		{"SCRAM без пароля", "mongodb://repl@h1/?authMechanism=SCRAM-SHA-256",
 			[]string{"источник", "некорректный URI", "password required", "уберите authMechanism"}, nil},
+		{"PLAIN без пароля", "mongodb://repl@h1/?authSource=%24external&authMechanism=PLAIN",
+			[]string{"источник", "некорректный URI", "SRC_URI"}, []string{"уберите authMechanism"}},
+		{"неизвестный механизм", "mongodb://repl@h1/?authMechanism=BOGUS",
+			[]string{"источник", "некорректный URI", "BOGUS"}, []string{"уберите authMechanism", "SRC_URI"}},
 		{"кривой URI без пароля", "mongodb://h1/?replicaSet=rs8&connectTimeoutMS=abc",
 			[]string{"источник", "некорректный URI", "connectTimeoutMS"}, []string{"authMechanism"}},
 		{"кривой URI с паролем", "mongodb://repl:p%zzSecret@h1/",
@@ -186,6 +204,7 @@ func TestClientOptionsNoPasswordLeak(t *testing.T) {
 		{"из терминала", "mongodb://repl@h1/", &fakePrompter{terminal: true, answers: []string{pwd}}},
 		{"из URI", "mongodb://repl:" + pwd + "@h1/", &fakePrompter{terminal: true}},
 		{"кривой URI с паролем", "mongodb://repl:" + pwd + "%zz@h1/", &fakePrompter{terminal: true}},
+		{"неэкранированный / в пароле", "mongodb://repl:" + pwd + "/x@h1/", &fakePrompter{terminal: true}},
 		{"пароль в URI и неверный механизм", "mongodb://repl:" + pwd + "@h1/?authMechanism=BOGUS", &fakePrompter{terminal: true}},
 		{"ошибка чтения", "mongodb://repl@h1/", &fakePrompter{terminal: true, err: errors.New("read")}},
 	}
@@ -194,6 +213,7 @@ func TestClientOptionsNoPasswordLeak(t *testing.T) {
 			_, _, err := clientOptions(srcSide(c.uri, true), c.p)
 			if err != nil {
 				assert.NotContains(t, err.Error(), pwd)
+				assert.NotContains(t, err.Error(), pwd[:4], "и части пароля")
 			}
 			for _, pr := range c.p.prompts {
 				assert.NotContains(t, pr, pwd)
@@ -288,15 +308,44 @@ func TestPrepareClientsErrors(t *testing.T) {
 		require.Len(t, p.prompts, 1)
 		assert.Contains(t, p.prompts[0], "источник")
 	})
-	t.Run("ошибка цели", func(t *testing.T) {
+	t.Run("ошибка URI цели — до запроса пароля источника", func(t *testing.T) {
 		p := &fakePrompter{terminal: true, answers: []string{"src-pass"}}
 		w := &warnRecorder{p: p}
 		srcOpts, dstOpts, err := prepareClients(
-			srcSide("mongodb://repl@s1/", false),
+			srcSide("mongodb://repl:a@s1/", true),
 			dstSide("mongodb://h1/?connectTimeoutMS=abc", false), p, w.onWarn)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "цель")
 		assert.Nil(t, srcOpts)
 		assert.Nil(t, dstOpts)
+		assert.Empty(t, p.prompts)
+		assert.Empty(t, w.sides)
 	})
+	t.Run("ошибка пароля цели", func(t *testing.T) {
+		p := &fakePrompter{terminal: true, answers: []string{"src-pass", ""}}
+		w := &warnRecorder{p: p}
+		srcOpts, dstOpts, err := prepareClients(
+			srcSide("mongodb://repl@s1/", false),
+			dstSide("mongodb://repl@d1/", false), p, w.onWarn)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "цель")
+		assert.Nil(t, srcOpts)
+		assert.Nil(t, dstOpts)
+		assert.Len(t, p.prompts, 2)
+	})
+}
+
+func TestMayHavePassword(t *testing.T) {
+	assert.True(t, mayHavePassword("mongodb://repl:a/b@h1/"))
+	assert.True(t, mayHavePassword("mongodb://repl:a@h1/"))
+	assert.False(t, mayHavePassword("mongodb://repl@h1:27017/"))
+	assert.False(t, mayHavePassword("mongodb://h1:27017/?replicaSet=rs8"))
+	assert.False(t, mayHavePassword("h1:27017@x"), "без схемы")
+}
+
+func TestMechanism(t *testing.T) {
+	assert.Equal(t, "SCRAM-SHA-256", mechanism("mongodb://u@h/?authMechanism=scram-sha-256&authSource=admin"))
+	assert.Equal(t, "PLAIN", mechanism("mongodb://u@h/?authSource=$external&AUTHMECHANISM=PLAIN"))
+	assert.Equal(t, "", mechanism("mongodb://u@h/?authMechanismProperties=SERVICE_NAME:x"))
+	assert.Equal(t, "", mechanism("mongodb://u@h/"))
 }

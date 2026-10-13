@@ -32,7 +32,11 @@ type termPrompter struct{}
 
 func stdinFd() int { return int(os.Stdin.Fd()) } //nolint:gosec // дескриптор stdin помещается в int
 
-func (termPrompter) IsTerminal() bool { return term.IsTerminal(stdinFd()) }
+// IsTerminal требует терминал и на stderr: иначе приглашение уйдёт в лог
+// (запуск с 2>log), а процесс молча будет ждать ввода.
+func (termPrompter) IsTerminal() bool {
+	return term.IsTerminal(stdinFd()) && term.IsTerminal(int(os.Stderr.Fd())) //nolint:gosec // дескриптор stderr помещается в int
+}
 
 // ReadPassword выводит приглашение в stderr и читает строку без эха.
 // SIGINT/SIGTERM во время ввода по умолчанию убили бы процесс с выключенным
@@ -64,25 +68,29 @@ func (termPrompter) ReadPassword(prompt string) (string, error) {
 	return string(pwd), err
 }
 
-// clientOptions разбирает URI стороны и находит пароль: из URI или из терминала.
+// parseURI разбирает URI стороны; ошибка — без пароля в тексте.
+func parseURI(s side) (*mongoopts.ClientOptions, error) {
+	opts := mongoopts.Client().ApplyURI(s.uri)
+	if err := opts.Validate(); err != nil {
+		return nil, uriError(s, err)
+	}
+	return opts, nil
+}
+
+// resolvePassword находит пароль стороны: из URI или из терминала, и кладёт его в opts.
 // warn — пароль в URI, переданном флагом (вызывающий пишет WARN).
 // Пароль не попадает ни в приглашение, ни в текст ошибок.
-func clientOptions(s side, p prompter) (opts *mongoopts.ClientOptions, warn bool, err error) {
-	opts = mongoopts.Client().ApplyURI(s.uri)
-	if err = opts.Validate(); err != nil {
-		return nil, false, uriError(s, err)
-	}
-
+func resolvePassword(s side, opts *mongoopts.ClientOptions, p prompter) (warn bool, err error) {
 	auth := opts.Auth
 	if auth == nil || auth.Username == "" {
-		return opts, false, nil // без авторизации
+		return false, nil // без авторизации
 	}
 	if strings.EqualFold(auth.AuthMechanism, "MONGODB-X509") || strings.EqualFold(auth.AuthMechanism, "MONGODB-OIDC") {
-		return opts, false, nil // пароль не нужен
+		return false, nil // пароль не нужен
 	}
 	// пустой пароль в URI (user:@host) считаем незаданным
 	if auth.PasswordSet && auth.Password != "" {
-		return opts, s.fromFlag, nil
+		return s.fromFlag, nil
 	}
 
 	who := auth.Username
@@ -90,59 +98,89 @@ func clientOptions(s side, p prompter) (opts *mongoopts.ClientOptions, warn bool
 		who += "@" + opts.Hosts[0]
 	}
 	if !p.IsTerminal() {
-		return nil, false, fmt.Errorf("нет пароля для %s (%s) и нет терминала: "+
+		return false, fmt.Errorf("нет пароля для %s (%s) и нет терминала: "+
 			"запустите в терминале или передайте URI с паролем через окружение %s", who, s.name, s.envName)
 	}
 	pwd, err := p.ReadPassword(fmt.Sprintf("Пароль %s (%s): ", who, s.name))
 	switch {
 	case errors.Is(err, io.EOF):
-		return nil, false, fmt.Errorf("ввод пароля прерван (%s)", s.name)
+		return false, fmt.Errorf("ввод пароля прерван (%s)", s.name)
 	case err != nil:
-		return nil, false, fmt.Errorf("чтение пароля для %s (%s): %w", who, s.name, err)
+		return false, fmt.Errorf("чтение пароля для %s (%s): %w", who, s.name, err)
 	case pwd == "":
-		return nil, false, fmt.Errorf("пустой пароль для %s (%s)", who, s.name)
+		return false, fmt.Errorf("пустой пароль для %s (%s)", who, s.name)
 	}
 	auth.Password, auth.PasswordSet = pwd, true
-	return opts, false, nil
+	return false, nil
 }
 
-// prepareClients готовит обе стороны по очереди: источник, затем цель.
+// prepareClients разбирает оба URI, затем находит пароли по очереди: источник, цель.
+// Ошибка любого URI (в т.ч. DNS для mongodb+srv) — до первого запроса пароля.
 // onWarn вызывается сразу для стороны, чей пароль взят из URI, переданного флагом.
-// Ошибки clientOptions уже содержат имя стороны.
+// Ошибки уже содержат имя стороны.
 func prepareClients(src, dst side, p prompter, onWarn func(side string)) (srcOpts, dstOpts *mongoopts.ClientOptions, _ error) {
-	prepare := func(s side) (*mongoopts.ClientOptions, error) {
-		opts, warn, err := clientOptions(s, p)
+	srcOpts, err := parseURI(src)
+	if err != nil {
+		return nil, nil, err
+	}
+	if dstOpts, err = parseURI(dst); err != nil {
+		return nil, nil, err
+	}
+	for _, c := range []struct {
+		s    side
+		opts *mongoopts.ClientOptions
+	}{{src, srcOpts}, {dst, dstOpts}} {
+		warn, err := resolvePassword(c.s, c.opts, p)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if warn {
-			onWarn(s.name)
+			onWarn(c.s.name)
 		}
-		return opts, nil
-	}
-	srcOpts, err := prepare(src)
-	if err != nil {
-		return nil, nil, err
-	}
-	dstOpts, err = prepare(dst)
-	if err != nil {
-		return nil, nil, err
 	}
 	return srcOpts, dstOpts, nil
 }
 
-// uriError — ошибка разбора URI. Если в URI есть пароль, текст драйвера не
+// uriError — ошибка разбора URI. Если в URI может быть пароль, текст драйвера не
 // выводим: он может цитировать часть пароля (invalid URL escape "%zz").
 func uriError(s side, err error) error {
 	masked := maskURI(s.uri)
-	if masked != s.uri {
+	switch {
+	case masked != s.uri:
 		return fmt.Errorf("%s: некорректный URI %s", s.name, masked)
+	case mayHavePassword(s.uri):
+		// неэкранированный "/" в пароле: maskURI пароль не находит, URI не выводим вовсе
+		return fmt.Errorf("%s: некорректный URI (не выводится: в нём может быть пароль); "+
+			"символы / : @ в пароле экранируйте: %%2F %%3A %%40", s.name)
 	}
-	if strings.Contains(strings.ToLower(s.uri), "authmechanism=") {
+	switch mechanism(s.uri) {
+	case "SCRAM-SHA-1", "SCRAM-SHA-256":
 		return fmt.Errorf("%s: некорректный URI %s: %w; уберите authMechanism из URI: "+
 			"механизм по умолчанию сам выберет SCRAM, пароль будет запрошен", s.name, masked, err)
+	case "PLAIN", "MONGODB-AWS":
+		return fmt.Errorf("%s: некорректный URI %s: %w; для этого authMechanism пароль не запрашивается: "+
+			"передайте URI с паролем через окружение %s", s.name, masked, err, s.envName)
 	}
 	return fmt.Errorf("%s: некорректный URI %s: %w", s.name, masked, err)
+}
+
+// mayHavePassword — грубая проверка для некорректного URI: есть ":" до последнего "@".
+// Ложное срабатывание ("@" в параметрах) лишь прячет текст ошибки.
+func mayHavePassword(uri string) bool {
+	_, rest, ok := strings.Cut(uri, "://")
+	at := strings.LastIndex(rest, "@")
+	return ok && at >= 0 && strings.Contains(rest[:at], ":")
+}
+
+// mechanism — значение authMechanism из URI в верхнем регистре, "" — не задан.
+func mechanism(uri string) string {
+	const key = "authmechanism="
+	i := strings.Index(strings.ToLower(uri), key)
+	if i < 0 {
+		return ""
+	}
+	v, _, _ := strings.Cut(uri[i+len(key):], "&")
+	return strings.ToUpper(v)
 }
 
 // flagGiven сообщает, передана ли длинная опция в командной строке: "--name" или "--name=...".

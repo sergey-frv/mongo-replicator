@@ -1093,6 +1093,7 @@ func TestIntegrationDBMismatch(t *testing.T) {
 	_, err = runErr(t, Config{BatchSize: 1000})
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrDBMismatch, "чекпойнт без db принят не за режим всех баз")
+	assert.ErrorContains(t, err, "открытие change stream", "чекпойнт прочитан, сервер отверг токен-заглушку")
 }
 
 // Токен не разобран: clusterTime чекпойнта — время последнего события.
@@ -1114,10 +1115,10 @@ func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
 
 	// рестарт: событий ещё нет, lastTS пуст — позиция берётся из чекпойнта
 	// и пустой getMore с неразобранным токеном её не обнуляет
+	// Run берёт позицию из чекпойнта до открытия потока; сам поток с токеном-заглушкой не откроется
 	r2 := New(srcClient, dstClient, Config{BatchSize: 1000, DB: db})
-	ck, err := r2.loadCheckpoint(ctx)
-	require.NoError(t, err)
-	r2.appliedTS = ck.appliedAt()
+	require.ErrorContains(t, r2.Run(ctx), "открытие change stream")
+	require.Equal(t, r.lastTS, r2.appliedTS)
 	token2, err := bson.Marshal(bson.M{"_data": "yy"})
 	require.NoError(t, err)
 	require.NoError(t, r2.saveToken(ctx, token2))
