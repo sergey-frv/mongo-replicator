@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/rs/zerolog"
+	zlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -649,7 +651,7 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 	lastSrcSec = srcOpTime(t).T
 	startTS := srcNow(t)
 	// drop gone ожидаемый: разрешён в обоих прогонах
-	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, ApplyDrops: []string{"gone"}})
+	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, ApplyDrops: []string{db + ".gone"}})
 
 	src := srcClient.Database(db)
 	require.NoError(t, src.CreateCollection(ctx, "c")) // повтор: 48
@@ -681,7 +683,7 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 
 	// сброс чекпойнта: поток перечитывается с того же StartTS поверх готовой цели
 	require.NoError(t, dstClient.Database(ckptDB).Collection(ckptColl).Drop(ctx))
-	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, ApplyDrops: []string{"gone"}})
+	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, ApplyDrops: []string{db + ".gone"}})
 
 	// цель уже совпадает, поэтому сначала ждём, что повтор действительно прошёл:
 	// insert X, delete X, insert Y, update Y (update X пропущен)
@@ -1199,12 +1201,22 @@ func TestIntegrationDropDatabaseStops(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a", "b"}, colls, "коллекции на цели целы")
 
+	// разрешение только a: при любом порядке остановка на b, b на цели цела
+	_, err = runErr(t, Config{BatchSize: 1000, DB: db, DstDB: dstDB, ApplyDrops: []string{db + ".a"}})
+	require.ErrorAs(t, err, &de)
+	assert.False(t, de.Database)
+	assert.Equal(t, db+".b", de.NS)
+	n, err := dstClient.Database(dstDB).Collection("b").CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, n, "неразрешённая коллекция на цели цела")
+
 	// с разрешением обеих: обе удалены на цели, остановка на dropDatabase
-	r, err = runErr(t, Config{BatchSize: 1000, DB: db, DstDB: dstDB, ApplyDrops: []string{"a", "b"}})
+	// (a могла быть удалена прошлым запуском — тогда её разрешение не используется)
+	r, err = runErr(t, Config{BatchSize: 1000, DB: db, DstDB: dstDB, ApplyDrops: []string{db + ".a", db + ".b"}})
 	require.ErrorAs(t, err, &de)
 	assert.True(t, de.Database)
 	assert.Equal(t, db, de.NS)
-	assert.Empty(t, r.applyDrops, "разрешения использованы")
+	assert.NotContains(t, r.applyDrops, db+".b", "разрешение b использовано")
 	colls, err = collNames(ctx, dstClient, dstDB)
 	require.NoError(t, err)
 	assert.Empty(t, colls)
@@ -1273,6 +1285,12 @@ func TestIntegrationDropAbsentOnTarget(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, src.CreateView(ctx, "v", "c", mongo.Pipeline{}))
 	require.NoError(t, src.Collection("v").Drop(ctx))
+	// time-series приходит как create с viewOn: на цели не создаётся, его drop — тоже пропуск
+	require.NoError(t, src.CreateCollection(ctx, "ts", options.CreateCollection().
+		SetTimeSeriesOptions(options.TimeSeries().SetTimeField("t"))))
+	_, err = src.Collection("ts").InsertOne(ctx, bson.D{{Key: "t", Value: time.Now()}})
+	require.NoError(t, err)
+	require.NoError(t, src.Collection("ts").Drop(ctx))
 	_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 	require.NoError(t, err)
 
@@ -1348,7 +1366,8 @@ func TestIntegrationApplyDrop(t *testing.T) {
 	_, err = keep.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 	require.NoError(t, err)
 
-	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, DstDB: dstDB, ApplyDrops: []string{"c"}})
+	logs := captureLog(t)
+	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, DstDB: dstDB, ApplyDrops: []string{db + ".c"}})
 	rn.waitSameDBs(db, dstDB)
 	rn.waitQuiet()
 
@@ -1359,6 +1378,7 @@ func TestIntegrationApplyDrop(t *testing.T) {
 	rn.waitQuiet()
 	rn.stop()
 	assert.Empty(t, rn.r.applyDrops, "разрешение использовано")
+	assert.Contains(t, logs.String(), "drop применён по --apply-drop")
 	assert.False(t, dbExists(ctx, t, dstClient, db), "база источника %s появилась на цели", db)
 
 	require.NoError(t, c.Drop(ctx))
@@ -1372,6 +1392,16 @@ func TestIntegrationApplyDrop(t *testing.T) {
 	n, err := dstClient.Database(dstDB).Collection("c").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, n, "пересозданная коллекция на цели цела")
+}
+
+// captureLog пишет лог пакета в буфер до конца теста; читать буфер — после остановки репликатора.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := zlog.Logger
+	zlog.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { zlog.Logger = prev })
+	return &buf
 }
 
 // insertAt вставляет документ на источнике и возвращает operationTime записи.

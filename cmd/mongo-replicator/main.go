@@ -2,7 +2,7 @@
 //
 // Требования:
 //   - источник: replica set, MongoDB 6.0+ (нужен showExpandedEvents для DDL);
-//   - цель: на неё пишет только репликатор;
+//   - цель: в базу --dst-db (и в _replicator) пишет только репликатор;
 //   - на цели уже восстановлен полный дамп источника, а --start-ts указывает
 //     на момент ДО начала этого дампа и ещё попадает в окно oplog источника.
 package main
@@ -148,16 +148,8 @@ func checkApplyDrops(db string, nss []string) ([]string, error) {
 	return out, nil
 }
 
-// dropColls — коллекции из --apply-drop без имени базы (проверено в parseOpts).
-func dropColls(opts options) []string {
-	colls := make([]string, 0, len(opts.ApplyDrops))
-	for _, ns := range opts.ApplyDrops {
-		colls = append(colls, strings.TrimPrefix(ns, opts.DB+"."))
-	}
-	return colls
-}
-
 // checkDBName проверяет имя базы по ограничениям MongoDB и запрещает служебные базы.
+// Служебные сравниваются без учёта регистра: Admin на цели сервер всё равно не создаст (13297).
 func checkDBName(opt, name string) error {
 	if strings.ContainsAny(name, "/\\. \"$\x00") {
 		return fmt.Errorf("%s %q: имя базы не может содержать /\\. \"$ и NUL", opt, name)
@@ -165,7 +157,7 @@ func checkDBName(opt, name string) error {
 	if len(name) > maxDBNameLen {
 		return fmt.Errorf("%s %q: имя базы длиннее %d байт", opt, name, maxDBNameLen)
 	}
-	if slices.Contains(replicator.SystemDBs, name) {
+	if slices.ContainsFunc(replicator.SystemDBs, func(s string) bool { return strings.EqualFold(s, name) }) {
 		return fmt.Errorf("%s %q: служебная база не реплицируется", opt, name)
 	}
 	return nil
@@ -197,7 +189,7 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 
 	r := replicator.New(src, dst, replicator.Config{
 		StartTS: opts.StartTS, BatchSize: opts.BatchSize, DB: opts.DB, DstDB: opts.DstDB,
-		ApplyDrops: dropColls(opts),
+		ApplyDrops: opts.ApplyDrops,
 	})
 	for ctx.Err() == nil {
 		err := r.Run(ctx)
@@ -243,8 +235,10 @@ func hint(err error) string {
 	case errors.Is(err, replicator.ErrForeignNamespace):
 		return "в потоке событие другой базы — сообщите о баге"
 	case errors.Is(err, replicator.ErrStreamInvalidated):
-		return "база удалена на источнике (dropDatabase), поток закрыт: " +
-			"удалите чекпойнт на цели и запустите заново с --start-ts"
+		return "поток закрыт сервером; на цели данные остались — нужна новая полная заливка: " +
+			"удалите чекпойнт, залейте базу, запустите с --start-ts"
+	case replicator.IsDBCaseConflict(err):
+		return "на цели есть база с тем же именем в другом регистре — проверьте --dst-db"
 	}
 	return ""
 }

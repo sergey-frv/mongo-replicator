@@ -194,6 +194,14 @@ func TestIsHistoryLost(t *testing.T) {
 	}
 }
 
+func TestIsDBCaseConflict(t *testing.T) {
+	bulk := mongo.BulkWriteException{WriteErrors: []mongo.BulkWriteError{{WriteError: mongo.WriteError{Code: codeDatabaseDifferCase}}}}
+	assert.True(t, IsDBCaseConflict(fmt.Errorf("bulk write: %w", bulk)))
+	assert.True(t, IsDBCaseConflict(mongo.CommandError{Code: codeDatabaseDifferCase}))
+	assert.False(t, IsDBCaseConflict(mongo.CommandError{Code: codeNamespaceExists}))
+	assert.False(t, IsDBCaseConflict(errors.New("boom")))
+}
+
 func TestHasCode(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -235,7 +243,7 @@ func TestNewDstDB(t *testing.T) {
 
 func TestNewApplyDrops(t *testing.T) {
 	assert.Empty(t, New(nil, nil, Config{DB: "a"}).applyDrops)
-	assert.Equal(t, map[string]bool{"x": true, "y.z": true}, New(nil, nil, Config{DB: "a", ApplyDrops: []string{"x", "y.z"}}).applyDrops)
+	assert.Equal(t, map[string]bool{"a.x": true, "a.y.z": true}, New(nil, nil, Config{DB: "a", ApplyDrops: []string{"a.x", "a.y.z"}}).applyDrops)
 }
 
 func TestIsTempColl(t *testing.T) {

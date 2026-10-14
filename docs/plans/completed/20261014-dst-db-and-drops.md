@@ -89,7 +89,7 @@ type Config struct {
     BatchSize  int
     DB         string   // база источника
     DstDB      string   // база цели; New: пусто → = DB
-    ApplyDrops []string // коллекции источника (без имени базы), drop которых разрешён
+    ApplyDrops []string // namespace источника (<DB>.<коллекция>), drop которых разрешён
 }
 ```
 - `New` подставляет `DstDB = DB`, если пусто → литералы `Config{DB: db}` в тестах остаются корректными

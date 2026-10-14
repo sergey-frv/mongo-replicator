@@ -47,7 +47,7 @@ type Config struct {
 	BatchSize  int      // максимум операций в одной пачке записи
 	DB         string   // база источника
 	DstDB      string   // база цели; New: пусто — как DB
-	ApplyDrops []string // коллекции источника (без имени базы), drop которых разрешён
+	ApplyDrops []string // namespace источника (<DB>.<коллекция>), drop которых разрешён
 }
 
 // Replicator переносит изменения из src в dst.
@@ -78,8 +78,8 @@ func New(src, dst *mongo.Client, cfg Config) *Replicator {
 		cfg.DstDB = cfg.DB
 	}
 	applyDrops := make(map[string]bool, len(cfg.ApplyDrops))
-	for _, coll := range cfg.ApplyDrops {
-		applyDrops[coll] = true
+	for _, ns := range cfg.ApplyDrops {
+		applyDrops[ns] = true
 	}
 	return &Replicator{src: src, dst: dst, cfg: cfg, applyDrops: applyDrops, lastLog: time.Now()}
 }
@@ -237,8 +237,8 @@ func (r *Replicator) Run(ctx context.Context) error {
 					return err
 				}
 				// разрешение одноразовое: после чекпойнта повтор этого drop уже не придёт
-				if ev.OperationType == "drop" && r.applyDrops[ev.NS.Coll] {
-					delete(r.applyDrops, ev.NS.Coll)
+				if ev.OperationType == "drop" {
+					delete(r.applyDrops, ev.NS.String())
 				}
 			}
 		} else {

@@ -17,6 +17,7 @@ const (
 	codeNamespaceNotFound       = 26
 	codeIndexNotFound           = 27
 	codeNamespaceExists         = 48
+	codeDatabaseDifferCase      = 13297
 	codeChangeStreamFatal       = 280
 	codeChangeStreamHistoryLost = 286
 )
@@ -25,6 +26,12 @@ const (
 // продолжать поток нельзя, нужна новая полная заливка цели.
 func IsHistoryLost(err error) bool {
 	return hasCode(err, codeChangeStreamHistoryLost, codeChangeStreamFatal)
+}
+
+// IsDBCaseConflict сообщает, что на цели уже есть база с тем же именем в другом регистре:
+// сервер отвергает любую запись в --dst-db, ретраи не помогут.
+func IsDBCaseConflict(err error) bool {
+	return hasCode(err, codeDatabaseDifferCase)
 }
 
 // DropError — на источнике удалена коллекция или база, на цели удаление не применено:
@@ -56,7 +63,7 @@ func isTempColl(name string) bool {
 // dropAllowed решает, применять ли drop коллекции: временная или разрешённая --apply-drop —
 // да; коллекции нет на цели (view, time-series) — нет, терять нечего; иначе — *DropError.
 func (r *Replicator) dropAllowed(ctx context.Context, db *mongo.Database, ev *event) (bool, error) {
-	if isTempColl(ev.NS.Coll) || r.applyDrops[ev.NS.Coll] {
+	if isTempColl(ev.NS.Coll) || r.applyDrops[ev.NS.String()] {
 		return true, nil
 	}
 	names, err := db.ListCollectionNames(ctx, bson.M{"name": ev.NS.Coll})
@@ -156,7 +163,7 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 	if r.cfg.DstDB != r.cfg.DB {
 		l = l.Str("dst", r.dstNS(ev.NS).String())
 	}
-	if ev.OperationType == "drop" && r.applyDrops[ev.NS.Coll] {
+	if ev.OperationType == "drop" && r.applyDrops[ev.NS.String()] {
 		l.Msg("drop применён по --apply-drop")
 		return nil
 	}

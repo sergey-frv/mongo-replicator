@@ -234,11 +234,6 @@ func TestParseOptsApplyDropErrors(t *testing.T) {
 	}
 }
 
-func TestDropColls(t *testing.T) {
-	assert.Empty(t, dropColls(options{DB: "db"}))
-	assert.Equal(t, []string{"a", "a.b", "db"}, dropColls(options{DB: "db", ApplyDrops: []string{"db.a", "db.a.b", "db.db"}}))
-}
-
 func TestParseOptsErrors(t *testing.T) {
 	cases := []struct {
 		name string
@@ -291,6 +286,8 @@ func TestParseOptsDBName(t *testing.T) {
 		{"config", "config", "служебная база"},
 		{"local", "local", "служебная база"},
 		{"_replicator", "_replicator", "служебная база"},
+		{"Admin", "Admin", "служебная база"},
+		{"LOCAL", "LOCAL", "служебная база"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -335,7 +332,8 @@ func TestPermanent(t *testing.T) {
 		{"нет точки старта", fmt.Errorf("run: %w", replicator.ErrNoStartPoint), "--start-ts"},
 		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), "--dst-db"},
 		{"событие другой базы", fmt.Errorf("run: %w", replicator.ErrForeignNamespace), "сообщите о баге"},
-		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), "dropDatabase"},
+		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), "новая полная заливка"},
+		{"база в другом регистре", fmt.Errorf("bulk write: %w", mongo.CommandError{Code: 13297}), "--dst-db"},
 		{"drop коллекции", fmt.Errorf("run: %w", &replicator.DropError{NS: "db.c"}), "--apply-drop db.c"},
 		{"dropDatabase", fmt.Errorf("run: %w", &replicator.DropError{NS: "db", Database: true}), "новая полная заливка"},
 		{"обычная ошибка", errors.New("boom"), ""},
