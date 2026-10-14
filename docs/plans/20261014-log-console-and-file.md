@@ -155,12 +155,12 @@ func setupLog(opts options) (*os.File, error)
 - [x] README: переписать абзац «Логи — JSON в stdout…» под новые опции; алерты по `lag_sec` — по файлу; DEBUG о неудачном ping — только при `--log-level debug` или `--log-file-level debug`; описание полей прогресса и DDL не менять
 
 ### Task 4: Verify acceptance criteria
-- [ ] в терминале — читаемый текст, при перенаправлении stdout — JSON; с `--log-file` файл пишется JSON-ом на дозапись
-- [ ] уровни консоли и файла независимы; неверные и пустые значения → exit 2
-- [ ] `--dbg` нигде не упоминается (`grep` по репозиторию, кроме `docs/plans/`)
-- [ ] run full test suite: `make test`
-- [ ] run integration tests: `make test-integration`
-- [ ] `make lint` без замечаний
+- [x] в терминале — читаемый текст, при перенаправлении stdout — JSON; с `--log-file` файл пишется JSON-ом на дозапись
+- [x] уровни консоли и файла независимы; неверные и пустые значения → exit 2
+- [x] `--dbg` нигде не упоминается (`grep` по репозиторию, кроме `docs/plans/`; остались только тесты `main_test.go`, проверяющие, что `--dbg` отвергается)
+- [x] run full test suite: `make test`
+- [x] run integration tests: `make test-integration`
+- [x] `make lint` без замечаний
 
 ### Task 5: [Final] Update documentation
 - [ ] создать CLAUDE.md, только если появились неочевидные договорённости
