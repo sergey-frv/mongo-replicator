@@ -26,8 +26,8 @@ import (
 // ErrNoStartPoint — на цели нет чекпойнта и StartTS не задан: неизвестно, откуда читать поток.
 var ErrNoStartPoint = errors.New("чекпойнта нет и start-ts не задан: неизвестно, откуда читать")
 
-// ErrDBMismatch — чекпойнт на цели записан для другой базы, чем задана: продолжать с него значило бы тихо разойтись с источником.
-var ErrDBMismatch = errors.New("чекпойнт записан для другой базы")
+// ErrDBMismatch — чекпойнт на цели записан для другой пары баз, чем задана: продолжать с него значило бы тихо разойтись с источником.
+var ErrDBMismatch = errors.New("чекпойнт записан для другой пары баз")
 
 // ErrStreamInvalidated — поток закрыт сервером событием invalidate (dropDatabase
 // отслеживаемой базы): продолжить его нельзя, токен invalidate не сохраняется.
@@ -118,10 +118,14 @@ func checkNS(cfg Config, ev *event) error {
 	return nil
 }
 
-// checkDB сверяет базу чекпойнта с заданной.
-func checkDB(saved, want string) error {
+// dbPair — база источника и база цели.
+type dbPair struct{ src, dst string }
+
+// checkDBs сверяет пару баз чекпойнта с заданной.
+func checkDBs(saved, want dbPair) error {
 	if saved != want {
-		return fmt.Errorf("%w: в чекпойнте %q, задано %q", ErrDBMismatch, saved, want)
+		return fmt.Errorf("%w: в чекпойнте %q → %q, задано %q → %q",
+			ErrDBMismatch, saved.src, saved.dst, want.src, want.dst)
 	}
 	return nil
 }
@@ -147,7 +151,7 @@ func (r *Replicator) Run(ctx context.Context) error {
 	case err != nil:
 		return fmt.Errorf("чтение чекпойнта: %w", err)
 	case ck.Token != nil:
-		if dbErr := checkDB(ck.DB, r.cfg.DB); dbErr != nil {
+		if dbErr := checkDBs(ck.dbs(), dbPair{src: r.cfg.DB, dst: r.cfg.DstDB}); dbErr != nil {
 			return dbErr
 		}
 		opts.SetResumeAfter(ck.Token)

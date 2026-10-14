@@ -266,22 +266,22 @@ func TestCheckNS(t *testing.T) {
 	}
 }
 
-func TestCheckDB(t *testing.T) {
-	for _, c := range []struct{ name, saved, want string }{
-		{"та же база", "urlshrinker", "urlshrinker"},
+func TestCheckDBs(t *testing.T) {
+	want := dbPair{src: "urlshrinker", dst: "urlshrinker_v2"}
+	assert.NoError(t, checkDBs(want, want))
+
+	for _, c := range []struct {
+		name  string
+		saved dbPair
+	}{
+		{"другая база источника", dbPair{src: "a", dst: "urlshrinker_v2"}},
+		{"другая база цели", dbPair{src: "urlshrinker", dst: "urlshrinker"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			assert.NoError(t, checkDB(c.saved, c.want))
-		})
-	}
-	for _, c := range []struct{ name, saved, want string }{
-		{"другая база", "a", "b"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			err := checkDB(c.saved, c.want)
+			err := checkDBs(c.saved, want)
 			require.ErrorIs(t, err, ErrDBMismatch)
-			assert.Contains(t, err.Error(), fmt.Sprintf("в чекпойнте %q", c.saved))
-			assert.Contains(t, err.Error(), fmt.Sprintf("задано %q", c.want))
+			assert.Contains(t, err.Error(), fmt.Sprintf("в чекпойнте %q → %q", c.saved.src, c.saved.dst))
+			assert.Contains(t, err.Error(), fmt.Sprintf("задано %q → %q", want.src, want.dst))
 		})
 	}
 }

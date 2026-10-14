@@ -274,14 +274,14 @@ func (rn *runner) ckptToken() bson.Raw {
 	return ck.Token
 }
 
-// ckptDB — база, для которой записан чекпойнт.
-func (rn *runner) ckptDB() string {
+// ckptDB — пара баз, для которой записан чекпойнт.
+func (rn *runner) ckptDB() dbPair {
 	rn.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	ck, err := rn.r.loadCheckpoint(ctx)
 	require.NoError(rn.t, err)
-	return ck.DB
+	return ck.dbs()
 }
 
 // ckptTime — clusterTime чекпойнта: время применённой позиции.
@@ -1056,6 +1056,7 @@ func TestIntegrationDstDB(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 3, n, "0, 1 из a и 10; документ старой b удалён dropTarget")
 	assert.False(t, dbExists(ctx, t, dstClient, db), "база источника %s появилась на цели", db)
+	assert.Equal(t, dbPair{src: db, dst: dstDB}, rn.ckptDB())
 }
 
 // Режим одной базы: чекпойнт помнит базу, рестарт продолжает с токена.
@@ -1074,7 +1075,7 @@ func TestIntegrationSingleDBResume(t *testing.T) {
 	rn.waitSame(db)
 	rn.waitQuiet()
 	rn.stop()
-	assert.Equal(t, db, rn.ckptDB())
+	assert.Equal(t, dbPair{src: db, dst: db}, rn.ckptDB())
 
 	const n = 2
 	for i := 3; i < 3+n; i++ {
@@ -1087,26 +1088,53 @@ func TestIntegrationSingleDBResume(t *testing.T) {
 	rn2.waitSame(db)
 	rn2.waitQuiet()
 	assert.EqualValues(t, n, rn2.r.Applied())
-	assert.Equal(t, db, rn2.ckptDB())
+	assert.Equal(t, dbPair{src: db, dst: db}, rn2.ckptDB())
 }
 
-// Чекпойнт другой базы: Run отказывается стартовать.
+// writeCkpt записывает на цель чекпойнт с токеном-заглушкой для пары баз.
+func writeCkpt(t *testing.T, pair dbPair) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	_, err := dstClient.Database(ckptDB).Collection(ckptColl).ReplaceOne(ctx,
+		bson.M{"_id": ckptID},
+		bson.M{"_id": ckptID, "token": bson.M{"_data": "00"}, "db": pair.src, "dst_db": pair.dst},
+		options.Replace().SetUpsert(true))
+	require.NoError(t, err)
+}
+
+// Чекпойнт другой базы источника: Run отказывается стартовать.
 // Токен произвольный: проверка идёт до открытия потока.
 func TestIntegrationDBMismatch(t *testing.T) {
 	prepare(t)
-	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
-	defer cancel()
+	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a"})
 
-	_, err := dstClient.Database(ckptDB).Collection(ckptColl).ReplaceOne(ctx,
-		bson.M{"_id": ckptID},
-		bson.M{"_id": ckptID, "token": bson.M{"_data": "00"}, "db": "it_mismatch_a"},
-		options.Replace().SetUpsert(true))
-	require.NoError(t, err)
+	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_b"})
+	require.ErrorIs(t, err, ErrDBMismatch)
 
-	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_b"})
+	// та же база источника, но цель по умолчанию — другая
+	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a", DstDB: "it_mismatch_b"})
 	require.ErrorIs(t, err, ErrDBMismatch)
 
 	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrDBMismatch)
+	assert.ErrorContains(t, err, "открытие change stream", "чекпойнт прочитан, сервер отверг токен-заглушку")
+}
+
+// Чекпойнт той же базы источника, но другой базы цели: Run отказывается стартовать.
+func TestIntegrationDstDBMismatch(t *testing.T) {
+	prepare(t)
+	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a2"})
+
+	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a", DstDB: "it_mismatch_a3"})
+	require.ErrorIs(t, err, ErrDBMismatch)
+	assert.ErrorContains(t, err, `"it_mismatch_a" → "it_mismatch_a2"`)
+
+	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
+	require.ErrorIs(t, err, ErrDBMismatch, "без --dst-db цель — база источника")
+
+	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a", DstDB: "it_mismatch_a2"})
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrDBMismatch)
 	assert.ErrorContains(t, err, "открытие change stream", "чекпойнт прочитан, сервер отверг токен-заглушку")
@@ -1127,7 +1155,7 @@ func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
 	assert.Equal(t, r.lastTS, r.appliedTS)
 	rn := &runner{t: t, r: r}
 	assert.Equal(t, r.lastTS, rn.ckptTime())
-	assert.Equal(t, db, rn.ckptDB())
+	assert.Equal(t, dbPair{src: db, dst: db}, rn.ckptDB())
 
 	// рестарт: событий ещё нет, lastTS пуст — позиция берётся из чекпойнта
 	// и пустой getMore с неразобранным токеном её не обнуляет

@@ -188,11 +188,11 @@ type Config struct {
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 - Modify: `cmd/mongo-replicator/main.go`
 
-- [ ] поле `dst_db` в чекпойнте (`saveToken` пишет `cfg.DstDB`); `checkDB` → `checkDBs(saved, want dbPair)`; подсказка `ErrDBMismatch` про пару опций
-- [ ] `ckptDB()` в тестах возвращает пару; обновить `SingleDBResume`, `SaveTokenUnparsedTime`
-- [ ] write unit tests `checkDBs`: совпадение; другая база источника; другая база цели; текст содержит обе пары
-- [ ] update `TestIntegrationDBMismatch` под пару; write `TestIntegrationDstDBMismatch`: чекпойнт `a → a2` записан напрямую, `runErr(Config{DB: a, DstDB: a3})` → `ErrDBMismatch`
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] поле `dst_db` в чекпойнте (`saveToken` пишет `cfg.DstDB`); `checkDB` → `checkDBs(saved, want dbPair)`; подсказка `ErrDBMismatch` про пару опций
+- [x] `ckptDB()` в тестах возвращает пару; обновить `SingleDBResume`, `SaveTokenUnparsedTime`
+- [x] write unit tests `checkDBs`: совпадение; другая база источника; другая база цели; текст содержит обе пары
+- [x] update `TestIntegrationDBMismatch` под пару; write `TestIntegrationDstDBMismatch`: чекпойнт `a → a2` записан напрямую, `runErr(Config{DB: a, DstDB: a3})` → `ErrDBMismatch`
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
 
 ### Task 4: Удаления: остановка, исключения, `--apply-drop`
 

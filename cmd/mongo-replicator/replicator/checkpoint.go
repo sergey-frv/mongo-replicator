@@ -31,9 +31,13 @@ func (r *Replicator) ckpt() *mongo.Collection {
 // checkpoint — сохранённая позиция; пустой Token — чекпойнта нет.
 type checkpoint struct {
 	Token       bson.Raw       `bson:"token"`
-	DB          string         `bson:"db"` // база источника, для которой записан токен
+	DB          string         `bson:"db"`     // база источника, для которой записан токен
+	DstDB       string         `bson:"dst_db"` // база цели, в которую применялись события
 	ClusterTime bson.Timestamp `bson:"clusterTime"`
 }
+
+// dbs — пара баз, для которой записан чекпойнт.
+func (c checkpoint) dbs() dbPair { return dbPair{src: c.DB, dst: c.DstDB} }
 
 func (r *Replicator) loadCheckpoint(ctx context.Context) (checkpoint, error) {
 	var c checkpoint
@@ -75,6 +79,7 @@ func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
 			"clusterTime": ts,
 			"updatedAt":   time.Now().UTC(),
 			"db":          r.cfg.DB,
+			"dst_db":      r.cfg.DstDB,
 		},
 		options.Replace().SetUpsert(true))
 	if err == nil {

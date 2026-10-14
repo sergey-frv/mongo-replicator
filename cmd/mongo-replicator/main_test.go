@@ -279,7 +279,7 @@ func TestPermanent(t *testing.T) {
 	}{
 		{"history lost", fmt.Errorf("run: %w", mongo.CommandError{Code: 286}), "выпала из oplog"},
 		{"нет точки старта", fmt.Errorf("run: %w", replicator.ErrNoStartPoint), "--start-ts"},
-		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), "другой базы"},
+		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), "--dst-db"},
 		{"событие другой базы", fmt.Errorf("run: %w", replicator.ErrForeignNamespace), "сообщите о баге"},
 		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), "dropDatabase"},
 		{"обычная ошибка", errors.New("boom"), ""},
