@@ -38,6 +38,8 @@ type options struct {
 	Debug     bool   `long:"dbg" env:"DEBUG" description:"Debug mode"`
 	DB        string `long:"db" env:"DB" required:"true" description:"база источника: поток уровня базы, права на источнике — только на неё. Rename коллекций внутри базы поддерживается, перенос коллекций между базами не предусмотрен"`
 	DstDB     string `long:"dst-db" env:"DST_DB" description:"база на цели; по умолчанию — как --db"`
+	// флаг заменяет APPLY_DROP, а не дополняет: go-flags сбрасывает значение из env при первом флаге
+	ApplyDrops []string `long:"apply-drop" env:"APPLY_DROP" env-delim:"," description:"разрешить drop коллекции источника <db>.<коллекция> (одноразово; можно повторять; флаг заменяет APPLY_DROP, а не дополняет)"`
 }
 
 var revision = "unknown"
@@ -63,6 +65,10 @@ func main() {
 	setupLog(opts.Debug)
 
 	log.Info().Str("revision", revision).Send()
+	if len(opts.ApplyDrops) > 0 {
+		log.Warn().Strs("apply_drop", opts.ApplyDrops).
+			Msgf("разрешены drop: %s (уберите из APPLY_DROP после применения)", strings.Join(opts.ApplyDrops, ", "))
+	}
 	masked := opts
 	masked.Src, masked.Dst = logURI(opts.Src), logURI(opts.Dst)
 	log.Debug().Any("options", masked).Send()
@@ -113,7 +119,42 @@ func parseOpts(args []string) (options, error) {
 	if err := checkDBName("--dst-db", opts.DstDB); err != nil {
 		return opts, err
 	}
+	drops, err := checkApplyDrops(opts.DB, opts.ApplyDrops)
+	if err != nil {
+		return opts, err
+	}
+	opts.ApplyDrops = drops
 	return opts, nil
+}
+
+// checkApplyDrops чистит список --apply-drop (пробелы вокруг, пустые элементы — APPLY_DROP=)
+// и проверяет, что каждый элемент — <db>.<коллекция> базы источника.
+func checkApplyDrops(db string, nss []string) ([]string, error) {
+	var out []string
+	for _, ns := range nss {
+		ns = strings.TrimSpace(ns)
+		if ns == "" {
+			continue
+		}
+		nsDB, coll, ok := strings.Cut(ns, ".")
+		if !ok || coll == "" {
+			return nil, fmt.Errorf("--apply-drop %q: ожидается <база>.<коллекция>", ns)
+		}
+		if nsDB != db {
+			return nil, fmt.Errorf("--apply-drop %q: база не совпадает с --db %q", ns, db)
+		}
+		out = append(out, ns)
+	}
+	return out, nil
+}
+
+// dropColls — коллекции из --apply-drop без имени базы (проверено в parseOpts).
+func dropColls(opts options) []string {
+	colls := make([]string, 0, len(opts.ApplyDrops))
+	for _, ns := range opts.ApplyDrops {
+		colls = append(colls, strings.TrimPrefix(ns, opts.DB+"."))
+	}
+	return colls
 }
 
 // checkDBName проверяет имя базы по ограничениям MongoDB и запрещает служебные базы.
@@ -156,6 +197,7 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 
 	r := replicator.New(src, dst, replicator.Config{
 		StartTS: opts.StartTS, BatchSize: opts.BatchSize, DB: opts.DB, DstDB: opts.DstDB,
+		ApplyDrops: dropColls(opts),
 	})
 	for ctx.Err() == nil {
 		err := r.Run(ctx)
@@ -182,7 +224,14 @@ func permanent(err error) bool { return hint(err) != "" }
 
 // hint — подсказка оператору по перманентной ошибке; "" — ошибка временная.
 func hint(err error) string {
+	var dropErr *replicator.DropError
 	switch {
+	case errors.As(err, &dropErr) && dropErr.Database:
+		return "база удалена на источнике; на цели данные остались — нужна новая полная заливка: " +
+			"удалите чекпойнт, залейте базу, запустите с --start-ts"
+	case errors.As(err, &dropErr):
+		return fmt.Sprintf("на источнике удалена коллекция %s (вручную, перенос в другую базу или dropDatabase); "+
+			"если удаление ожидаемое — перезапустите с --apply-drop %s", dropErr.NS, dropErr.NS)
 	case replicator.IsHistoryLost(err):
 		return "точка возобновления выпала из oplog источника — нужна новая полная заливка цели"
 	case errors.Is(err, replicator.ErrNoStartPoint):

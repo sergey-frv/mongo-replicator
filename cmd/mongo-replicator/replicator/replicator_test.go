@@ -233,6 +233,40 @@ func TestNewDstDB(t *testing.T) {
 	assert.Equal(t, "b", New(nil, nil, Config{DB: "a", DstDB: "b"}).cfg.DstDB)
 }
 
+func TestNewApplyDrops(t *testing.T) {
+	assert.Empty(t, New(nil, nil, Config{DB: "a"}).applyDrops)
+	assert.Equal(t, map[string]bool{"x": true, "y.z": true}, New(nil, nil, Config{DB: "a", ApplyDrops: []string{"x", "y.z"}}).applyDrops)
+}
+
+func TestIsTempColl(t *testing.T) {
+	for name, want := range map[string]bool{
+		"tmp.agg_out.0f1e2d3c":       true,
+		"tmp.mr.x":                   true,
+		"tmpAb12C.renameCollection":  true,
+		"tmpAb12C.convertToCapped.c": true,
+		"tmp.backup":                 false,
+		"tmp":                        false,
+		"tmpAb12C.other":             false,
+		"tmpAb12.renameCollection":   false,
+		"tmpAb12C.renameCollectionX": false,
+		"tmpAb12C.convertToCapped":   false,
+		"xtmpAb12C.renameCollection": false,
+		"tmp.agg_out":                false,
+		"orders":                     false,
+	} {
+		assert.Equal(t, want, isTempColl(name), name)
+	}
+}
+
+func TestDropError(t *testing.T) {
+	err := fmt.Errorf("run: %w", &DropError{NS: "db.c"})
+	var de *DropError
+	require.ErrorAs(t, err, &de)
+	assert.False(t, de.Database)
+	assert.Contains(t, err.Error(), "коллекция db.c")
+	assert.Contains(t, (&DropError{NS: "db", Database: true}).Error(), "база db")
+}
+
 func TestNSName(t *testing.T) {
 	ns := namespace{DB: "a", Coll: "c"}
 	assert.Equal(t, "a.c", New(nil, nil, Config{DB: "a"}).nsName(ns))

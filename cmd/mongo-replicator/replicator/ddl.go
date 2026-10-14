@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -25,6 +27,50 @@ func IsHistoryLost(err error) bool {
 	return hasCode(err, codeChangeStreamHistoryLost, codeChangeStreamFatal)
 }
 
+// DropError — на источнике удалена коллекция или база, на цели удаление не применено:
+// такие операции не предусмотрены, решает оператор.
+type DropError struct {
+	NS       string // namespace коллекции источника; для dropDatabase — имя базы
+	Database bool   // dropDatabase
+}
+
+func (e *DropError) Error() string {
+	if e.Database {
+		return fmt.Sprintf("на источнике удалена база %s, на цели не применено", e.NS)
+	}
+	return fmt.Sprintf("на источнике удалена коллекция %s, на цели не применено", e.NS)
+}
+
+// tempCollRe — временные коллекции renameCollection между базами и convertToCapped.
+var tempCollRe = regexp.MustCompile(`^tmp[A-Za-z0-9]{5}\.(renameCollection$|convertToCapped\.)`)
+
+// isTempColl сообщает, что коллекция — временная коллекция самой MongoDB: её drop
+// (например, после неудачного $out) применяется без разрешения. Не префикс "tmp"
+// целиком: tmp.backup — пользовательская.
+func isTempColl(name string) bool {
+	return strings.HasPrefix(name, "tmp.agg_out.") ||
+		strings.HasPrefix(name, "tmp.mr.") || // legacy, на 8.0 не используется
+		tempCollRe.MatchString(name)
+}
+
+// dropAllowed решает, применять ли drop коллекции: временная или разрешённая --apply-drop —
+// да; коллекции нет на цели (view, time-series) — нет, терять нечего; иначе — *DropError.
+func (r *Replicator) dropAllowed(ctx context.Context, db *mongo.Database, ev *event) (bool, error) {
+	if isTempColl(ev.NS.Coll) || r.applyDrops[ev.NS.Coll] {
+		return true, nil
+	}
+	names, err := db.ListCollectionNames(ctx, bson.M{"name": ev.NS.Coll})
+	if err != nil {
+		return false, fmt.Errorf("drop %s: проверка коллекции на цели: %w", r.nsName(ev.NS), err)
+	}
+	if len(names) == 0 {
+		log.Warn().Str("ns", ev.NS.String()).
+			Msgf("drop %s: на цели такой коллекции нет (view/time-series или уже удалена)", r.nsName(ev.NS))
+		return false, nil
+	}
+	return false, &DropError{NS: ev.NS.String()}
+}
+
 // applyDDL переносит изменения схемы. Ошибки «уже есть» / «уже нет»
 // игнорируются: они означают повторное применение после рестарта.
 func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
@@ -33,10 +79,15 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 
 	switch ev.OperationType {
 	case "drop":
+		apply, allowErr := r.dropAllowed(ctx, db, ev)
+		if !apply || allowErr != nil {
+			return allowErr
+		}
 		err = db.Collection(ev.NS.Coll).Drop(ctx)
 
 	case "dropDatabase":
-		err = db.Drop(ctx)
+		// не разрешается никогда: на цели остаются данные, нужна новая заливка
+		return &DropError{NS: ev.NS.DB, Database: true}
 
 	case "rename":
 		if ev.To == nil {
@@ -104,6 +155,10 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 	}
 	if r.cfg.DstDB != r.cfg.DB {
 		l = l.Str("dst", r.dstNS(ev.NS).String())
+	}
+	if ev.OperationType == "drop" && r.applyDrops[ev.NS.Coll] {
+		l.Msg("drop применён по --apply-drop")
+		return nil
 	}
 	l.Msg("DDL применён")
 	return nil

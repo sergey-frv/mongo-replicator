@@ -648,7 +648,8 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 	}
 	lastSrcSec = srcOpTime(t).T
 	startTS := srcNow(t)
-	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
+	// drop gone ожидаемый: разрешён в обоих прогонах
+	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, ApplyDrops: []string{"gone"}})
 
 	src := srcClient.Database(db)
 	require.NoError(t, src.CreateCollection(ctx, "c")) // повтор: 48
@@ -680,7 +681,7 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 
 	// сброс чекпойнта: поток перечитывается с того же StartTS поверх готовой цели
 	require.NoError(t, dstClient.Database(ckptDB).Collection(ckptColl).Drop(ctx))
-	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
+	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, ApplyDrops: []string{"gone"}})
 
 	// цель уже совпадает, поэтому сначала ждём, что повтор действительно прошёл:
 	// insert X, delete X, insert Y, update Y (update X пропущен)
@@ -928,11 +929,6 @@ func TestIntegrationDDL(t *testing.T) {
 	_, err = b.DeleteOne(ctx, bson.M{"_id": 2})
 	require.NoError(t, err)
 
-	// неявный create + drop
-	_, err = src.Collection("tmp").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
-	require.NoError(t, err)
-	require.NoError(t, src.Collection("tmp").Drop(ctx))
-
 	rn.waitSame(db)
 
 	colls, err := dstClient.Database(db).ListCollectionNames(ctx, bson.D{})
@@ -943,6 +939,9 @@ func TestIntegrationDDL(t *testing.T) {
 	n, err := dstClient.Database(db).Collection("b").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
 	assert.EqualValues(t, 4, n, "0, 1, 3 из a и 10; документы старой b удалены dropTarget")
+	// rename поверх существующей b — одно событие rename с dropTarget, а не drop: остановки нет
+	done, err := rn.exited()
+	assert.False(t, done, "Run вернулся: %v", err)
 }
 
 // Поток уровня базы: события других баз (DML и DDL) на цель не попадают,
@@ -1170,36 +1169,209 @@ func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
 	assert.Equal(t, r.lastTS, (&runner{t: t, r: r2}).ckptTime())
 }
 
-// dropDatabase отслеживаемой базы: поток закрывается invalidate, Run возвращает
-// ErrStreamInvalidated, применив всё до него; рестарт с чекпойнта — то же самое.
-func TestIntegrationDropDatabaseInvalidates(t *testing.T) {
+// dropDatabase на источнике: drop коллекций идут перед ним, поэтому без разрешений
+// репликатор останавливается на первом drop; с разрешением всех — на самом dropDatabase,
+// который не разрешается никогда.
+func TestIntegrationDropDatabaseStops(t *testing.T) {
+	db := prepare(t)
+	dstDB := db + "_v2"
+	cleanDB(t, dstDB)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	startTS := srcNow(t)
+	for _, coll := range []string{"a", "b"} {
+		for i := range 2 {
+			_, err := srcClient.Database(db).Collection(coll).InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
+			require.NoError(t, err)
+		}
+	}
+	require.NoError(t, srcClient.Database(db).Drop(ctx))
+
+	// порядок drop коллекций при dropDatabase произвольный
+	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, DstDB: dstDB})
+	var de *DropError
+	require.ErrorAs(t, err, &de)
+	assert.False(t, de.Database)
+	assert.Contains(t, []string{db + ".a", db + ".b"}, de.NS)
+	assert.EqualValues(t, 4, r.Applied())
+	colls, err := collNames(ctx, dstClient, dstDB)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, colls, "коллекции на цели целы")
+
+	// с разрешением обеих: обе удалены на цели, остановка на dropDatabase
+	r, err = runErr(t, Config{BatchSize: 1000, DB: db, DstDB: dstDB, ApplyDrops: []string{"a", "b"}})
+	require.ErrorAs(t, err, &de)
+	assert.True(t, de.Database)
+	assert.Equal(t, db, de.NS)
+	assert.Empty(t, r.applyDrops, "разрешения использованы")
+	colls, err = collNames(ctx, dstClient, dstDB)
+	require.NoError(t, err)
+	assert.Empty(t, colls)
+	assert.False(t, dbExists(ctx, t, dstClient, db), "база источника %s появилась на цели", db)
+
+	// чекпойнт стоит перед dropDatabase: рестарт останавливается на нём же
+	_, err = runErr(t, Config{BatchSize: 1000, DB: db, DstDB: dstDB})
+	require.ErrorAs(t, err, &de)
+	assert.True(t, de.Database)
+}
+
+// drop коллекции, которая есть на цели, останавливает репликатор: всё до drop на цели,
+// сама коллекция на цели цела, рестарт с чекпойнта останавливается на том же drop.
+func TestIntegrationDropStops(t *testing.T) {
 	db := prepare(t)
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
 
-	// база на цели заранее: иначе проверка её удаления ничего не доказывает
-	_, err := dstClient.Database(db).Collection("pre").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
-	require.NoError(t, err)
-
 	startTS := srcNow(t)
-	items := srcClient.Database(db).Collection("items")
+	src := srcClient.Database(db)
+	keep, gone := src.Collection("keep"), src.Collection("gone")
 	for i := range 2 {
-		_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
+		_, err := keep.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
 		require.NoError(t, err)
 	}
-	require.NoError(t, srcClient.Database(db).Drop(ctx))
+	for i := range 3 {
+		_, err := gone.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
+		require.NoError(t, err)
+	}
+	require.NoError(t, gone.Drop(ctx))
+	_, err := keep.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(10)}}) // после drop: не применяется
+	require.NoError(t, err)
 
 	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
-	require.ErrorIs(t, err, ErrStreamInvalidated)
-	assert.EqualValues(t, 2, r.Applied())
-	assert.False(t, dbExists(ctx, t, dstClient, db), "база %s не удалена на цели", db)
+	var de *DropError
+	require.ErrorAs(t, err, &de)
+	assert.Equal(t, db+".gone", de.NS)
+	assert.False(t, de.Database)
+	assert.EqualValues(t, 5, r.Applied())
 
-	// чекпойнт стоит на dropDatabase, а не на invalidate: сервер снова отдаёт
-	// invalidate, а не отвергает токен (260)
+	count := func(coll string) int64 {
+		n, countErr := dstClient.Database(db).Collection(coll).CountDocuments(ctx, bson.D{})
+		require.NoError(t, countErr)
+		return n
+	}
+	assert.EqualValues(t, 3, count("gone"), "коллекция на цели цела")
+	assert.EqualValues(t, 2, count("keep"), "запись после drop не применена")
+
 	r, err = runErr(t, Config{BatchSize: 1000, DB: db})
-	require.ErrorIs(t, err, ErrStreamInvalidated)
-	assert.False(t, hasCode(err, 260), "%v", err)
+	require.ErrorAs(t, err, &de)
+	assert.Equal(t, db+".gone", de.NS)
 	assert.EqualValues(t, 0, r.Applied())
+}
+
+// drop коллекции, которой нет на цели (view не переносится), — WARN, репликация идёт дальше.
+func TestIntegrationDropAbsentOnTarget(t *testing.T) {
+	db := prepare(t)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	src := srcClient.Database(db)
+	c := src.Collection("c")
+
+	_, err := c.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	require.NoError(t, src.CreateView(ctx, "v", "c", mongo.Pipeline{}))
+	require.NoError(t, src.Collection("v").Drop(ctx))
+	_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
+	require.NoError(t, err)
+
+	rn.waitSame(db)
+	rn.waitQuiet()
+	assert.EqualValues(t, 2, rn.r.Applied())
+}
+
+// $out идёт через временную коллекцию tmp.agg_out.*: удачный — rename поверх цели,
+// неудачный — drop временной коллекции. Ни то, ни другое не останавливает репликатор.
+func TestIntegrationFailedOut(t *testing.T) {
+	db := prepare(t)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	src := srcClient.Database(db)
+	c, out := src.Collection("c"), src.Collection("out")
+
+	_, err := c.InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: int32(1)}, {Key: "k", Value: "a"}},
+		bson.D{{Key: "_id", Value: int32(2)}, {Key: "k", Value: "b"}},
+	})
+	require.NoError(t, err)
+	_, err = out.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{{Key: "k", Value: 1}}, Options: options.Index().SetName("out_k_u").SetUnique(true),
+	})
+	require.NoError(t, err)
+
+	// удачный $out: индексы out переносятся на временную коллекцию
+	cur, err := c.Aggregate(ctx, mongo.Pipeline{{{Key: "$out", Value: "out"}}})
+	require.NoError(t, err)
+	require.NoError(t, cur.Close(ctx))
+	rn.waitSame(db)
+
+	// дубликат k: unique-индекс временной коллекции не примет $out
+	_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}, {Key: "k", Value: "a"}})
+	require.NoError(t, err)
+	_, err = c.Aggregate(ctx, mongo.Pipeline{{{Key: "$out", Value: "out"}}})
+	require.Error(t, err)
+	require.True(t, mongo.IsDuplicateKeyError(err), "%v", err)
+
+	_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(4)}, {Key: "k", Value: "d"}})
+	require.NoError(t, err)
+
+	rn.waitSame(db)
+	rn.waitQuiet()
+	tmp, err := dstClient.Database(db).ListCollectionNames(ctx, bson.M{"name": bson.M{"$regex": `^tmp\.agg_out\.`}})
+	require.NoError(t, err)
+	assert.Empty(t, tmp, "временная коллекция $out осталась на цели")
+	n, err := dstClient.Database(db).Collection("out").CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, n)
+}
+
+// --apply-drop: разрешённый drop применяется в базе цели один раз; повторный drop
+// пересозданной коллекции в том же процессе (Run того же репликатора) — снова остановка.
+func TestIntegrationApplyDrop(t *testing.T) {
+	db := prepare(t)
+	dstDB := db + "_v2"
+	cleanDB(t, dstDB)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	src := srcClient.Database(db)
+	c, keep := src.Collection("c"), src.Collection("keep")
+	startTS := srcNow(t)
+	_, err := c.InsertMany(ctx, []any{bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "_id", Value: int32(2)}}})
+	require.NoError(t, err)
+	_, err = keep.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	require.NoError(t, c.Drop(ctx))
+	_, err = keep.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
+	require.NoError(t, err)
+
+	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, DstDB: dstDB, ApplyDrops: []string{"c"}})
+	rn.waitSameDBs(db, dstDB)
+	rn.waitQuiet()
+
+	// пересоздание: create и insert применяются
+	_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(3)}})
+	require.NoError(t, err)
+	rn.waitSameDBs(db, dstDB)
+	rn.waitQuiet()
+	rn.stop()
+	assert.Empty(t, rn.r.applyDrops, "разрешение использовано")
+	assert.False(t, dbExists(ctx, t, dstClient, db), "база источника %s появилась на цели", db)
+
+	require.NoError(t, c.Drop(ctx))
+	runCtx, runCancel := context.WithTimeout(ctx, waitTimeout)
+	defer runCancel()
+	err = rn.r.Run(runCtx)
+	require.NoError(t, runCtx.Err(), "Run должен остановиться на drop до таймаута")
+	var de *DropError
+	require.ErrorAs(t, err, &de)
+	assert.Equal(t, db+".c", de.NS)
+	n, err := dstClient.Database(dstDB).Collection("c").CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, n, "пересозданная коллекция на цели цела")
 }
 
 // insertAt вставляет документ на источнике и возвращает operationTime записи.
@@ -1241,10 +1413,10 @@ func TestIntegrationLagPosition(t *testing.T) {
 	assert.Equal(t, n, rn.r.Applied(), "событие другой базы применено")
 }
 
-// Rename между базами в режиме одной базы не предусмотрен; тест фиксирует, во что
-// он фактически превращается на 8.0: внутрь — копия через временную коллекцию
-// (create, createIndexes, insert, rename), наружу — drop.
-func TestIntegrationSingleDBCrossDBRename(t *testing.T) {
+// Rename между базами в режиме одной базы не предусмотрен; тесты фиксируют, во что
+// он фактически превращается на 8.0. Внутрь — копия через временную коллекцию
+// (create, createIndexes, insert, rename с dropTarget): репликация идёт дальше.
+func TestIntegrationCrossDBRenameIn(t *testing.T) {
 	db := prepare(t)
 	other := db + "_other"
 	cleanDB(t, other)
@@ -1253,7 +1425,7 @@ func TestIntegrationSingleDBCrossDBRename(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*waitTimeout)
 	defer cancel()
 
-	// внутрь: other.y с документами и индексом → db.in
+	// в свободное имя: other.y с документами и индексом → db.in
 	y := srcClient.Database(other).Collection("y")
 	_, err := y.InsertMany(ctx, []any{
 		bson.D{{Key: "_id", Value: int32(1)}, {Key: "k", Value: "a"}},
@@ -1265,31 +1437,61 @@ func TestIntegrationSingleDBCrossDBRename(t *testing.T) {
 	require.NoError(t, err)
 	renameNS(ctx, t, other+".y", db+".in")
 
-	// наружу: db.out → other.z
-	_, err = srcClient.Database(db).Collection("out").InsertMany(ctx, []any{
+	// поверх существующей: other.w → db.exist
+	_, err = srcClient.Database(db).Collection("exist").InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: int32(100)}, {Key: "old", Value: true}},
+		bson.D{{Key: "_id", Value: int32(101)}, {Key: "old", Value: true}},
+	})
+	require.NoError(t, err)
+	_, err = srcClient.Database(other).Collection("w").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	renameNS(ctx, t, other+".w", db+".exist")
+
+	// финальная запись: когда она на цели, все события выше пройдены
+	_, err = srcClient.Database(db).Collection("final").InsertOne(ctx, bson.D{{Key: "_id", Value: "final"}})
+	require.NoError(t, err)
+
+	rn.waitSame(db) // in и exist совпадают с источником по документам и индексам
+	rn.waitQuiet()
+
+	colls, err := collNames(ctx, dstClient, db)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"exist", "final", "in"}, colls, "временных коллекций нет")
+	assert.Equal(t, []string{"_id_", "y_k"}, indexNames(ctx, t, dstClient, db, "in"))
+	n, err := dstClient.Database(db).Collection("in").CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, n)
+	n, err = dstClient.Database(db).Collection("exist").CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, n, "старые документы exist удалены dropTarget")
+	assert.False(t, dbExists(ctx, t, dstClient, other), "база %s попала на цель", other)
+}
+
+// Перенос коллекции из базы наружу в потоке базы виден только как drop: остановка.
+func TestIntegrationCrossDBRenameOut(t *testing.T) {
+	db := prepare(t)
+	other := db + "_other"
+	cleanDB(t, other)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	startTS := srcNow(t)
+	_, err := srcClient.Database(db).Collection("out").InsertMany(ctx, []any{
 		bson.D{{Key: "_id", Value: int32(1)}},
 		bson.D{{Key: "_id", Value: int32(2)}},
 	})
 	require.NoError(t, err)
 	renameNS(ctx, t, db+".out", other+".z")
 
-	// финальная запись: когда она на цели, все события выше пройдены
-	_, err = srcClient.Database(db).Collection("final").InsertOne(ctx, bson.D{{Key: "_id", Value: "final"}})
+	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
+	var de *DropError
+	require.ErrorAs(t, err, &de)
+	assert.Equal(t, db+".out", de.NS)
+	assert.EqualValues(t, 2, r.Applied())
+	n, err := dstClient.Database(db).Collection("out").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
-
-	rn.waitSame(db) // in совпадает с источником по документам и индексам
-	rn.waitQuiet()
-
-	colls, err := collNames(ctx, dstClient, db)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"final", "in"}, colls, "out удалена на цели, временной коллекции нет")
-	assert.Equal(t, []string{"_id_", "y_k"}, indexNames(ctx, t, dstClient, db, "in"))
-	n, err := dstClient.Database(db).Collection("in").CountDocuments(ctx, bson.D{})
-	require.NoError(t, err)
-	assert.EqualValues(t, 3, n)
+	assert.EqualValues(t, 2, n, "коллекция на цели цела")
 	assert.False(t, dbExists(ctx, t, dstClient, other), "база %s попала на цель", other)
-	done, err := rn.exited()
-	assert.False(t, done, "Run вернулся: %v", err)
 }
 
 func TestIntegrationUnsupportedDDL(t *testing.T) {

@@ -29,8 +29,9 @@ var ErrNoStartPoint = errors.New("чекпойнта нет и start-ts не з�
 // ErrDBMismatch — чекпойнт на цели записан для другой пары баз, чем задана: продолжать с него значило бы тихо разойтись с источником.
 var ErrDBMismatch = errors.New("чекпойнт записан для другой пары баз")
 
-// ErrStreamInvalidated — поток закрыт сервером событием invalidate (dropDatabase
-// отслеживаемой базы): продолжить его нельзя, токен invalidate не сохраняется.
+// ErrStreamInvalidated — поток закрыт сервером событием invalidate: продолжить его
+// нельзя, токен invalidate не сохраняется. В потоке базы invalidate идёт за dropDatabase,
+// на котором репликатор останавливается раньше (*DropError).
 var ErrStreamInvalidated = errors.New("поток инвалидирован (dropDatabase базы)")
 
 // ErrForeignNamespace — в потоке уровня базы событие другой базы: так не бывает,
@@ -42,16 +43,21 @@ var SystemDBs = []string{"admin", "config", "local", ckptDB}
 
 // Config — параметры репликации.
 type Config struct {
-	StartTS   uint32 // unix-сек, старт при отсутствии чекпойнта
-	BatchSize int    // максимум операций в одной пачке записи
-	DB        string // база источника
-	DstDB     string // база цели; New: пусто — как DB
+	StartTS    uint32   // unix-сек, старт при отсутствии чекпойнта
+	BatchSize  int      // максимум операций в одной пачке записи
+	DB         string   // база источника
+	DstDB      string   // база цели; New: пусто — как DB
+	ApplyDrops []string // коллекции источника (без имени базы), drop которых разрешён
 }
 
 // Replicator переносит изменения из src в dst.
 type Replicator struct {
 	src, dst *mongo.Client
 	cfg      Config
+
+	// разрешённые drop: коллекция вычёркивается после чекпойнта за её drop,
+	// и множество переживает перезапуски Run (повтор неудачного Run снова применит drop)
+	applyDrops map[string]bool
 
 	pending batch
 	saved   bson.Raw // последний записанный в чекпойнт токен
@@ -71,7 +77,11 @@ func New(src, dst *mongo.Client, cfg Config) *Replicator {
 	if cfg.DstDB == "" {
 		cfg.DstDB = cfg.DB
 	}
-	return &Replicator{src: src, dst: dst, cfg: cfg, lastLog: time.Now()}
+	applyDrops := make(map[string]bool, len(cfg.ApplyDrops))
+	for _, coll := range cfg.ApplyDrops {
+		applyDrops[coll] = true
+	}
+	return &Replicator{src: src, dst: dst, cfg: cfg, applyDrops: applyDrops, lastLog: time.Now()}
 }
 
 // Applied возвращает число применённых на цели DML-операций.
@@ -206,8 +216,9 @@ func (r *Replicator) Run(ctx context.Context) error {
 					}
 				}
 			case "invalidate":
-				// Всё до invalidate, включая применённый dropDatabase, уже на цели.
-				// Его токен не сохраняем: resumeAfter с ним сервер отвергает (260).
+				// В потоке базы invalidate идёт за dropDatabase, а на нём (и на drop
+				// коллекций перед ним) репликатор уже остановился: ветка — на случай иного
+				// источника invalidate. Его токен не сохраняем: resumeAfter с ним сервер отвергает (260).
 				if err := commit(); err != nil {
 					return err
 				}
@@ -224,6 +235,10 @@ func (r *Replicator) Run(ctx context.Context) error {
 				lastToken = ev.ID
 				if err := r.saveToken(ctx, lastToken); err != nil {
 					return err
+				}
+				// разрешение одноразовое: после чекпойнта повтор этого drop уже не придёт
+				if ev.OperationType == "drop" && r.applyDrops[ev.NS.Coll] {
+					delete(r.applyDrops, ev.NS.Coll)
 				}
 			}
 		} else {

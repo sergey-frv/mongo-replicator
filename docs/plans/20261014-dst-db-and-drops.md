@@ -204,20 +204,20 @@ type Config struct {
 - Modify: `cmd/mongo-replicator/replicator/replicator_test.go`
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] `*DropError`, `isTempColl`; ветки `drop`/`dropDatabase` в `applyDDL` по таблице «Удаления» (временная → применить; разрешённая → применить; нет на цели → WARN; иначе ошибка; `dropDatabase` → ошибка)
-- [ ] опция `ApplyDrops` (`APPLY_DROP`, trim, пустые выбрасываются, проверки формата и базы); WARN в `main` при непустом списке; `Config.ApplyDrops`; множество разрешённых в `Replicator`, вычёркивание после успешного `saveToken`
-- [ ] `permanent`/`hint` для `*DropError` (коллекция / база); обновить комментарий `invalidate` в `Run`
-- [ ] write unit tests `isTempColl`: `tmp.agg_out.x`, `tmp.mr.x`, `tmpAb12C.renameCollection`, `tmpAb12C.convertToCapped.c` → true; `tmp.backup`, `tmp`, `tmpAb12C.other`, `tmpAb12.renameCollection` → false
-- [ ] write unit tests `parseOpts`: `--apply-drop db.a --apply-drop db.b`; `APPLY_DROP=db.a,db.b`; `APPLY_DROP=` → пустой список, не ошибка; `APPLY_DROP="db.a, db.b"` → пробел срезан; флаг заменяет env; `other.a` при `--db db` → ошибка; `db.`, `db` → ошибка; `db.a.b` → коллекция `a.b`; `clearEnv` + `APPLY_DROP`
-- [ ] write unit tests `hint`/`permanent`: обёрнутые `*DropError` (коллекция и база), `ErrForeignNamespace`, `ErrStreamInvalidated` → permanent; подсказка коллекции содержит `--apply-drop <ns>`, базы — «новая полная заливка»
-- [ ] update интеграционных тестов: `TestIntegrationDDL` — убрать create+drop коллекции `"tmp"`, оставить rename поверх существующей (`dropTarget`) и добавить проверку, что `Run` не завершился; `TestIntegrationReplayIdempotent` — `ApplyDrops: ["gone"]` в обоих прогонах; `TestIntegrationSingleDBCrossDBRename` — разделить: перенос внутрь (в т.ч. поверх существующей) продолжает работу, перенос наружу → остановка; `TestIntegrationDropDatabaseInvalidates` — заменить на `TestIntegrationDropDatabaseStops`
-- [ ] write integration tests (все остановки — через `runErr` после операций на источнике; `DstDB: db+"_v2"` там, где проверяется цель):
+- [x] `*DropError`, `isTempColl`; ветки `drop`/`dropDatabase` в `applyDDL` по таблице «Удаления» (временная → применить; разрешённая → применить; нет на цели → WARN; иначе ошибка; `dropDatabase` → ошибка)
+- [x] опция `ApplyDrops` (`APPLY_DROP`, trim, пустые выбрасываются, проверки формата и базы); WARN в `main` при непустом списке; `Config.ApplyDrops`; множество разрешённых в `Replicator`, вычёркивание после успешного `saveToken`
+- [x] `permanent`/`hint` для `*DropError` (коллекция / база); обновить комментарий `invalidate` в `Run`
+- [x] write unit tests `isTempColl`: `tmp.agg_out.x`, `tmp.mr.x`, `tmpAb12C.renameCollection`, `tmpAb12C.convertToCapped.c` → true; `tmp.backup`, `tmp`, `tmpAb12C.other`, `tmpAb12.renameCollection` → false
+- [x] write unit tests `parseOpts`: `--apply-drop db.a --apply-drop db.b`; `APPLY_DROP=db.a,db.b`; `APPLY_DROP=` → пустой список, не ошибка; `APPLY_DROP="db.a, db.b"` → пробел срезан; флаг заменяет env; `other.a` при `--db db` → ошибка; `db.`, `db` → ошибка; `db.a.b` → коллекция `a.b`; `clearEnv` + `APPLY_DROP`
+- [x] write unit tests `hint`/`permanent`: обёрнутые `*DropError` (коллекция и база), `ErrForeignNamespace`, `ErrStreamInvalidated` → permanent; подсказка коллекции содержит `--apply-drop <ns>`, базы — «новая полная заливка»
+- [x] update интеграционных тестов: `TestIntegrationDDL` — убрать create+drop коллекции `"tmp"`, оставить rename поверх существующей (`dropTarget`) и добавить проверку, что `Run` не завершился; `TestIntegrationReplayIdempotent` — `ApplyDrops: ["gone"]` в обоих прогонах; `TestIntegrationSingleDBCrossDBRename` — разделить (`TestIntegrationCrossDBRenameIn` / `TestIntegrationCrossDBRenameOut`): перенос внутрь (в т.ч. поверх существующей) продолжает работу, перенос наружу → остановка; `TestIntegrationDropDatabaseInvalidates` — заменить на `TestIntegrationDropDatabaseStops`
+- [x] write integration tests (все остановки — через `runErr` после операций на источнике; `DstDB: db+"_v2"` там, где проверяется цель):
   - `TestIntegrationDropStops`: DML, затем `drop` коллекции → `*DropError`; коллекция на цели цела, всё до `drop` на цели; повторный `runErr` → снова `*DropError`
   - `TestIntegrationDropAbsentOnTarget`: view на источнике (не переносится) → `drop` view → репликация идёт дальше (последующий DML на цели)
-  - `TestIntegrationFailedOut`: unique-индекс на целевой коллекции `$out`, дубликаты → `$out` падает → репликация идёт дальше, `tmp.agg_out.*` на цели нет
+  - `TestIntegrationFailedOut` (плюс удачный `$out` перед неудачным): unique-индекс на целевой коллекции `$out`, дубликаты → `$out` падает → репликация идёт дальше, `tmp.agg_out.*` на цели нет
   - `TestIntegrationApplyDrop`: `ApplyDrops: [coll]`, `DstDB` отличается; `drop` → коллекция удалена в базе цели, последующий DML доезжает; пересоздание и повторный `drop` той же коллекции → `runErr` → `*DropError`; база с именем источника на цели не появилась
   - `TestIntegrationDropDatabaseStops`: две коллекции, `DstDB` отличается; без разрешений — остановка на первом `drop`, обе на цели целы; с разрешением обеих — обе удалены на цели, остановка на `dropDatabase` (`Database: true`)
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
 
 ### Task 5: README
 

@@ -93,7 +93,7 @@ func TestMaskOptions(t *testing.T) {
 // clearEnv убирает env опций: в контейнере app заданы SRC_URI/DST_URI.
 func clearEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DEBUG", "DB", "DST_DB"} {
+	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DEBUG", "DB", "DST_DB", "APPLY_DROP"} {
 		t.Setenv(k, "") // восстановит исходное значение после теста
 		require.NoError(t, os.Unsetenv(k))
 	}
@@ -187,6 +187,58 @@ func TestParseOptsDstDB(t *testing.T) {
 	}
 }
 
+func TestParseOptsApplyDrop(t *testing.T) {
+	base := []string{"--src", "s", "--dst", "d", "--db", "db"}
+	cases := []struct {
+		name  string
+		env   map[string]string
+		args  []string
+		drops []string
+	}{
+		{"не задана", nil, nil, nil},
+		{"флаги", nil, []string{"--apply-drop", "db.a", "--apply-drop", "db.b"}, []string{"db.a", "db.b"}},
+		{"APPLY_DROP", map[string]string{"APPLY_DROP": "db.a,db.b"}, nil, []string{"db.a", "db.b"}},
+		{"пустой APPLY_DROP", map[string]string{"APPLY_DROP": ""}, nil, nil},
+		{"пробелы и пустые элементы", map[string]string{"APPLY_DROP": "db.a, db.b,, "}, nil, []string{"db.a", "db.b"}},
+		{"флаг заменяет env", map[string]string{"APPLY_DROP": "db.a,db.b"}, []string{"--apply-drop", "db.c"}, []string{"db.c"}},
+		{"точка в имени коллекции", nil, []string{"--apply-drop", "db.a.b"}, []string{"db.a.b"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			clearEnv(t)
+			for k, v := range c.env {
+				t.Setenv(k, v)
+			}
+			opts, err := parseOpts(append(base, c.args...))
+			require.NoError(t, err)
+			assert.Equal(t, c.drops, opts.ApplyDrops)
+		})
+	}
+}
+
+func TestParseOptsApplyDropErrors(t *testing.T) {
+	cases := []struct{ name, ns, want string }{
+		{"другая база", "other.a", "база не совпадает с --db"},
+		{"без коллекции", "db.", "ожидается <база>.<коллекция>"},
+		{"без точки", "db", "ожидается <база>.<коллекция>"},
+		{"база цели", "db_v2.a", "база не совпадает с --db"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			clearEnv(t)
+			_, err := parseOpts([]string{"--src", "s", "--dst", "d", "--db", "db", "--dst-db", "db_v2", "--apply-drop", c.ns})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "--apply-drop")
+			assert.Contains(t, err.Error(), c.want)
+		})
+	}
+}
+
+func TestDropColls(t *testing.T) {
+	assert.Empty(t, dropColls(options{DB: "db"}))
+	assert.Equal(t, []string{"a", "a.b", "db"}, dropColls(options{DB: "db", ApplyDrops: []string{"db.a", "db.a.b", "db.db"}}))
+}
+
 func TestParseOptsErrors(t *testing.T) {
 	cases := []struct {
 		name string
@@ -268,6 +320,8 @@ func TestParseOptsHelp(t *testing.T) {
 	assert.Contains(t, err.Error(), "--db")
 	assert.Contains(t, err.Error(), "--dst-db")
 	assert.Contains(t, err.Error(), "DST_DB")
+	assert.Contains(t, err.Error(), "--apply-drop")
+	assert.Contains(t, err.Error(), "APPLY_DROP")
 	assert.NotContains(t, err.Error(), "--all-dbs")
 }
 
@@ -282,6 +336,8 @@ func TestPermanent(t *testing.T) {
 		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), "--dst-db"},
 		{"событие другой базы", fmt.Errorf("run: %w", replicator.ErrForeignNamespace), "сообщите о баге"},
 		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), "dropDatabase"},
+		{"drop коллекции", fmt.Errorf("run: %w", &replicator.DropError{NS: "db.c"}), "--apply-drop db.c"},
+		{"dropDatabase", fmt.Errorf("run: %w", &replicator.DropError{NS: "db", Database: true}), "новая полная заливка"},
 		{"обычная ошибка", errors.New("boom"), ""},
 		{"отмена", context.Canceled, ""},
 	}
