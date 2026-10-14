@@ -119,11 +119,11 @@ func setupLog(opts options) (*os.File, error)
 - Modify: `cmd/mongo-replicator/main.go`
 - Modify: `cmd/mongo-replicator/main_test.go`
 
-- [ ] удалить `Debug` (`--dbg`/`DEBUG`); добавить `LogLevel` (`--log-level`/`LOG_LEVEL`, `default:"info"`, `choice`), `LogFile` (`--log-file`/`LOG_FILE`), `LogFileLevel` (`--log-file-level`/`LOG_FILE_LEVEL`, `choice`, без default)
-- [ ] `parseOpts`: `--log-file-level` без `--log-file` → ошибка; `LogFileLevel` не задан → `info`
-- [ ] `main_test.go`: `clearEnv` — убрать `DEBUG`, добавить `LOG_LEVEL`, `LOG_FILE`, `LOG_FILE_LEVEL`; обновить ожидаемые `options` в существующих тестах `parseOpts`
-- [ ] write tests `parseOpts`: умолчания (`info`, без файла); значения из env; флаги перекрывают env; каждый допустимый уровень; `1`, `INFO`, `trace`, `verbose` → ошибка; `LOG_LEVEL=` и `LOG_FILE_LEVEL=` → ошибка; `LOG_FILE=` → файла нет; `--log-file-level debug` без `--log-file` → ошибка; `--dbg` → неизвестная опция
-- [ ] `make test` и `make lint` — должно пройти (временно `setupLog(opts.LogLevel == "debug")`, до Task 2)
+- [x] удалить `Debug` (`--dbg`/`DEBUG`); добавить `LogLevel` (`--log-level`/`LOG_LEVEL`, `default:"info"`, `choice`), `LogFile` (`--log-file`/`LOG_FILE`), `LogFileLevel` (`--log-file-level`/`LOG_FILE_LEVEL`, `choice`, без default)
+- [x] `parseOpts`: `--log-file-level` без `--log-file` → ошибка; `LogFileLevel` не задан → `info`
+- [x] `main_test.go`: `clearEnv` — убрать `DEBUG`, добавить `LOG_LEVEL`, `LOG_FILE`, `LOG_FILE_LEVEL`; обновить ожидаемые `options` в существующих тестах `parseOpts`
+- [x] write tests `parseOpts`: умолчания (`info`, без файла); значения из env; флаги перекрывают env; каждый допустимый уровень; `1`, `INFO`, `trace`, `verbose` → ошибка; `LOG_LEVEL=` и `LOG_FILE_LEVEL=` → ошибка; `LOG_FILE=` → файла нет; `--log-file-level debug` без `--log-file` → ошибка; `--dbg` → неизвестная опция
+- [x] `make test` и `make lint` — должно пройти (временно `setupLog(opts.LogLevel == "debug")`, до Task 2)
 
 ### Task 2: Сборка логгера: консоль и файл
 

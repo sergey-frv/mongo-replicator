@@ -93,7 +93,8 @@ func TestMaskOptions(t *testing.T) {
 // clearEnv убирает env опций: в контейнере app заданы SRC_URI/DST_URI.
 func clearEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DEBUG", "DB", "DST_DB", "APPLY_DROP"} {
+	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DB", "DST_DB", "APPLY_DROP",
+		"LOG_LEVEL", "LOG_FILE", "LOG_FILE_LEVEL"} {
 		t.Setenv(k, "") // восстановит исходное значение после теста
 		require.NoError(t, os.Unsetenv(k))
 	}
@@ -105,19 +106,23 @@ func TestParseOptsEnv(t *testing.T) {
 	t.Setenv("DST_URI", "mongodb://dst")
 	t.Setenv("START_TS", "1791900000")
 	t.Setenv("BATCH_SIZE", "50")
-	t.Setenv("DEBUG", "true")
 	t.Setenv("DB", "urlshrinker")
+	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("LOG_FILE", "/var/log/repl.log")
+	t.Setenv("LOG_FILE_LEVEL", "warn")
 
 	opts, err := parseOpts(nil)
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", StartTS: 1791900000, BatchSize: 50, Debug: true, DB: "urlshrinker", DstDB: "urlshrinker"}, opts)
+	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", StartTS: 1791900000, BatchSize: 50, DB: "urlshrinker", DstDB: "urlshrinker",
+		LogLevel: "debug", LogFile: "/var/log/repl.log", LogFileLevel: "warn"}, opts)
 }
 
 func TestParseOptsDefaults(t *testing.T) {
 	clearEnv(t)
 	opts, err := parseOpts([]string{"--src", "mongodb://src", "--dst", "mongodb://dst", "--db", "urlshrinker"})
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", BatchSize: 1000, DB: "urlshrinker", DstDB: "urlshrinker"}, opts)
+	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", BatchSize: 1000, DB: "urlshrinker", DstDB: "urlshrinker",
+		LogLevel: "info", LogFileLevel: "info"}, opts)
 }
 
 func TestParseOptsFlagsOverrideEnv(t *testing.T) {
@@ -127,10 +132,101 @@ func TestParseOptsFlagsOverrideEnv(t *testing.T) {
 	t.Setenv("START_TS", "1")
 	t.Setenv("BATCH_SIZE", "50")
 	t.Setenv("DB", "env")
+	t.Setenv("LOG_LEVEL", "warn")
+	t.Setenv("LOG_FILE", "env.log")
+	t.Setenv("LOG_FILE_LEVEL", "error")
 
-	opts, err := parseOpts([]string{"--src", "mongodb://src-flag", "--start-ts=2", "--batch", "7", "--db", "flag"})
+	opts, err := parseOpts([]string{"--src", "mongodb://src-flag", "--start-ts=2", "--batch", "7", "--db", "flag",
+		"--log-level", "debug", "--log-file", "flag.log", "--log-file-level", "info"})
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src-flag", Dst: "mongodb://dst-env", StartTS: 2, BatchSize: 7, DB: "flag", DstDB: "flag"}, opts)
+	assert.Equal(t, options{Src: "mongodb://src-flag", Dst: "mongodb://dst-env", StartTS: 2, BatchSize: 7, DB: "flag", DstDB: "flag",
+		LogLevel: "debug", LogFile: "flag.log", LogFileLevel: "info"}, opts)
+}
+
+func TestParseOptsLog(t *testing.T) {
+	base := []string{"--src", "s", "--dst", "d", "--db", "db"}
+	cases := []struct {
+		name                         string
+		env                          map[string]string
+		args                         []string
+		level, logFile, logFileLevel string
+	}{
+		{"не заданы", nil, nil, "info", "", "info"},
+		{"пустой LOG_FILE — файла нет", map[string]string{"LOG_FILE": ""}, nil, "info", "", "info"},
+		{"файл без уровня — info", nil, []string{"--log-file", "r.log"}, "info", "r.log", "info"},
+		{"LOG_FILE и LOG_FILE_LEVEL", map[string]string{"LOG_FILE": "r.log", "LOG_FILE_LEVEL": "debug"}, nil, "info", "r.log", "debug"},
+		{"LOG_FILE_LEVEL с --log-file", map[string]string{"LOG_FILE_LEVEL": "warn"}, []string{"--log-file", "r.log"}, "info", "r.log", "warn"},
+		{"флаг перекрывает LOG_LEVEL", map[string]string{"LOG_LEVEL": "error"}, []string{"--log-level", "warn"}, "warn", "", "info"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			clearEnv(t)
+			for k, v := range c.env {
+				t.Setenv(k, v)
+			}
+			opts, err := parseOpts(append(base, c.args...))
+			require.NoError(t, err)
+			assert.Equal(t, c.level, opts.LogLevel)
+			assert.Equal(t, c.logFile, opts.LogFile)
+			assert.Equal(t, c.logFileLevel, opts.LogFileLevel)
+		})
+	}
+	for _, lvl := range []string{"debug", "info", "warn", "error"} {
+		t.Run("уровень "+lvl, func(t *testing.T) {
+			clearEnv(t)
+			opts, err := parseOpts(append(base, "--log-level", lvl, "--log-file", "r.log", "--log-file-level", lvl))
+			require.NoError(t, err)
+			assert.Equal(t, lvl, opts.LogLevel)
+			assert.Equal(t, lvl, opts.LogFileLevel)
+		})
+	}
+}
+
+func TestParseOptsLogErrors(t *testing.T) {
+	base := []string{"--src", "s", "--dst", "d", "--db", "db"}
+	cases := []struct {
+		name string
+		env  map[string]string
+		args []string
+		want string // подстрока ошибки
+	}{
+		{"--dbg", nil, []string{"--dbg"}, "unknown flag `dbg'"},
+		{"пустой LOG_LEVEL", map[string]string{"LOG_LEVEL": ""}, nil, "log-level"},
+		{"пустой LOG_FILE_LEVEL", map[string]string{"LOG_FILE": "r.log", "LOG_FILE_LEVEL": ""}, nil, "log-file-level"},
+		{"--log-file-level без --log-file", nil, []string{"--log-file-level", "debug"}, "--log-file-level задан без --log-file"},
+		{"LOG_FILE_LEVEL без LOG_FILE", map[string]string{"LOG_FILE_LEVEL": "debug"}, nil, "--log-file-level задан без --log-file"},
+		{"LOG_FILE_LEVEL при пустом LOG_FILE", map[string]string{"LOG_FILE": "", "LOG_FILE_LEVEL": "info"}, nil, "--log-file-level задан без --log-file"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			clearEnv(t)
+			for k, v := range c.env {
+				t.Setenv(k, v)
+			}
+			_, err := parseOpts(append(base, c.args...))
+			require.Error(t, err)
+			assert.False(t, isHelp(err))
+			assert.Contains(t, err.Error(), c.want)
+		})
+	}
+	// ParseLevel принял бы "1" и "INFO" — choice их отвергает
+	for _, v := range []string{"1", "INFO", "trace", "verbose"} {
+		t.Run("уровень "+v, func(t *testing.T) {
+			for name, args := range map[string][]string{
+				"--log-level":      {"--log-level", v},
+				"LOG_LEVEL":        nil,
+				"--log-file-level": {"--log-file", "r.log", "--log-file-level", v},
+			} {
+				clearEnv(t)
+				if args == nil {
+					t.Setenv("LOG_LEVEL", v)
+				}
+				_, err := parseOpts(append(base, args...))
+				require.Error(t, err, name)
+				assert.Contains(t, err.Error(), "Invalid value `"+v+"'", name)
+			}
+		})
+	}
 }
 
 func TestParseOptsDB(t *testing.T) {
@@ -320,6 +416,9 @@ func TestParseOptsHelp(t *testing.T) {
 	assert.Contains(t, err.Error(), "--apply-drop")
 	assert.Contains(t, err.Error(), "APPLY_DROP")
 	assert.NotContains(t, err.Error(), "--all-dbs")
+	assert.Contains(t, err.Error(), "--log-level")
+	assert.Contains(t, err.Error(), "LOG_FILE_LEVEL")
+	assert.NotContains(t, err.Error(), "--dbg")
 }
 
 func TestPermanent(t *testing.T) {

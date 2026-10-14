@@ -35,11 +35,14 @@ type options struct {
 	Dst       string `long:"dst" env:"DST_URI" description:"URI цели; без пароля в URI он будет запрошен в терминале; URI с паролем передавайте через DST_URI, не флагом" required:"true"`
 	StartTS   uint32 `long:"start-ts" env:"START_TS" default:"0" description:"unix-сек, с которых читать поток при отсутствии чекпойнта (раньше начала полного дампа)"`
 	BatchSize int    `long:"batch" env:"BATCH_SIZE" default:"1000" description:"максимум операций в одной пачке записи"`
-	Debug     bool   `long:"dbg" env:"DEBUG" description:"Debug mode"`
 	DB        string `long:"db" env:"DB" required:"true" description:"база источника: поток уровня базы, права на источнике — только на неё. Rename коллекций внутри базы поддерживается, перенос коллекций между базами не предусмотрен"`
 	DstDB     string `long:"dst-db" env:"DST_DB" description:"база на цели; по умолчанию — как --db"`
 	// флаг заменяет APPLY_DROP, а не дополняет: go-flags сбрасывает значение из env при первом флаге
 	ApplyDrops []string `long:"apply-drop" env:"APPLY_DROP" env-delim:"," description:"разрешить drop коллекции источника <db>.<коллекция> (одноразово; можно повторять; флаг заменяет APPLY_DROP, а не дополняет)"`
+	// choice проверяется и для env: LOG_LEVEL= и LOG_FILE_LEVEL= — ошибка
+	LogLevel     string `long:"log-level" env:"LOG_LEVEL" default:"info" choice:"debug" choice:"info" choice:"warn" choice:"error" description:"уровень лога в консоли (stdout): текст в терминале, JSON при перенаправлении"`
+	LogFile      string `long:"log-file" env:"LOG_FILE" description:"путь к файлу лога (JSON, дозапись; каталог должен существовать); ротация — снаружи, logrotate copytruncate"`
+	LogFileLevel string `long:"log-file-level" env:"LOG_FILE_LEVEL" choice:"debug" choice:"info" choice:"warn" choice:"error" description:"уровень лога в файле; по умолчанию info, только вместе с --log-file"`
 }
 
 var revision = "unknown"
@@ -62,7 +65,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	setupLog(opts.Debug)
+	setupLog(opts.LogLevel == "debug")
 
 	log.Info().Str("revision", revision).Send()
 	if len(opts.ApplyDrops) > 0 {
@@ -124,6 +127,13 @@ func parseOpts(args []string) (options, error) {
 		return opts, err
 	}
 	opts.ApplyDrops = drops
+	// LOG_FILE_LEVEL= отвергает choice, поэтому непустой уровень задан явно
+	if opts.LogFileLevel != "" && opts.LogFile == "" {
+		return opts, errors.New("--log-file-level задан без --log-file")
+	}
+	if opts.LogFileLevel == "" {
+		opts.LogFileLevel = "info"
+	}
 	return opts, nil
 }
 
