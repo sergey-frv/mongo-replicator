@@ -212,16 +212,20 @@ func TestParseOptsLogErrors(t *testing.T) {
 	// ParseLevel принял бы "1" и "INFO" — choice их отвергает
 	for _, v := range []string{"1", "INFO", "trace", "verbose"} {
 		t.Run("уровень "+v, func(t *testing.T) {
-			for name, args := range map[string][]string{
-				"--log-level":      {"--log-level", v},
-				"LOG_LEVEL":        nil,
-				"--log-file-level": {"--log-file", "r.log", "--log-file-level", v},
+			for name, src := range map[string]struct {
+				env  map[string]string
+				args []string
+			}{
+				"--log-level":      {args: []string{"--log-level", v}},
+				"LOG_LEVEL":        {env: map[string]string{"LOG_LEVEL": v}},
+				"--log-file-level": {args: []string{"--log-file", "r.log", "--log-file-level", v}},
+				"LOG_FILE_LEVEL":   {env: map[string]string{"LOG_FILE": "r.log", "LOG_FILE_LEVEL": v}},
 			} {
 				clearEnv(t)
-				if args == nil {
-					t.Setenv("LOG_LEVEL", v)
+				for k, val := range src.env {
+					t.Setenv(k, val)
 				}
-				_, err := parseOpts(append(base, args...))
+				_, err := parseOpts(append(base, src.args...))
 				require.Error(t, err, name)
 				assert.Contains(t, err.Error(), "Invalid value `"+v+"'", name)
 			}

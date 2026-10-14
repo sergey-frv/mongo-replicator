@@ -158,6 +158,21 @@ func TestSetupLogNoDir(t *testing.T) {
 	assert.Nil(t, f)
 }
 
+func TestSetupLogCreateMode(t *testing.T) {
+	restoreLogger(t)
+	captureStdout(t)
+	path := filepath.Join(t.TempDir(), "r.log")
+
+	f, err := setupLog(options{LogLevel: "info", LogFile: path, LogFileLevel: "info"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = f.Close() })
+
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	// umask может только снять биты: прочим — ничего, группе — не больше чтения
+	assert.Zero(t, fi.Mode().Perm()&^0o640, "права %o", fi.Mode().Perm())
+}
+
 func TestSetupLogAppend(t *testing.T) {
 	restoreLogger(t)
 	stdout := captureStdout(t)
@@ -193,6 +208,10 @@ func TestSetupLogNoFile(t *testing.T) {
 	stdout := captureStdout(t)
 	dir := t.TempDir()
 	t.Chdir(dir)
+	// typed-nil *os.File в MultiLevelWriter не роняет консоль, а только зовёт ErrorHandler
+	savedHandler := zerolog.ErrorHandler
+	zerolog.ErrorHandler = func(err error) { t.Errorf("запись лога: %v", err) }
+	t.Cleanup(func() { zerolog.ErrorHandler = savedHandler })
 
 	f, err := setupLog(options{LogLevel: "info", LogFileLevel: "info"})
 	require.NoError(t, err)

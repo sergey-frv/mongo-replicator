@@ -104,7 +104,7 @@ func setupLog(opts options) (*os.File, error)
 ```
 2026-10-14T16:00:00+06:00 INF лог console=info/text file=/var/log/repl/urlshrinker.log file_level=info
 ```
-- без файла: `file=""`, `file_level` не пишется
+- без файла: пустой `file` (в терминале `file=`, в JSON `"file":""`), `file_level` не пишется
 - строки уровня INFO (`лог`, `revision`) попадают только в приёмники с уровнем `info` и ниже — отметить в README
 
 ## What Goes Where
@@ -163,8 +163,8 @@ func setupLog(opts options) (*os.File, error)
 - [x] `make lint` без замечаний
 
 ### Task 5: [Final] Update documentation
-- [ ] создать CLAUDE.md, только если появились неочевидные договорённости
-- [ ] move this plan to `docs/plans/completed/`
+- [x] создать CLAUDE.md, только если появились неочевидные договорённости (не создан: неочевидное — короткие имена полей в `newLogger` и их связь с `ConsoleWriter` — описано в комментариях и тестах)
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
