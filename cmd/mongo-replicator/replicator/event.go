@@ -36,8 +36,10 @@ func toModel(ev *event) (m mongo.WriteModel, ok bool) {
 	switch ev.OperationType {
 	case "insert", "replace", "update":
 		if len(ev.FullDocument) == 0 {
-			// update + updateLookup: к моменту чтения документ на источнике уже
-			// удалён. Пропускаем — следом в потоке придёт delete.
+			// update + updateLookup: к моменту чтения документа на источнике его уже нет.
+			// Если он удалён — следом в потоке придёт delete. Если коллекцию переименовали
+			// или пересоздали — update теряется: известное ограничение (a), см. README.
+			// Пропускаем в обоих случаях.
 			return nil, false
 		}
 		return mongo.NewReplaceOneModel().

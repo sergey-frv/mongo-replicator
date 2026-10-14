@@ -194,6 +194,20 @@ func TestIsHistoryLost(t *testing.T) {
 	}
 }
 
+func TestIsEventTooLarge(t *testing.T) {
+	assert.True(t, IsEventTooLarge(mongo.CommandError{Code: codeBSONObjectTooLarge}))
+	assert.True(t, IsEventTooLarge(fmt.Errorf("change stream: %w", mongo.CommandError{Code: codeBSONObjectTooLarge})))
+	assert.False(t, IsEventTooLarge(mongo.CommandError{Code: codeChangeStreamHistoryLost}))
+	assert.False(t, IsEventTooLarge(errors.New("boom")))
+	assert.False(t, IsEventTooLarge(nil))
+}
+
+// Поток не тащит updateDescription: с ним событие большого документа превышает 16 МБ.
+func TestStreamPipelineUnsetsUpdateDescription(t *testing.T) {
+	require.Len(t, streamPipeline, 1)
+	assert.Equal(t, bson.D{{Key: "$unset", Value: "updateDescription"}}, streamPipeline[0])
+}
+
 func TestIsDBCaseConflict(t *testing.T) {
 	bulk := mongo.BulkWriteException{WriteErrors: []mongo.BulkWriteError{{WriteError: mongo.WriteError{Code: codeDatabaseDifferCase}}}}
 	assert.True(t, IsDBCaseConflict(fmt.Errorf("bulk write: %w", bulk)))

@@ -1466,6 +1466,78 @@ func TestIntegrationLagPosition(t *testing.T) {
 	assert.Equal(t, n, rn.r.Applied(), "событие другой базы применено")
 }
 
+// При ровном потоке чаще maxAwaitTime (1 с) пустых getMore нет: пачка должна
+// писаться по вычитанному ответу сервера, а не ждать BatchSize событий.
+func TestIntegrationSteadyTrafficBoundedLag(t *testing.T) {
+	db := prepare(t)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*waitTimeout)
+	defer cancel()
+
+	items := srcClient.Database(db).Collection("items")
+	stop, done := make(chan struct{}), make(chan struct{})
+	var writeErr error
+	go func() {
+		defer close(done)
+		for i := int32(0); ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: i}}); err != nil {
+				writeErr = err
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}()
+	stopWrites := func() {
+		select {
+		case <-stop:
+		default:
+			close(stop)
+		}
+		<-done
+	}
+	defer stopWrites()
+
+	// записи идут каждые 200 мс и не прекращаются: цель обязана догонять на ходу
+	dstItems := dstClient.Database(db).Collection("items")
+	require.Eventually(t, func() bool {
+		n, err := dstItems.CountDocuments(ctx, bson.D{})
+		return err == nil && n >= 5
+	}, 5*time.Second, pollEvery, "при непрерывном потоке цель не получила ни одной пачки")
+
+	stopWrites()
+	require.NoError(t, writeErr)
+	rn.waitSame(db)
+}
+
+// update большого документа: fullDocument (~9 МБ) + updateDescription (~8 МБ)
+// превысили бы 16 МБ; поток убирает updateDescription, и событие проходит.
+func TestIntegrationLargeUpdateEvent(t *testing.T) {
+	db := prepare(t)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*waitTimeout)
+	defer cancel()
+
+	big := srcClient.Database(db).Collection("big")
+	_, err := big.InsertOne(ctx, bson.D{
+		{Key: "_id", Value: int32(1)},
+		{Key: "a", Value: strings.Repeat("a", 1<<20)},
+		{Key: "b", Value: strings.Repeat("b", 8<<20)},
+	})
+	require.NoError(t, err)
+	_, err = big.UpdateOne(ctx, bson.M{"_id": int32(1)},
+		bson.D{{Key: "$set", Value: bson.D{{Key: "b", Value: strings.Repeat("c", 8<<20)}}}})
+	require.NoError(t, err)
+
+	rn.waitSame(db)
+}
+
 // Rename между базами в режиме одной базы не предусмотрен; тесты фиксируют, во что
 // он фактически превращается на 8.0. Внутрь — копия через временную коллекцию
 // (create, createIndexes, insert, rename с dropTarget): репликация идёт дальше.

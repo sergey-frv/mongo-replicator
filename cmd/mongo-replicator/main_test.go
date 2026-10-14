@@ -329,6 +329,7 @@ func TestPermanent(t *testing.T) {
 		hint string // подстрока подсказки; "" — ошибка временная
 	}{
 		{"history lost", fmt.Errorf("run: %w", mongo.CommandError{Code: 286}), "выпала из oplog"},
+		{"событие больше 16 МБ", fmt.Errorf("change stream: %w", mongo.CommandError{Code: 10334}), "больше 16 МБ"},
 		{"нет точки старта", fmt.Errorf("run: %w", replicator.ErrNoStartPoint), "--start-ts"},
 		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), "--dst-db"},
 		{"событие другой базы", fmt.Errorf("run: %w", replicator.ErrForeignNamespace), "сообщите о баге"},

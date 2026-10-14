@@ -38,6 +38,10 @@ var ErrStreamInvalidated = errors.New("поток инвалидирован (dr
 // но применять его на цели значило бы писать не в ту базу.
 var ErrForeignNamespace = errors.New("событие другой базы в потоке")
 
+// streamPipeline убирает из событий updateDescription: репликатору нужен только
+// fullDocument, а с обоими событие большого документа превышает 16 МБ (BSONObjectTooLarge).
+var streamPipeline = mongo.Pipeline{{{Key: "$unset", Value: "updateDescription"}}}
+
 // SystemDBs — служебные базы, которые не реплицируются.
 var SystemDBs = []string{"admin", "config", "local", ckptDB}
 
@@ -55,8 +59,9 @@ type Replicator struct {
 	src, dst *mongo.Client
 	cfg      Config
 
-	// разрешённые drop: коллекция вычёркивается после чекпойнта за её drop,
-	// и множество переживает перезапуски Run (повтор неудачного Run снова применит drop)
+	// разрешённые drop: коллекция вычёркивается сразу после применения её drop.
+	// Если чекпойнт за drop не записался, повтор Run снова получит этот drop,
+	// но коллекции на цели уже нет — он пропускается веткой «на цели нет»
 	applyDrops map[string]bool
 
 	pending batch
@@ -179,7 +184,7 @@ func (r *Replicator) Run(ctx context.Context) error {
 
 	// Поток уровня базы требует прав только на неё.
 	log.Info().Str("db", r.cfg.DB).Msg("открываю поток уровня базы")
-	cs, err := r.src.Database(r.cfg.DB).Watch(ctx, mongo.Pipeline{}, opts)
+	cs, err := r.src.Database(r.cfg.DB).Watch(ctx, streamPipeline, opts)
 	if err != nil {
 		return fmt.Errorf("открытие change stream: %w", err)
 	}
@@ -190,7 +195,10 @@ func (r *Replicator) Run(ctx context.Context) error {
 		if err := r.flush(ctx); err != nil {
 			return err
 		}
-		return r.saveToken(ctx, lastToken)
+		if err := r.saveToken(ctx, lastToken); err != nil {
+			return fmt.Errorf("сохранение чекпойнта: %w", err)
+		}
+		return nil
 	}
 
 	for {
@@ -210,7 +218,10 @@ func (r *Replicator) Run(ctx context.Context) error {
 					r.pending.add(ev.NS, m)
 				}
 				lastToken = ev.ID
-				if r.pending.n >= r.cfg.BatchSize {
+				// Пачка пишется по размеру или когда вычитан ответ сервера: при ровном
+				// потоке чаще maxAwaitTime пустых getMore не бывает, и без второго
+				// условия цель отставала бы до BatchSize событий.
+				if r.pending.n >= r.cfg.BatchSize || cs.RemainingBatchLength() == 0 {
 					if err := commit(); err != nil {
 						return err
 					}
@@ -232,18 +243,18 @@ func (r *Replicator) Run(ctx context.Context) error {
 				if err := r.applyDDL(ctx, &ev); err != nil {
 					return err
 				}
-				lastToken = ev.ID
-				if err := r.saveToken(ctx, lastToken); err != nil {
-					return err
-				}
-				// разрешение одноразовое: после чекпойнта повтор этого drop уже не придёт
+				// разрешение одноразовое: вычёркиваем сразу, до чекпойнта (см. applyDrops)
 				if ev.OperationType == "drop" {
 					delete(r.applyDrops, ev.NS.String())
+				}
+				lastToken = ev.ID
+				if err := r.saveToken(ctx, lastToken); err != nil {
+					return fmt.Errorf("сохранение чекпойнта: %w", err)
 				}
 			}
 		} else {
 			if err := cs.Err(); err != nil {
-				return err
+				return fmt.Errorf("change stream: %w", err)
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()

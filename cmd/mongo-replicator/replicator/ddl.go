@@ -19,7 +19,14 @@ const (
 	codeDatabaseDifferCase      = 13297
 	codeChangeStreamFatal       = 280
 	codeChangeStreamHistoryLost = 286
+	codeBSONObjectTooLarge      = 10334
 )
+
+// IsEventTooLarge сообщает, что событие потока больше 16 МБ: сервер не может его отдать,
+// и повтор с того же токена упрётся в него снова.
+func IsEventTooLarge(err error) bool {
+	return hasCode(err, codeBSONObjectTooLarge)
+}
 
 // IsHistoryLost сообщает, что точка возобновления выпала из oplog источника:
 // продолжать поток нельзя, нужна новая полная заливка цели.

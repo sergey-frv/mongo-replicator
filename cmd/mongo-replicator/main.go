@@ -224,6 +224,9 @@ func hint(err error) string {
 	case errors.As(err, &dropErr):
 		return fmt.Sprintf("на источнике удалена коллекция %s (вручную, перенос в другую базу или dropDatabase); "+
 			"если удаление ожидаемое — перезапустите с --apply-drop %s", dropErr.NS, dropErr.NS)
+	case replicator.IsEventTooLarge(err):
+		return "событие изменения на источнике больше 16 МБ — change stream не может его отдать; " +
+			"нужна новая полная заливка цели с --start-ts позже этого изменения"
 	case replicator.IsHistoryLost(err):
 		return "точка возобновления выпала из oplog источника — нужна новая полная заливка цели"
 	case errors.Is(err, replicator.ErrNoStartPoint):
