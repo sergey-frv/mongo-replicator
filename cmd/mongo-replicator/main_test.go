@@ -93,7 +93,7 @@ func TestMaskOptions(t *testing.T) {
 // clearEnv убирает env опций: в контейнере app заданы SRC_URI/DST_URI.
 func clearEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DEBUG", "DB"} {
+	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DEBUG", "DB", "DST_DB"} {
 		t.Setenv(k, "") // восстановит исходное значение после теста
 		require.NoError(t, os.Unsetenv(k))
 	}
@@ -110,14 +110,14 @@ func TestParseOptsEnv(t *testing.T) {
 
 	opts, err := parseOpts(nil)
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", StartTS: 1791900000, BatchSize: 50, Debug: true, DB: "urlshrinker"}, opts)
+	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", StartTS: 1791900000, BatchSize: 50, Debug: true, DB: "urlshrinker", DstDB: "urlshrinker"}, opts)
 }
 
 func TestParseOptsDefaults(t *testing.T) {
 	clearEnv(t)
 	opts, err := parseOpts([]string{"--src", "mongodb://src", "--dst", "mongodb://dst", "--db", "urlshrinker"})
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", BatchSize: 1000, DB: "urlshrinker"}, opts)
+	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", BatchSize: 1000, DB: "urlshrinker", DstDB: "urlshrinker"}, opts)
 }
 
 func TestParseOptsFlagsOverrideEnv(t *testing.T) {
@@ -130,7 +130,7 @@ func TestParseOptsFlagsOverrideEnv(t *testing.T) {
 
 	opts, err := parseOpts([]string{"--src", "mongodb://src-flag", "--start-ts=2", "--batch", "7", "--db", "flag"})
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src-flag", Dst: "mongodb://dst-env", StartTS: 2, BatchSize: 7, DB: "flag"}, opts)
+	assert.Equal(t, options{Src: "mongodb://src-flag", Dst: "mongodb://dst-env", StartTS: 2, BatchSize: 7, DB: "flag", DstDB: "flag"}, opts)
 }
 
 func TestParseOptsDB(t *testing.T) {
@@ -155,6 +155,34 @@ func TestParseOptsDB(t *testing.T) {
 			opts, err := parseOpts(append(base, c.args...))
 			require.NoError(t, err)
 			assert.Equal(t, c.db, opts.DB)
+		})
+	}
+}
+
+func TestParseOptsDstDB(t *testing.T) {
+	base := []string{"--src", "s", "--dst", "d", "--db", "urlshrinker"}
+	cases := []struct {
+		name  string
+		env   map[string]string
+		args  []string
+		dstDB string
+	}{
+		{"не задана — как --db", nil, nil, "urlshrinker"},
+		{"пустой DST_DB — как --db", map[string]string{"DST_DB": ""}, nil, "urlshrinker"},
+		{"--dst-db", nil, []string{"--dst-db", "urlshrinker_v2"}, "urlshrinker_v2"},
+		{"DST_DB из env", map[string]string{"DST_DB": "urlshrinker_v2"}, nil, "urlshrinker_v2"},
+		{"флаг перекрывает env", map[string]string{"DST_DB": "env"}, []string{"--dst-db", "flag"}, "flag"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			clearEnv(t)
+			for k, v := range c.env {
+				t.Setenv(k, v)
+			}
+			opts, err := parseOpts(append(base, c.args...))
+			require.NoError(t, err)
+			assert.Equal(t, "urlshrinker", opts.DB)
+			assert.Equal(t, c.dstDB, opts.DstDB)
 		})
 	}
 }
@@ -218,6 +246,12 @@ func TestParseOptsDBName(t *testing.T) {
 			_, err := parseOpts([]string{"--src", "s", "--dst", "d", "--db", c.db})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), c.want)
+			assert.Contains(t, err.Error(), "--db ")
+
+			_, err = parseOpts([]string{"--src", "s", "--dst", "d", "--db", "x", "--dst-db", c.db})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), c.want)
+			assert.Contains(t, err.Error(), "--dst-db ")
 		})
 	}
 }
@@ -232,6 +266,8 @@ func TestParseOptsHelp(t *testing.T) {
 	assert.Contains(t, err.Error(), "запрошен") // описание --src/--dst: пароль спросят в терминале
 	assert.Contains(t, err.Error(), "--start-ts")
 	assert.Contains(t, err.Error(), "--db")
+	assert.Contains(t, err.Error(), "--dst-db")
+	assert.Contains(t, err.Error(), "DST_DB")
 	assert.NotContains(t, err.Error(), "--all-dbs")
 }
 
@@ -244,6 +280,7 @@ func TestPermanent(t *testing.T) {
 		{"history lost", fmt.Errorf("run: %w", mongo.CommandError{Code: 286}), "выпала из oplog"},
 		{"нет точки старта", fmt.Errorf("run: %w", replicator.ErrNoStartPoint), "--start-ts"},
 		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), "другой базы"},
+		{"событие другой базы", fmt.Errorf("run: %w", replicator.ErrForeignNamespace), "сообщите о баге"},
 		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), "dropDatabase"},
 		{"обычная ошибка", errors.New("boom"), ""},
 		{"отмена", context.Canceled, ""},

@@ -228,6 +228,44 @@ func TestRunNoDB(t *testing.T) {
 	require.ErrorContains(t, err, "не задана база источника")
 }
 
+func TestNewDstDB(t *testing.T) {
+	assert.Equal(t, "a", New(nil, nil, Config{DB: "a"}).cfg.DstDB, "пусто — как DB")
+	assert.Equal(t, "b", New(nil, nil, Config{DB: "a", DstDB: "b"}).cfg.DstDB)
+}
+
+func TestNSName(t *testing.T) {
+	ns := namespace{DB: "a", Coll: "c"}
+	assert.Equal(t, "a.c", New(nil, nil, Config{DB: "a"}).nsName(ns))
+	assert.Equal(t, "a.c (на цели b.c)", New(nil, nil, Config{DB: "a", DstDB: "b"}).nsName(ns))
+}
+
+func TestCheckNS(t *testing.T) {
+	cfg := Config{DB: "a", DstDB: "b"}
+	own, foreign := namespace{DB: "a", Coll: "c"}, namespace{DB: "x", Coll: "c"}
+	for _, c := range []struct {
+		name string
+		ev   event
+		want string // подстрока ошибки; "" — без ошибки
+	}{
+		{"своя база", event{OperationType: "insert", NS: own}, ""},
+		{"rename внутри базы", event{OperationType: "rename", NS: own, To: &namespace{DB: "a", Coll: "d"}}, ""},
+		{"invalidate без ns", event{OperationType: "invalidate"}, ""},
+		{"чужая ns", event{OperationType: "insert", NS: foreign}, "insert x.c"},
+		{"чужая to", event{OperationType: "rename", NS: own, To: &foreign}, "rename a.c → x.c"},
+		{"ns базы цели", event{OperationType: "insert", NS: namespace{DB: "b", Coll: "c"}}, "insert b.c"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := checkNS(cfg, &c.ev)
+			if c.want == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrForeignNamespace)
+			assert.Contains(t, err.Error(), c.want)
+		})
+	}
+}
+
 func TestCheckDB(t *testing.T) {
 	for _, c := range []struct{ name, saved, want string }{
 		{"та же база", "urlshrinker", "urlshrinker"},

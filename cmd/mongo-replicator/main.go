@@ -37,6 +37,7 @@ type options struct {
 	BatchSize int    `long:"batch" env:"BATCH_SIZE" default:"1000" description:"максимум операций в одной пачке записи"`
 	Debug     bool   `long:"dbg" env:"DEBUG" description:"Debug mode"`
 	DB        string `long:"db" env:"DB" required:"true" description:"база источника: поток уровня базы, права на источнике — только на неё. Rename коллекций внутри базы поддерживается, перенос коллекций между базами не предусмотрен"`
+	DstDB     string `long:"dst-db" env:"DST_DB" description:"база на цели; по умолчанию — как --db"`
 }
 
 var revision = "unknown"
@@ -103,22 +104,28 @@ func parseOpts(args []string) (options, error) {
 	if opts.DB == "" {
 		return opts, errors.New("--db не может быть пустой")
 	}
-	if err := checkDBName(opts.DB); err != nil {
+	if err := checkDBName("--db", opts.DB); err != nil {
+		return opts, err
+	}
+	if opts.DstDB == "" {
+		opts.DstDB = opts.DB
+	}
+	if err := checkDBName("--dst-db", opts.DstDB); err != nil {
 		return opts, err
 	}
 	return opts, nil
 }
 
 // checkDBName проверяет имя базы по ограничениям MongoDB и запрещает служебные базы.
-func checkDBName(name string) error {
+func checkDBName(opt, name string) error {
 	if strings.ContainsAny(name, "/\\. \"$\x00") {
-		return fmt.Errorf("--db %q: имя базы не может содержать /\\. \"$ и NUL", name)
+		return fmt.Errorf("%s %q: имя базы не может содержать /\\. \"$ и NUL", opt, name)
 	}
 	if len(name) > maxDBNameLen {
-		return fmt.Errorf("--db %q: имя базы длиннее %d байт", name, maxDBNameLen)
+		return fmt.Errorf("%s %q: имя базы длиннее %d байт", opt, name, maxDBNameLen)
 	}
 	if slices.Contains(replicator.SystemDBs, name) {
-		return fmt.Errorf("--db %q: служебная база не реплицируется", name)
+		return fmt.Errorf("%s %q: служебная база не реплицируется", opt, name)
 	}
 	return nil
 }
@@ -148,7 +155,7 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 	defer dst.Disconnect(context.Background()) //nolint:errcheck // выходим, ошибка не важна
 
 	r := replicator.New(src, dst, replicator.Config{
-		StartTS: opts.StartTS, BatchSize: opts.BatchSize, DB: opts.DB,
+		StartTS: opts.StartTS, BatchSize: opts.BatchSize, DB: opts.DB, DstDB: opts.DstDB,
 	})
 	for ctx.Err() == nil {
 		err := r.Run(ctx)
@@ -184,6 +191,8 @@ func hint(err error) string {
 		return "чекпойнт на цели записан для другой базы: верните прежнюю --db " +
 			"или остановите репликатор, удалите чекпойнт и залейте цель заново; " +
 			"если на эту цель пишет второй экземпляр — у каждого должна быть своя цель"
+	case errors.Is(err, replicator.ErrForeignNamespace):
+		return "в потоке событие другой базы — сообщите о баге"
 	case errors.Is(err, replicator.ErrStreamInvalidated):
 		return "база удалена на источнике (dropDatabase), поток закрыт: " +
 			"удалите чекпойнт на цели и запустите заново с --start-ts"

@@ -217,8 +217,14 @@ func (rn *runner) exited() (bool, error) {
 	}
 }
 
-// waitSame ждёт совпадения базы на кластерах; если Run уже вернулся — падает сразу.
+// waitSame ждёт совпадения одноимённой базы на кластерах.
 func (rn *runner) waitSame(db string) {
+	rn.t.Helper()
+	rn.waitSameDBs(db, db)
+}
+
+// waitSameDBs ждёт совпадения базы srcDB источника и dstDB цели; если Run уже вернулся — падает сразу.
+func (rn *runner) waitSameDBs(srcDB, dstDB string) {
 	rn.t.Helper()
 	deadline := time.Now().Add(waitTimeout)
 	var diff string
@@ -227,11 +233,11 @@ func (rn *runner) waitSame(db string) {
 			rn.t.Fatalf("Run вернулся раньше времени: %v", err)
 		}
 		var ok bool
-		if ok, diff = same(db); ok {
+		if ok, diff = sameDBs(srcDB, dstDB); ok {
 			return
 		}
 		if time.Now().After(deadline) {
-			rn.t.Fatalf("база %s не совпала за %s: %s", db, waitTimeout, diff)
+			rn.t.Fatalf("база %s → %s не совпала за %s: %s", srcDB, dstDB, waitTimeout, diff)
 		}
 		time.Sleep(pollEvery)
 	}
@@ -288,17 +294,20 @@ func (rn *runner) ckptTime() bson.Timestamp {
 	return ck.ClusterTime
 }
 
-// same сравнивает базу на источнике и цели: списки коллекций, документы по _id
+// same сравнивает одноимённую базу на источнике и цели.
+func same(db string) (ok bool, diff string) { return sameDBs(db, db) }
+
+// sameDBs сравнивает базу srcDB источника и dstDB цели: списки коллекций, документы по _id
 // байт в байт и индексы по name/key/unique/partialFilterExpression/expireAfterSeconds.
-func same(db string) (ok bool, diff string) {
+func sameDBs(srcDB, dstDB string) (ok bool, diff string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	srcColls, err := collNames(ctx, srcClient, db)
+	srcColls, err := collNames(ctx, srcClient, srcDB)
 	if err != nil {
 		return false, "источник: " + err.Error()
 	}
-	dstColls, err := collNames(ctx, dstClient, db)
+	dstColls, err := collNames(ctx, dstClient, dstDB)
 	if err != nil {
 		return false, "цель: " + err.Error()
 	}
@@ -307,10 +316,10 @@ func same(db string) (ok bool, diff string) {
 	}
 
 	for _, coll := range srcColls {
-		if d := diffDocs(ctx, db, coll); d != "" {
+		if d := diffDocs(ctx, srcDB, dstDB, coll); d != "" {
 			return false, d
 		}
-		if d := diffIndexes(ctx, db, coll); d != "" {
+		if d := diffIndexes(ctx, srcDB, dstDB, coll); d != "" {
 			return false, d
 		}
 	}
@@ -327,8 +336,17 @@ func collNames(ctx context.Context, c *mongo.Client, db string) ([]string, error
 	return names, err
 }
 
-func diffDocs(ctx context.Context, db, coll string) string {
-	read := func(c *mongo.Client) ([]bson.Raw, error) {
+// pairNS — коллекция для сообщений сравнения: ns источника и, если база цели другая, ns цели.
+func pairNS(srcDB, dstDB, coll string) string {
+	if dstDB == srcDB {
+		return srcDB + "." + coll
+	}
+	return srcDB + "." + coll + " → " + dstDB + "." + coll
+}
+
+func diffDocs(ctx context.Context, srcDB, dstDB, coll string) string {
+	ns := pairNS(srcDB, dstDB, coll)
+	read := func(c *mongo.Client, db string) ([]bson.Raw, error) {
 		cur, err := c.Database(db).Collection(coll).Find(ctx, bson.D{}, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
 		if err != nil {
 			return nil, err
@@ -337,29 +355,30 @@ func diffDocs(ctx context.Context, db, coll string) string {
 		err = cur.All(ctx, &docs)
 		return docs, err
 	}
-	srcDocs, err := read(srcClient)
+	srcDocs, err := read(srcClient, srcDB)
 	if err != nil {
-		return fmt.Sprintf("%s.%s источник: %v", db, coll, err)
+		return fmt.Sprintf("%s источник: %v", ns, err)
 	}
-	dstDocs, err := read(dstClient)
+	dstDocs, err := read(dstClient, dstDB)
 	if err != nil {
-		return fmt.Sprintf("%s.%s цель: %v", db, coll, err)
+		return fmt.Sprintf("%s цель: %v", ns, err)
 	}
 	for i := range max(len(srcDocs), len(dstDocs)) {
 		switch {
 		case i >= len(srcDocs):
-			return fmt.Sprintf("%s.%s: лишний документ на цели %s", db, coll, dstDocs[i])
+			return fmt.Sprintf("%s: лишний документ на цели %s", ns, dstDocs[i])
 		case i >= len(dstDocs):
-			return fmt.Sprintf("%s.%s: нет документа на цели %s", db, coll, srcDocs[i])
+			return fmt.Sprintf("%s: нет документа на цели %s", ns, srcDocs[i])
 		case !bytes.Equal(srcDocs[i], dstDocs[i]):
-			return fmt.Sprintf("%s.%s: документы различаются\n источник %s\n цель     %s", db, coll, srcDocs[i], dstDocs[i])
+			return fmt.Sprintf("%s: документы различаются\n источник %s\n цель     %s", ns, srcDocs[i], dstDocs[i])
 		}
 	}
 	return ""
 }
 
-func diffIndexes(ctx context.Context, db, coll string) string {
-	read := func(c *mongo.Client) ([]string, error) {
+func diffIndexes(ctx context.Context, srcDB, dstDB, coll string) string {
+	ns := pairNS(srcDB, dstDB, coll)
+	read := func(c *mongo.Client, db string) ([]string, error) {
 		cur, err := c.Database(db).Collection(coll).Indexes().List(ctx)
 		if err != nil {
 			return nil, err
@@ -375,16 +394,16 @@ func diffIndexes(ctx context.Context, db, coll string) string {
 		slices.Sort(out)
 		return out, nil
 	}
-	srcIdx, err := read(srcClient)
+	srcIdx, err := read(srcClient, srcDB)
 	if err != nil {
-		return fmt.Sprintf("%s.%s индексы источника: %v", db, coll, err)
+		return fmt.Sprintf("%s индексы источника: %v", ns, err)
 	}
-	dstIdx, err := read(dstClient)
+	dstIdx, err := read(dstClient, dstDB)
 	if err != nil {
-		return fmt.Sprintf("%s.%s индексы цели: %v", db, coll, err)
+		return fmt.Sprintf("%s индексы цели: %v", ns, err)
 	}
 	if !slices.Equal(srcIdx, dstIdx) {
-		return fmt.Sprintf("%s.%s: индексы различаются\n источник %v\n цель     %v", db, coll, srcIdx, dstIdx)
+		return fmt.Sprintf("%s: индексы различаются\n источник %v\n цель     %v", ns, srcIdx, dstIdx)
 	}
 	return ""
 }
@@ -981,6 +1000,62 @@ func TestIntegrationSingleDB(t *testing.T) {
 	assert.False(t, dbExists(ctx, t, dstClient, other), "база %s попала на цель", other)
 	// 3 insert + update + delete + финальный insert; события other не считаются
 	assert.EqualValues(t, 6, rn.r.Applied())
+}
+
+// --dst-db: DML и DDL, включая обе стороны rename, применяются в базе цели;
+// база с именем источника на цели не появляется.
+func TestIntegrationDstDB(t *testing.T) {
+	db := prepare(t)
+	dstDB := db + "_v2"
+	cleanDB(t, dstDB)
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db, DstDB: dstDB})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*waitTimeout)
+	defer cancel()
+	src := srcClient.Database(db)
+	a, b := src.Collection("a"), src.Collection("b")
+
+	require.NoError(t, src.CreateCollection(ctx, "a"))
+	_, err := a.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "k", Value: 1}}, Options: options.Index().SetName("a_k")},
+		{Keys: bson.D{{Key: "code", Value: 1}}, Options: options.Index().SetName("a_code_u").SetUnique(true)},
+	})
+	require.NoError(t, err)
+	for i := range 3 {
+		_, err = a.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}, {Key: "code", Value: fmt.Sprintf("c%d", i)}, {Key: "k", Value: int32(i)}})
+		require.NoError(t, err)
+	}
+	_, err = a.UpdateOne(ctx, bson.M{"_id": 0}, bson.D{{Key: "$set", Value: bson.D{{Key: "k", Value: int32(10)}}}})
+	require.NoError(t, err)
+	_, err = a.DeleteOne(ctx, bson.M{"_id": 2})
+	require.NoError(t, err)
+	require.NoError(t, a.Indexes().DropOne(ctx, "a_k"))
+
+	// b — цель второго rename: уйдёт по dropTarget
+	_, err = b.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(100)}, {Key: "old", Value: true}})
+	require.NoError(t, err)
+	_, err = b.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "old", Value: 1}}, Options: options.Index().SetName("b_old")})
+	require.NoError(t, err)
+
+	// до rename ждём совпадения: update, прочитанный после rename, придёт с пустым fullDocument
+	rn.waitSameDBs(db, dstDB)
+
+	renameColl(ctx, t, db, "a", "c") // в свободное имя
+	renameColl(ctx, t, db, "c", "b") // поверх существующей
+	_, err = b.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(10)}, {Key: "code", Value: "c10"}})
+	require.NoError(t, err)
+
+	rn.waitSameDBs(db, dstDB)
+	rn.waitQuiet()
+
+	colls, err := collNames(ctx, dstClient, dstDB)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b"}, colls)
+	assert.Equal(t, []string{"_id_", "a_code_u"}, indexNames(ctx, t, dstClient, dstDB, "b"), "индексы b заменены индексами a")
+	n, err := dstClient.Database(dstDB).Collection("b").CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, n, "0, 1 из a и 10; документ старой b удалён dropTarget")
+	assert.False(t, dbExists(ctx, t, dstClient, db), "база источника %s появилась на цели", db)
 }
 
 // Режим одной базы: чекпойнт помнит базу, рестарт продолжает с токена.

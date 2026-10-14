@@ -33,6 +33,10 @@ var ErrDBMismatch = errors.New("чекпойнт записан для друг�
 // отслеживаемой базы): продолжить его нельзя, токен invalidate не сохраняется.
 var ErrStreamInvalidated = errors.New("поток инвалидирован (dropDatabase базы)")
 
+// ErrForeignNamespace — в потоке уровня базы событие другой базы: так не бывает,
+// но применять его на цели значило бы писать не в ту базу.
+var ErrForeignNamespace = errors.New("событие другой базы в потоке")
+
 // SystemDBs — служебные базы, которые не реплицируются.
 var SystemDBs = []string{"admin", "config", "local", ckptDB}
 
@@ -41,6 +45,7 @@ type Config struct {
 	StartTS   uint32 // unix-сек, старт при отсутствии чекпойнта
 	BatchSize int    // максимум операций в одной пачке записи
 	DB        string // база источника
+	DstDB     string // база цели; New: пусто — как DB
 }
 
 // Replicator переносит изменения из src в dst.
@@ -63,6 +68,9 @@ type Replicator struct {
 // New создаёт репликатор. dst должен быть подключён с w:majority,
 // чтобы чекпойнт не обогнал данные при failover.
 func New(src, dst *mongo.Client, cfg Config) *Replicator {
+	if cfg.DstDB == "" {
+		cfg.DstDB = cfg.DB
+	}
 	return &Replicator{src: src, dst: dst, cfg: cfg, lastLog: time.Now()}
 }
 
@@ -72,14 +80,41 @@ func (r *Replicator) Applied() int64 { return r.applied.Load() }
 // flush применяет накопленные операции на цели.
 func (r *Replicator) flush(ctx context.Context) error {
 	for _, ns := range r.pending.order {
-		_, err := r.dst.Database(ns.DB).Collection(ns.Coll).
+		_, err := r.dst.Database(r.cfg.DstDB).Collection(ns.Coll).
 			BulkWrite(ctx, r.pending.ops[ns], options.BulkWrite().SetOrdered(true))
 		if err != nil {
-			return fmt.Errorf("bulk write в %s: %w", ns, err)
+			return fmt.Errorf("bulk write в %s: %w", r.nsName(ns), err)
 		}
 	}
 	r.applied.Add(int64(r.pending.n))
 	r.pending = batch{}
+	return nil
+}
+
+// dstNS — namespace цели для коллекции источника.
+func (r *Replicator) dstNS(ns namespace) namespace {
+	return namespace{DB: r.cfg.DstDB, Coll: ns.Coll}
+}
+
+// nsName — ns источника для ошибок, при другой базе цели — с ns цели.
+func (r *Replicator) nsName(ns namespace) string {
+	if r.cfg.DstDB == r.cfg.DB {
+		return ns.String()
+	}
+	return ns.String() + " (на цели " + r.dstNS(ns).String() + ")"
+}
+
+// checkNS проверяет, что событие относится к базе источника. У invalidate ns нет.
+func checkNS(cfg Config, ev *event) error {
+	if ev.OperationType == "invalidate" {
+		return nil
+	}
+	if ev.NS.DB != cfg.DB {
+		return fmt.Errorf("%w: %s %s, поток базы %q", ErrForeignNamespace, ev.OperationType, ev.NS, cfg.DB)
+	}
+	if ev.To != nil && ev.To.DB != cfg.DB {
+		return fmt.Errorf("%w: %s %s → %s, поток базы %q", ErrForeignNamespace, ev.OperationType, ev.NS, ev.To, cfg.DB)
+	}
 	return nil
 }
 
@@ -151,6 +186,9 @@ func (r *Replicator) Run(ctx context.Context) error {
 				return fmt.Errorf("разбор события: %w", err)
 			}
 			r.lastTS = ev.ClusterTime
+			if err := checkNS(r.cfg, &ev); err != nil {
+				return err
+			}
 
 			switch ev.OperationType {
 			case "insert", "replace", "update", "delete":

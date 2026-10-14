@@ -28,7 +28,7 @@ func IsHistoryLost(err error) bool {
 // applyDDL переносит изменения схемы. Ошибки «уже есть» / «уже нет»
 // игнорируются: они означают повторное применение после рестарта.
 func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
-	db := r.dst.Database(ev.NS.DB)
+	db := r.dst.Database(r.cfg.DstDB)
 	var err error
 
 	switch ev.OperationType {
@@ -43,8 +43,8 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 			return fmt.Errorf("rename %s: в событии нет поля to", ev.NS)
 		}
 		err = runCommand(ctx, r.dst.Database("admin"), bson.D{
-			{Key: "renameCollection", Value: ev.NS.String()},
-			{Key: "to", Value: ev.To.String()},
+			{Key: "renameCollection", Value: r.dstNS(ev.NS).String()},
+			{Key: "to", Value: r.dstNS(*ev.To).String()},
 			{Key: "dropTarget", Value: true},
 		})
 
@@ -72,7 +72,7 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 	case "dropIndexes":
 		specs, valuesErr := ev.OpDesc.Lookup("indexes").Array().Values()
 		if valuesErr != nil {
-			return fmt.Errorf("dropIndexes %s: %w", ev.NS, valuesErr)
+			return fmt.Errorf("dropIndexes %s: %w", r.nsName(ev.NS), valuesErr)
 		}
 		for _, spec := range specs {
 			name := spec.Document().Lookup("name").StringValue()
@@ -96,11 +96,14 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("%s %s: %w", ev.OperationType, ev.NS, err)
+		return fmt.Errorf("%s %s: %w", ev.OperationType, r.nsName(ev.NS), err)
 	}
 	l := log.Info().Str("op", ev.OperationType).Str("ns", ev.NS.String())
 	if ev.To != nil {
 		l = l.Str("to", ev.To.String())
+	}
+	if r.cfg.DstDB != r.cfg.DB {
+		l = l.Str("dst", r.dstNS(ev.NS).String())
 	}
 	l.Msg("DDL применён")
 	return nil

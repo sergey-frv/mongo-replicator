@@ -170,14 +170,14 @@ type Config struct {
 - Modify: `cmd/mongo-replicator/replicator/replicator_test.go`
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] опция `DstDB` (`DST_DB`), `checkDBName(opt, name)` с именем опции; `Config.DstDB`, значение по умолчанию в `New`
-- [ ] `flush`, `applyDDL`, rename — на `cfg.DstDB`; текст ошибок с ns цели при `DstDB != DB`; поле `dst` в логах DDL
-- [ ] `checkNS` + `ErrForeignNamespace` (вызов для каждого события в `Run`), добавить в `permanent`/`hint`
-- [ ] хелперы теста: `sameDBs(srcDB, dstDB)`, `runner.waitSameDBs(srcDB, dstDB)`; `same(db)`/`waitSame(db)` — обёртки; `diffDocs`/`diffIndexes` — с парой имён
-- [ ] write tests `parseOpts`: `--dst-db` не задана → `= --db`; `DST_DB` из env; невалидное имя → ошибка с `--dst-db` в тексте; `clearEnv` + `DST_DB`
-- [ ] write unit tests: `New` — пустой `DstDB` → `= DB`; `checkNS` — своя база, чужая `ns`, чужая `to`, `to == nil`
-- [ ] write integration test `TestIntegrationDstDB`: `cleanDB(t, db+"_v2")`; `Config{DB: db, DstDB: db+"_v2"}`; DML, `create`, `createIndexes`, `dropIndexes`, rename внутри базы, rename поверх существующей коллекции (`dropTarget`); `waitSameDBs(db, db+"_v2")`; на цели нет базы `db`
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] опция `DstDB` (`DST_DB`), `checkDBName(opt, name)` с именем опции; `Config.DstDB`, значение по умолчанию в `New`
+- [x] `flush`, `applyDDL`, rename — на `cfg.DstDB`; текст ошибок с ns цели при `DstDB != DB`; поле `dst` в логах DDL
+- [x] `checkNS` + `ErrForeignNamespace` (вызов для каждого события в `Run`), добавить в `permanent`/`hint`
+- [x] хелперы теста: `sameDBs(srcDB, dstDB)`, `runner.waitSameDBs(srcDB, dstDB)`; `same(db)`/`waitSame(db)` — обёртки; `diffDocs`/`diffIndexes` — с парой имён
+- [x] write tests `parseOpts`: `--dst-db` не задана → `= --db`; `DST_DB` из env; невалидное имя → ошибка с `--dst-db` в тексте; `clearEnv` + `DST_DB`
+- [x] write unit tests: `New` — пустой `DstDB` → `= DB`; `checkNS` — своя база, чужая `ns`, чужая `to`, `to == nil`
+- [x] write integration test `TestIntegrationDstDB`: `cleanDB(t, db+"_v2")`; `Config{DB: db, DstDB: db+"_v2"}`; DML, `create`, `createIndexes`, `dropIndexes`, rename внутри базы, rename поверх существующей коллекции (`dropTarget`); `waitSameDBs(db, db+"_v2")`; на цели нет базы `db`
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
 
 ### Task 3: Пара баз в чекпойнте
 
