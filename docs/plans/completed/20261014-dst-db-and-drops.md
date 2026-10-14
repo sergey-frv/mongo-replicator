@@ -240,8 +240,8 @@ type Config struct {
 - [x] `make lint` без замечаний
 
 ### Task 7: [Final] Update documentation
-- [ ] создать CLAUDE.md, только если появились неочевидные договорённости
-- [ ] move this plan to `docs/plans/completed/`
+- [x] создать CLAUDE.md, только если появились неочевидные договорённости (не создан: неочевидное — исключения для drop в `isTempColl`, `checkNS` вместо записи не в ту базу, сверка пары баз в `checkDBs`, порядок `commit()` → DDL → `saveToken` — описано комментариями в коде; `--apply-drop` по ns источника и ловля `dropDatabase` на первом `drop` — в README)
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
