@@ -113,7 +113,8 @@ type Config struct {
 |---|---|
 | `drop` временной коллекции (`isTempColl`) | применяется молча |
 | `drop` коллекции из разрешённых | применяется на `<DstDB>.<coll>`, INFO `drop применён по --apply-drop`; вычёркивается **после** успешного `saveToken` этого события |
-| `drop` коллекции, которой нет на цели (`ListCollectionNames` в `DstDB` с фильтром по имени) | не применяется, WARN `drop <ns>: на цели такой коллекции нет (view/time-series или уже удалена)`, дальше |
+| `drop` коллекции, которой нет на цели (`ListCollectionSpecifications` в `DstDB` с фильтром по имени) | не применяется, WARN `drop <ns>: на цели такой коллекции нет (view/time-series или уже удалена)`, дальше |
+| `drop` view, который есть на цели (из заливки) | применяется: данных во view нет |
 | `drop` прочей коллекции | не применяется, `*DropError{NS}` |
 | `dropDatabase` | не применяется, `*DropError{NS, Database: true}` (никогда не разрешается) |
 | `invalidate` | `ErrStreamInvalidated`, как сейчас |

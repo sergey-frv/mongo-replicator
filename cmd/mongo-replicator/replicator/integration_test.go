@@ -1299,6 +1299,29 @@ func TestIntegrationDropAbsentOnTarget(t *testing.T) {
 	assert.EqualValues(t, 2, rn.r.Applied())
 }
 
+// view из заливки есть на цели: его drop применяется без остановки — данных во view нет.
+func TestIntegrationDropViewFromDump(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	src, dst := srcClient.Database(db), dstClient.Database(db)
+	for _, d := range []*mongo.Database{src, dst} {
+		require.NoError(t, d.CreateCollection(ctx, "c"))
+		require.NoError(t, d.CreateView(ctx, "v", "c", mongo.Pipeline{}))
+	}
+
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	require.NoError(t, src.Collection("v").Drop(ctx))
+	_, err := src.Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+
+	rn.waitSame(db)
+	rn.waitQuiet()
+	names, err := dst.ListCollectionNames(ctx, bson.M{"name": "v"})
+	require.NoError(t, err)
+	assert.Empty(t, names, "view на цели должен быть удалён")
+}
+
 // $out идёт через временную коллекцию tmp.agg_out.*: удачный — rename поверх цели,
 // неудачный — drop временной коллекции. Ни то, ни другое не останавливает репликатор.
 func TestIntegrationFailedOut(t *testing.T) {

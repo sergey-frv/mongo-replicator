@@ -61,20 +61,24 @@ func isTempColl(name string) bool {
 	return tempCollRe.MatchString(name)
 }
 
-// dropAllowed решает, применять ли drop коллекции: временная или разрешённая --apply-drop —
-// да; коллекции нет на цели (view, time-series) — нет, терять нечего; иначе — *DropError.
+// dropAllowed решает, применять ли drop коллекции: временная, разрешённая --apply-drop
+// или view на цели (например, из заливки; данных в нём нет) — да; коллекции нет на цели
+// (view, time-series) — нет, терять нечего; иначе — *DropError.
 func (r *Replicator) dropAllowed(ctx context.Context, db *mongo.Database, ev *event) (bool, error) {
 	if isTempColl(ev.NS.Coll) || r.applyDrops[ev.NS.String()] {
 		return true, nil
 	}
-	names, err := db.ListCollectionNames(ctx, bson.M{"name": ev.NS.Coll})
+	specs, err := db.ListCollectionSpecifications(ctx, bson.M{"name": ev.NS.Coll})
 	if err != nil {
 		return false, fmt.Errorf("drop %s: проверка коллекции на цели: %w", r.nsName(ev.NS), err)
 	}
-	if len(names) == 0 {
+	if len(specs) == 0 {
 		log.Warn().Str("ns", ev.NS.String()).
 			Msgf("drop %s: на цели такой коллекции нет (view/time-series или уже удалена)", r.nsName(ev.NS))
 		return false, nil
+	}
+	if specs[0].Type == "view" {
+		return true, nil
 	}
 	return false, &DropError{NS: ev.NS.String()}
 }
