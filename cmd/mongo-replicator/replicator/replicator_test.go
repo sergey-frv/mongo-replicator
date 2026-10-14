@@ -248,19 +248,24 @@ func TestNewApplyDrops(t *testing.T) {
 
 func TestIsTempColl(t *testing.T) {
 	for name, want := range map[string]bool{
-		"tmp.agg_out.0f1e2d3c":       true,
-		"tmp.mr.x":                   true,
-		"tmpAb12C.renameCollection":  true,
-		"tmpAb12C.convertToCapped.c": true,
-		"tmp.backup":                 false,
-		"tmp":                        false,
-		"tmpAb12C.other":             false,
-		"tmpAb12.renameCollection":   false,
-		"tmpAb12C.renameCollectionX": false,
-		"tmpAb12C.convertToCapped":   false,
-		"xtmpAb12C.renameCollection": false,
-		"tmp.agg_out":                false,
-		"orders":                     false,
+		"tmp.agg_out.0f1e2d3c-4b5a-4697-8a9b-0c1d2e3f4a5b":  true,
+		"tmp.agg_out.0f1e2d3c":                              false,
+		"tmp.agg_out.archive":                               false,
+		"tmp.agg_out.0f1e2d3c-4b5a-4697-8a9b-0c1d2e3f4a5bx": false,
+		"tmp.mr.x":                      false,
+		"tmpAb12C.renameCollection":     true,
+		"tmpAb12C.convertToCapped.c":    true,
+		"tmpAb12C.convertToCapped.a\nb": true, // имя коллекции может содержать \n
+		"tmp.backup":                    false,
+		"tmp":                           false,
+		"tmpAb12C.other":                false,
+		"tmpAb12.renameCollection":      false,
+		"tmpAb12C.renameCollectionX":    false,
+		"tmpAb12C.convertToCapped":      false,
+		"tmpAb12C.convertToCapped.":     false,
+		"xtmpAb12C.renameCollection":    false,
+		"tmp.agg_out":                   false,
+		"orders":                        false,
 	} {
 		assert.Equal(t, want, isTempColl(name), name)
 	}

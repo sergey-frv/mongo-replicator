@@ -118,7 +118,7 @@ type Config struct {
 | `dropDatabase` | не применяется, `*DropError{NS, Database: true}` (никогда не разрешается) |
 | `invalidate` | `ErrStreamInvalidated`, как сейчас |
 
-- `isTempColl(name string) bool`: префикс `tmp.agg_out.`; регэкспы `^tmp[A-Za-z0-9]{5}\.renameCollection$` и `^tmp[A-Za-z0-9]{5}\.convertToCapped\.`; `tmp.mr.` — оставить с комментарием «legacy, на 8.0 не используется»; не префикс `tmp` целиком (`tmp.backup` — пользовательская)
+- `isTempColl(name string) bool`: точные шаблоны, не префиксы — `^tmp\.agg_out\.<UUID>$` (пользовательская `tmp.agg_out.archive` не временная), `^tmp[A-Za-z0-9]{5}\.renameCollection$`, `^tmp[A-Za-z0-9]{5}\.convertToCapped\.(?s:.+)$` (непустой суффикс, включая `\n` — имя коллекции может его содержать); `tmp.mr.*` не исключается — на источниках 6.0+ mapReduce идёт через агрегацию; не префикс `tmp` целиком (`tmp.backup` — пользовательская)
 - разрешённые drop: `map[string]bool` в `Replicator`; при применении drop запоминается «ожидает вычёркивания» вместе с токеном события; вычёркивание — после успешного `saveToken` с этим токеном. Повтор `Run` после сбоя `saveToken` снова видит тот же `drop` и снова применяет его (идемпотентно: drop несуществующей — код 26, уже игнорируется)
 - ошибка — тип `*DropError{NS string; Database bool}`; `permanent`/`hint` через `errors.As` (без отдельного sentinel)
 - `hint`:
@@ -207,7 +207,7 @@ type Config struct {
 - [x] `*DropError`, `isTempColl`; ветки `drop`/`dropDatabase` в `applyDDL` по таблице «Удаления» (временная → применить; разрешённая → применить; нет на цели → WARN; иначе ошибка; `dropDatabase` → ошибка)
 - [x] опция `ApplyDrops` (`APPLY_DROP`, trim, пустые выбрасываются, проверки формата и базы); WARN в `main` при непустом списке; `Config.ApplyDrops`; множество разрешённых в `Replicator`, вычёркивание после успешного `saveToken`
 - [x] `permanent`/`hint` для `*DropError` (коллекция / база); обновить комментарий `invalidate` в `Run`
-- [x] write unit tests `isTempColl`: `tmp.agg_out.x`, `tmp.mr.x`, `tmpAb12C.renameCollection`, `tmpAb12C.convertToCapped.c` → true; `tmp.backup`, `tmp`, `tmpAb12C.other`, `tmpAb12.renameCollection` → false
+- [x] write unit tests `isTempColl`: `tmp.agg_out.<UUID>`, `tmpAb12C.renameCollection`, `tmpAb12C.convertToCapped.c` → true; `tmp.agg_out.archive`, `tmp.agg_out.<неполный UUID>`, `tmp.mr.x`, `tmpAb12C.convertToCapped.`, `tmp.backup`, `tmp`, `tmpAb12C.other`, `tmpAb12.renameCollection` → false
 - [x] write unit tests `parseOpts`: `--apply-drop db.a --apply-drop db.b`; `APPLY_DROP=db.a,db.b`; `APPLY_DROP=` → пустой список, не ошибка; `APPLY_DROP="db.a, db.b"` → пробел срезан; флаг заменяет env; `other.a` при `--db db` → ошибка; `db.`, `db` → ошибка; `db.a.b` → коллекция `a.b`; `clearEnv` + `APPLY_DROP`
 - [x] write unit tests `hint`/`permanent`: обёрнутые `*DropError` (коллекция и база), `ErrForeignNamespace`, `ErrStreamInvalidated` → permanent; подсказка коллекции содержит `--apply-drop <ns>`, базы — «новая полная заливка»
 - [x] update интеграционных тестов: `TestIntegrationDDL` — убрать create+drop коллекции `"tmp"`, оставить rename поверх существующей (`dropTarget`) и добавить проверку, что `Run` не завершился; `TestIntegrationReplayIdempotent` — `ApplyDrops: ["gone"]` в обоих прогонах; `TestIntegrationSingleDBCrossDBRename` — разделить (`TestIntegrationCrossDBRenameIn` / `TestIntegrationCrossDBRenameOut`): перенос внутрь (в т.ч. поверх существующей) продолжает работу, перенос наружу → остановка; `TestIntegrationDropDatabaseInvalidates` — заменить на `TestIntegrationDropDatabaseStops`

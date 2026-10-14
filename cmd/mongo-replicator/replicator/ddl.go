@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 
 	"github.com/rs/zerolog/log"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -48,16 +47,18 @@ func (e *DropError) Error() string {
 	return fmt.Sprintf("на источнике удалена коллекция %s, на цели не применено", e.NS)
 }
 
-// tempCollRe — временные коллекции renameCollection между базами и convertToCapped.
-var tempCollRe = regexp.MustCompile(`^tmp[A-Za-z0-9]{5}\.(renameCollection$|convertToCapped\.)`)
+// tempCollRe — имена, которые генерирует сама MongoDB: tmp.agg_out.<UUID> ($out, mapReduce),
+// tmpXXXXX.renameCollection (перенос между базами), tmpXXXXX.convertToCapped.<coll>.
+// Шаблоны точные, а не префиксы: пользовательская tmp.agg_out.archive под исключение не попадает.
+// tmp.mr.* не нужен: на источниках 6.0+ mapReduce идёт через агрегацию.
+var tempCollRe = regexp.MustCompile(`^(tmp\.agg_out\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|` +
+	`tmp[A-Za-z0-9]{5}\.(renameCollection|convertToCapped\.(?s:.+))$)`)
 
 // isTempColl сообщает, что коллекция — временная коллекция самой MongoDB: её drop
 // (например, после неудачного $out) применяется без разрешения. Не префикс "tmp"
 // целиком: tmp.backup — пользовательская.
 func isTempColl(name string) bool {
-	return strings.HasPrefix(name, "tmp.agg_out.") ||
-		strings.HasPrefix(name, "tmp.mr.") || // legacy, на 8.0 не используется
-		tempCollRe.MatchString(name)
+	return tempCollRe.MatchString(name)
 }
 
 // dropAllowed решает, применять ли drop коллекции: временная или разрешённая --apply-drop —
