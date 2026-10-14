@@ -232,12 +232,12 @@ type Config struct {
 - [x] поправить устаревшее: список применяемого DDL во вступлении (`:7`), абзац про `make run` и чекпойнт `it_*` (`:162`)
 
 ### Task 6: Verify acceptance criteria
-- [ ] `--db` обязательна, `--all-dbs` нет (`grep` по репозиторию); поток только уровня базы
-- [ ] с `--dst-db` всё пишется в базу цели, имя базы источника на цели не появляется
-- [ ] `drop` существующей на цели коллекции и `dropDatabase` → exit 1 с подсказкой; `--apply-drop` разрешает ровно один drop указанной коллекции и переживает повтор `Run`
-- [ ] run full test suite: `make test`
-- [ ] run integration tests: `make test-integration`
-- [ ] `make lint` без замечаний
+- [x] `--db` обязательна, `--all-dbs` нет (`grep` по репозиторию); поток только уровня базы
+- [x] с `--dst-db` всё пишется в базу цели, имя базы источника на цели не появляется
+- [x] `drop` существующей на цели коллекции и `dropDatabase` → exit 1 с подсказкой; `--apply-drop` разрешает ровно один drop указанной коллекции и переживает повтор `Run`
+- [x] run full test suite: `make test`
+- [x] run integration tests: `make test-integration`
+- [x] `make lint` без замечаний
 
 ### Task 7: [Final] Update documentation
 - [ ] создать CLAUDE.md, только если появились неочевидные договорённости
