@@ -30,7 +30,7 @@ test-integration:
 .PHONY: run
 run:
 	docker compose run --rm app /bin/sh -c "\
-		go run -ldflags \"-X main.revision=$(REVISION)\" ./cmd/mongo-replicator --dbg --db test --start-ts \$$(date +%s)"
+		go run -ldflags \"-X main.revision=$(REVISION)\" ./cmd/mongo-replicator --log-level debug --db test --start-ts \$$(date +%s)"
 
 # у mongo-образов VOLUME /data/db — без -v остаются анонимные тома
 .PHONY: down
