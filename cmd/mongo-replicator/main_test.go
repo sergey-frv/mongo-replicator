@@ -93,7 +93,7 @@ func TestMaskOptions(t *testing.T) {
 // clearEnv убирает env опций: в контейнере app заданы SRC_URI/DST_URI.
 func clearEnv(t *testing.T) {
 	t.Helper()
-	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DEBUG", "DB", "ALL_DBS"} {
+	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DEBUG", "DB"} {
 		t.Setenv(k, "") // восстановит исходное значение после теста
 		require.NoError(t, os.Unsetenv(k))
 	}
@@ -106,18 +106,18 @@ func TestParseOptsEnv(t *testing.T) {
 	t.Setenv("START_TS", "1791900000")
 	t.Setenv("BATCH_SIZE", "50")
 	t.Setenv("DEBUG", "true")
-	t.Setenv("ALL_DBS", "true")
+	t.Setenv("DB", "urlshrinker")
 
 	opts, err := parseOpts(nil)
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", StartTS: 1791900000, BatchSize: 50, Debug: true, AllDBs: true}, opts)
+	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", StartTS: 1791900000, BatchSize: 50, Debug: true, DB: "urlshrinker"}, opts)
 }
 
 func TestParseOptsDefaults(t *testing.T) {
 	clearEnv(t)
-	opts, err := parseOpts([]string{"--src", "mongodb://src", "--dst", "mongodb://dst", "--all-dbs"})
+	opts, err := parseOpts([]string{"--src", "mongodb://src", "--dst", "mongodb://dst", "--db", "urlshrinker"})
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", BatchSize: 1000, AllDBs: true}, opts)
+	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", BatchSize: 1000, DB: "urlshrinker"}, opts)
 }
 
 func TestParseOptsFlagsOverrideEnv(t *testing.T) {
@@ -126,27 +126,25 @@ func TestParseOptsFlagsOverrideEnv(t *testing.T) {
 	t.Setenv("DST_URI", "mongodb://dst-env")
 	t.Setenv("START_TS", "1")
 	t.Setenv("BATCH_SIZE", "50")
+	t.Setenv("DB", "env")
 
-	opts, err := parseOpts([]string{"--src", "mongodb://src-flag", "--start-ts=2", "--batch", "7", "--all-dbs"})
+	opts, err := parseOpts([]string{"--src", "mongodb://src-flag", "--start-ts=2", "--batch", "7", "--db", "flag"})
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src-flag", Dst: "mongodb://dst-env", StartTS: 2, BatchSize: 7, AllDBs: true}, opts)
+	assert.Equal(t, options{Src: "mongodb://src-flag", Dst: "mongodb://dst-env", StartTS: 2, BatchSize: 7, DB: "flag"}, opts)
 }
 
-func TestParseOptsMode(t *testing.T) {
+func TestParseOptsDB(t *testing.T) {
 	base := []string{"--src", "s", "--dst", "d"}
 	cases := []struct {
-		name   string
-		env    map[string]string
-		args   []string
-		db     string
-		allDBs bool
+		name string
+		env  map[string]string
+		args []string
+		db   string
 	}{
-		{"--db", nil, []string{"--db", "urlshrinker"}, "urlshrinker", false},
-		{"DB из env", map[string]string{"DB": "urlshrinker"}, nil, "urlshrinker", false},
-		{"флаг перекрывает env", map[string]string{"DB": "env"}, []string{"--db", "flag"}, "flag", false},
-		{"--all-dbs", nil, []string{"--all-dbs"}, "", true},
-		{"ALL_DBS из env", map[string]string{"ALL_DBS": "true"}, nil, "", true},
-		{"имя ровно 63 байта", nil, []string{"--db", strings.Repeat("a", 63)}, strings.Repeat("a", 63), false},
+		{"--db", nil, []string{"--db", "urlshrinker"}, "urlshrinker"},
+		{"DB из env", map[string]string{"DB": "urlshrinker"}, nil, "urlshrinker"},
+		{"флаг перекрывает env", map[string]string{"DB": "env"}, []string{"--db", "flag"}, "flag"},
+		{"имя ровно 63 байта", nil, []string{"--db", strings.Repeat("a", 63)}, strings.Repeat("a", 63)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -157,7 +155,6 @@ func TestParseOptsMode(t *testing.T) {
 			opts, err := parseOpts(append(base, c.args...))
 			require.NoError(t, err)
 			assert.Equal(t, c.db, opts.DB)
-			assert.Equal(t, c.allDBs, opts.AllDBs)
 		})
 	}
 }
@@ -169,23 +166,21 @@ func TestParseOptsErrors(t *testing.T) {
 		args []string
 		want string // подстрока ошибки: случай падает по своей причине
 	}{
-		{"нет --src", nil, []string{"--dst", "mongodb://dst"}, "--src"},
-		{"нет --dst", nil, []string{"--src", "mongodb://src"}, "--dst"},
-		{"нет обоих", nil, nil, "--src"},
-		{"пустой SRC_URI", map[string]string{"SRC_URI": ""}, []string{"--dst", "mongodb://dst"}, "--src"},
-		{"--batch 0", nil, []string{"--src", "s", "--dst", "d", "--batch", "0"}, "--batch должен быть"},
-		{"BATCH_SIZE<0", map[string]string{"BATCH_SIZE": "-5"}, []string{"--src", "s", "--dst", "d"}, "--batch должен быть"},
-		{"--batch больше int32", nil, []string{"--src", "s", "--dst", "d", "--batch", "3000000000"}, "--batch должен быть"},
-		{"отрицательный --start-ts", nil, []string{"--src", "s", "--dst", "d", "--start-ts=-1"}, "--start-ts"},
-		{"нечисловой --start-ts", nil, []string{"--src", "s", "--dst", "d", "--start-ts", "abc"}, "--start-ts"},
-		{"одиночный дефис", nil, []string{"-src", "s", "-dst", "d"}, "unknown flag"},
-		{"неизвестный флаг", nil, []string{"--src", "s", "--dst", "d", "--foo"}, "unknown flag `foo'"},
-		{"нет ни --db, ни --all-dbs", nil, []string{"--src", "s", "--dst", "d"}, "укажите --db <база> или --all-dbs"},
-		{"пустой DB без --all-dbs", map[string]string{"DB": ""}, []string{"--src", "s", "--dst", "d"}, "укажите --db <база> или --all-dbs"},
-		{"--db и --all-dbs", nil, []string{"--src", "s", "--dst", "d", "--db", "x", "--all-dbs"}, "взаимоисключающие"},
-		{"DB из env и --all-dbs", map[string]string{"DB": "x"}, []string{"--src", "s", "--dst", "d", "--all-dbs"}, "взаимоисключающие"},
-		{"пустой ALL_DBS", map[string]string{"ALL_DBS": "", "DB": ""}, []string{"--src", "s", "--dst", "d"}, "ALL_DBS задан пустым"},
-		{"пустой ALL_DBS и --db", map[string]string{"ALL_DBS": ""}, []string{"--src", "s", "--dst", "d", "--db", "x"}, "ALL_DBS задан пустым"},
+		{"нет --src", nil, []string{"--dst", "mongodb://dst", "--db", "x"}, "--src"},
+		{"нет --dst", nil, []string{"--src", "mongodb://src", "--db", "x"}, "--dst"},
+		{"нет обоих", nil, []string{"--db", "x"}, "--src"},
+		{"пустой SRC_URI", map[string]string{"SRC_URI": ""}, []string{"--dst", "mongodb://dst", "--db", "x"}, "--src"},
+		{"--batch 0", nil, []string{"--src", "s", "--dst", "d", "--db", "x", "--batch", "0"}, "--batch должен быть"},
+		{"BATCH_SIZE<0", map[string]string{"BATCH_SIZE": "-5"}, []string{"--src", "s", "--dst", "d", "--db", "x"}, "--batch должен быть"},
+		{"--batch больше int32", nil, []string{"--src", "s", "--dst", "d", "--db", "x", "--batch", "3000000000"}, "--batch должен быть"},
+		{"отрицательный --start-ts", nil, []string{"--src", "s", "--dst", "d", "--db", "x", "--start-ts=-1"}, "--start-ts"},
+		{"нечисловой --start-ts", nil, []string{"--src", "s", "--dst", "d", "--db", "x", "--start-ts", "abc"}, "--start-ts"},
+		{"одиночный дефис", nil, []string{"-src", "s", "-dst", "d", "--db", "x"}, "unknown flag"},
+		{"неизвестный флаг", nil, []string{"--src", "s", "--dst", "d", "--db", "x", "--foo"}, "unknown flag `foo'"},
+		{"нет --db", nil, []string{"--src", "s", "--dst", "d"}, "--db"},
+		{"пустой DB", map[string]string{"DB": ""}, []string{"--src", "s", "--dst", "d"}, "--db не может быть пустой"},
+		{"пустой --db", nil, []string{"--src", "s", "--dst", "d", "--db", ""}, "--db не может быть пустой"},
+		{"--all-dbs", nil, []string{"--src", "s", "--dst", "d", "--db", "x", "--all-dbs"}, "unknown flag `all-dbs'"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -236,7 +231,8 @@ func TestParseOptsHelp(t *testing.T) {
 	assert.Contains(t, err.Error(), "DST_URI")
 	assert.Contains(t, err.Error(), "запрошен") // описание --src/--dst: пароль спросят в терминале
 	assert.Contains(t, err.Error(), "--start-ts")
-	assert.Contains(t, err.Error(), "--all-dbs")
+	assert.Contains(t, err.Error(), "--db")
+	assert.NotContains(t, err.Error(), "--all-dbs")
 }
 
 func TestPermanent(t *testing.T) {

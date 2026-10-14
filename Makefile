@@ -20,7 +20,7 @@ test:
 		CGO_ENABLED=1 go test -race -timeout=\"300s\" ./..."
 
 # -count=1: иначе go-build-cache отдаёт (cached) без обращения к MongoDB
-# -p 1: пакеты не параллельно — тесты делят один чекпойнт и поток по кластеру
+# -p 1: пакеты не параллельно — тесты делят один чекпойнт на цели
 .PHONY: test-integration
 test-integration:
 	docker compose run --rm app /bin/sh -c "\
@@ -30,7 +30,7 @@ test-integration:
 .PHONY: run
 run:
 	docker compose run --rm app /bin/sh -c "\
-		go run -ldflags \"-X main.revision=$(REVISION)\" ./cmd/mongo-replicator --dbg --all-dbs --start-ts \$$(date +%s)"
+		go run -ldflags \"-X main.revision=$(REVISION)\" ./cmd/mongo-replicator --dbg --db test --start-ts \$$(date +%s)"
 
 # у mongo-образов VOLUME /data/db — без -v остаются анонимные тома
 .PHONY: down

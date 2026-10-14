@@ -222,26 +222,14 @@ func TestErrNoStartPoint(t *testing.T) {
 	assert.False(t, IsHistoryLost(ErrNoStartPoint))
 }
 
-func TestStreamPipeline(t *testing.T) {
-	t.Run("all dbs", func(t *testing.T) {
-		got, err := bson.Marshal(bson.D{{Key: "p", Value: streamPipeline("")}})
-		require.NoError(t, err)
-		want, err := bson.Marshal(bson.D{{Key: "p", Value: bson.A{
-			bson.D{{Key: "$match", Value: bson.D{{Key: "ns.db", Value: bson.D{
-				{Key: "$nin", Value: bson.A{"admin", "config", "local", "_replicator"}},
-			}}}}},
-		}}})
-		require.NoError(t, err)
-		assert.Equal(t, bson.Raw(want).String(), bson.Raw(got).String())
-	})
-	t.Run("single db", func(t *testing.T) {
-		assert.Empty(t, streamPipeline("urlshrinker"))
-	})
+// Пустая база — ошибка вызова пакета: до чекпойнта и потока (клиенты nil) не доходит.
+func TestRunNoDB(t *testing.T) {
+	err := New(nil, nil, Config{BatchSize: 1000}).Run(context.Background())
+	require.ErrorContains(t, err, "не задана база источника")
 }
 
 func TestCheckDB(t *testing.T) {
 	for _, c := range []struct{ name, saved, want string }{
-		{"все базы", "", ""},
 		{"та же база", "urlshrinker", "urlshrinker"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -250,8 +238,6 @@ func TestCheckDB(t *testing.T) {
 	}
 	for _, c := range []struct{ name, saved, want string }{
 		{"другая база", "a", "b"},
-		{"все базы → база", "", "urlshrinker"},
-		{"база → все базы", "urlshrinker", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := checkDB(c.saved, c.want)

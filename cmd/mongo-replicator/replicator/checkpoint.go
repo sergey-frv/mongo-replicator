@@ -31,7 +31,7 @@ func (r *Replicator) ckpt() *mongo.Collection {
 // checkpoint — сохранённая позиция; пустой Token — чекпойнта нет.
 type checkpoint struct {
 	Token       bson.Raw       `bson:"token"`
-	DB          string         `bson:"db"` // база, для которой записан токен ("" — все базы)
+	DB          string         `bson:"db"` // база источника, для которой записан токен
 	ClusterTime bson.Timestamp `bson:"clusterTime"`
 }
 

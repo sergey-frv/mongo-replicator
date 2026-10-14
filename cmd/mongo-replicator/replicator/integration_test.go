@@ -268,7 +268,7 @@ func (rn *runner) ckptToken() bson.Raw {
 	return ck.Token
 }
 
-// ckptDB — база, для которой записан чекпойнт ("" — все базы).
+// ckptDB — база, для которой записан чекпойнт.
 func (rn *runner) ckptDB() string {
 	rn.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -411,8 +411,8 @@ func indexSig(spec bson.Raw) string {
 func TestIntegrationStopOnCleanup(t *testing.T) {
 	var rn *runner
 	t.Run("sub", func(t *testing.T) {
-		prepare(t)
-		rn = start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+		db := prepare(t)
+		rn = start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 	})
 	require.NotNil(t, rn)
 	done, err := rn.exited()
@@ -423,7 +423,7 @@ func TestIntegrationStopOnCleanup(t *testing.T) {
 func TestIntegrationDML(t *testing.T) {
 	db := prepare(t)
 	// маленькая пачка: часть событий уходит на цель по заполнению пачки, а не по простою потока
-	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 3})
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 3, DB: db})
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
@@ -509,7 +509,7 @@ func TestIntegrationDML(t *testing.T) {
 
 func TestIntegrationTransaction(t *testing.T) {
 	db := prepare(t)
-	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
@@ -576,7 +576,7 @@ func TestIntegrationTransaction(t *testing.T) {
 func TestIntegrationResume(t *testing.T) {
 	db := prepare(t)
 	startTS := srcNow(t)
-	rn := start(t, Config{StartTS: startTS, BatchSize: 1000})
+	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
@@ -603,7 +603,7 @@ func TestIntegrationResume(t *testing.T) {
 	require.NoError(t, err)
 
 	// StartTS тот же, что при первом запуске, но при чекпойнте он игнорируется
-	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000})
+	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
 	rn2.waitSame(db)
 	rn2.waitQuiet()
 	// ровно n: продолжили с токена, события до остановки повторно не применялись
@@ -629,7 +629,7 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 	}
 	lastSrcSec = srcOpTime(t).T
 	startTS := srcNow(t)
-	rn := start(t, Config{StartTS: startTS, BatchSize: 1000})
+	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
 
 	src := srcClient.Database(db)
 	require.NoError(t, src.CreateCollection(ctx, "c")) // повтор: 48
@@ -661,7 +661,7 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 
 	// сброс чекпойнта: поток перечитывается с того же StartTS поверх готовой цели
 	require.NoError(t, dstClient.Database(ckptDB).Collection(ckptColl).Drop(ctx))
-	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000})
+	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
 
 	// цель уже совпадает, поэтому сначала ждём, что повтор действительно прошёл:
 	// insert X, delete X, insert Y, update Y (update X пропущен)
@@ -677,7 +677,7 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 // провалил бы loadCheckpoint на выборе сервера.
 func TestIntegrationCheckpointReadsPrimary(t *testing.T) {
 	db := prepare(t)
-	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
@@ -697,17 +697,17 @@ func TestIntegrationCheckpointReadsPrimary(t *testing.T) {
 	t.Cleanup(func() { _ = secDst.Disconnect(context.Background()) })
 
 	// без StartTS: Run обязан прочитать чекпойнт, иначе вернёт ErrNoStartPoint
-	rn2 := startOn(t, New(srcClient, secDst, Config{BatchSize: 1000}))
+	rn2 := startOn(t, New(srcClient, secDst, Config{BatchSize: 1000, DB: db}))
 	_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 	require.NoError(t, err)
 	rn2.waitSame(db)
 }
 
 func TestIntegrationNoStartPoint(t *testing.T) {
-	prepare(t)
+	db := prepare(t)
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
-	err := New(srcClient, dstClient, Config{BatchSize: 1000}).Run(ctx)
+	err := New(srcClient, dstClient, Config{BatchSize: 1000, DB: db}).Run(ctx)
 	require.ErrorIs(t, err, ErrNoStartPoint)
 }
 
@@ -745,13 +745,13 @@ func TestIntegrationWriteError(t *testing.T) {
 	}
 
 	// пачка из одной операции: первый документ записан и закоммичен, второй — нет
-	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1})
+	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1, DB: db})
 	require.ErrorContains(t, err, "bulk write в "+db+".c")
 	assert.True(t, mongo.IsDuplicateKeyError(err), "%v", err)
 	assert.EqualValues(t, 1, r.Applied())
 
 	// с чекпойнта снова упираемся во второй документ: чекпойнт его не прошёл
-	r, err = runErr(t, Config{BatchSize: 1000})
+	r, err = runErr(t, Config{BatchSize: 1000, DB: db})
 	assert.True(t, mongo.IsDuplicateKeyError(err), "%v", err)
 	assert.EqualValues(t, 0, r.Applied())
 
@@ -789,43 +789,13 @@ func TestIntegrationDDLError(t *testing.T) {
 	require.NoError(t, err)
 
 	// DML перед DDL записан и закоммичен, сам DDL — нет
-	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000})
+	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
 	require.ErrorContains(t, err, "createIndexes "+db+".c")
 	assert.EqualValues(t, 1, r.Applied())
 
-	r, err = runErr(t, Config{BatchSize: 1000})
+	r, err = runErr(t, Config{BatchSize: 1000, DB: db})
 	require.ErrorContains(t, err, "createIndexes "+db+".c")
 	assert.EqualValues(t, 0, r.Applied())
-}
-
-// Без событий в реплицируемых базах чекпойнт всё равно двигается, а события
-// служебных баз отфильтровываются.
-func TestIntegrationIdleCheckpoint(t *testing.T) {
-	prepare(t)
-	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
-	defer cancel()
-
-	// _replicator на источнике — исключённая база; удаляется после остановки репликатора
-	excluded := srcClient.Database(ckptDB).Collection("it_excluded")
-	t.Cleanup(func() {
-		require.NoError(t, srcClient.Database(ckptDB).Drop(context.Background()))
-		lastSrcSec = srcOpTime(t).T
-	})
-
-	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
-	rn.waitQuiet()
-	tok := rn.ckptToken()
-
-	_, err := excluded.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
-	require.NoError(t, err)
-	require.Eventually(t, func() bool { return !bytes.Equal(rn.ckptToken(), tok) }, waitTimeout, pollEvery,
-		"чекпойнт не двигается на простое")
-	rn.waitQuiet()
-
-	assert.EqualValues(t, 0, rn.r.Applied())
-	names, err := dstClient.Database(ckptDB).ListCollectionNames(ctx, bson.M{"name": "it_excluded"})
-	require.NoError(t, err)
-	assert.Empty(t, names, "событие исключённой базы применено на цели")
 }
 
 // renameColl переименовывает коллекцию на источнике с dropTarget, как mongosh renameCollection(to, true).
@@ -865,9 +835,7 @@ func dbExists(ctx context.Context, t *testing.T, c *mongo.Client, db string) boo
 
 func TestIntegrationDDL(t *testing.T) {
 	db := prepare(t)
-	other := db + "_other" // для dropDatabase
-	cleanDB(t, other)
-	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*waitTimeout)
 	defer cancel()
@@ -946,18 +914,7 @@ func TestIntegrationDDL(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, src.Collection("tmp").Drop(ctx))
 
-	// dropDatabase отдельной базы: сначала убеждаемся, что она доехала до цели
-	for _, coll := range []string{"x", "y"} {
-		_, err = srcClient.Database(other).Collection(coll).InsertOne(ctx, bson.D{{Key: "_id", Value: coll}})
-		require.NoError(t, err)
-	}
-	rn.waitSame(other)
-	require.True(t, dbExists(ctx, t, dstClient, other))
-	require.NoError(t, srcClient.Database(other).Drop(ctx))
-
 	rn.waitSame(db)
-	require.Eventually(t, func() bool { return !dbExists(ctx, t, dstClient, other) }, waitTimeout, pollEvery,
-		"база %s не удалена на цели", other)
 
 	colls, err := dstClient.Database(db).ListCollectionNames(ctx, bson.D{})
 	require.NoError(t, err)
@@ -1058,41 +1015,25 @@ func TestIntegrationSingleDBResume(t *testing.T) {
 	assert.Equal(t, db, rn2.ckptDB())
 }
 
-// Чекпойнт другой базы или другого режима: Run отказывается стартовать.
+// Чекпойнт другой базы: Run отказывается стартовать.
 // Токен произвольный: проверка идёт до открытия потока.
 func TestIntegrationDBMismatch(t *testing.T) {
 	prepare(t)
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
 
-	writeCkpt := func(db string) {
-		_, err := dstClient.Database(ckptDB).Collection(ckptColl).ReplaceOne(ctx,
-			bson.M{"_id": ckptID},
-			bson.M{"_id": ckptID, "token": bson.M{"_data": "00"}, "db": db},
-			options.Replace().SetUpsert(true))
-		require.NoError(t, err)
-	}
-
-	writeCkpt("it_mismatch_a")
-	for _, want := range []string{"", "it_mismatch_b"} {
-		_, err := runErr(t, Config{BatchSize: 1000, DB: want})
-		require.ErrorIs(t, err, ErrDBMismatch, "DB %q", want)
-	}
-
-	writeCkpt("")
-	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
-	require.ErrorIs(t, err, ErrDBMismatch)
-
-	// чекпойнт версии до --db: поля db нет, это режим всех баз
-	_, err = dstClient.Database(ckptDB).Collection(ckptColl).ReplaceOne(ctx,
-		bson.M{"_id": ckptID}, bson.M{"_id": ckptID, "token": bson.M{"_data": "00"}},
+	_, err := dstClient.Database(ckptDB).Collection(ckptColl).ReplaceOne(ctx,
+		bson.M{"_id": ckptID},
+		bson.M{"_id": ckptID, "token": bson.M{"_data": "00"}, "db": "it_mismatch_a"},
 		options.Replace().SetUpsert(true))
 	require.NoError(t, err)
-	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
+
+	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_b"})
 	require.ErrorIs(t, err, ErrDBMismatch)
-	_, err = runErr(t, Config{BatchSize: 1000})
+
+	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
 	require.Error(t, err)
-	assert.NotErrorIs(t, err, ErrDBMismatch, "чекпойнт без db принят не за режим всех баз")
+	assert.NotErrorIs(t, err, ErrDBMismatch)
 	assert.ErrorContains(t, err, "открытие change stream", "чекпойнт прочитан, сервер отверг токен-заглушку")
 }
 
@@ -1250,7 +1191,7 @@ func TestIntegrationSingleDBCrossDBRename(t *testing.T) {
 
 func TestIntegrationUnsupportedDDL(t *testing.T) {
 	db := prepare(t)
-	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
@@ -1302,7 +1243,7 @@ func TestIntegrationUnsupportedDDL(t *testing.T) {
 // Окно между applyDDL и saveToken отсюда не поймать.
 func TestIntegrationRestartAfterDDL(t *testing.T) {
 	db := prepare(t)
-	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000})
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
@@ -1324,7 +1265,7 @@ func TestIntegrationRestartAfterDDL(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	rn2 := start(t, Config{BatchSize: 1000})
+	rn2 := start(t, Config{BatchSize: 1000, DB: db})
 	rn2.waitSame(db)
 	rn2.waitQuiet()
 	assert.EqualValues(t, n, rn2.r.Applied())
@@ -1358,7 +1299,7 @@ func TestLimitationUpdateLookupAfterRename(t *testing.T) {
 	require.NoError(t, err)
 	renameColl(ctx, t, db, "a", "b")
 
-	rn := start(t, Config{StartTS: startTS, BatchSize: 1000})
+	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
 	rn.waitQuiet()
 	ok, diff := same(db)
 	assert.True(t, ok, "на цели в b старая версия x: %s", diff)
@@ -1403,7 +1344,7 @@ func TestLimitationRenameInCatchUpWindow(t *testing.T) {
 	ok, diff := same(db)
 	require.True(t, ok, "дамп: %s", diff)
 
-	rn := start(t, Config{StartTS: startTS, BatchSize: 1000})
+	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
 	rn.waitQuiet()
 	ok, diff = same(db)
 	assert.True(t, ok, "документы 0..2 в b уничтожены повтором rename: %s", diff)

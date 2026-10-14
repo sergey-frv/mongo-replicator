@@ -36,8 +36,7 @@ type options struct {
 	StartTS   uint32 `long:"start-ts" env:"START_TS" default:"0" description:"unix-сек, с которых читать поток при отсутствии чекпойнта (раньше начала полного дампа)"`
 	BatchSize int    `long:"batch" env:"BATCH_SIZE" default:"1000" description:"максимум операций в одной пачке записи"`
 	Debug     bool   `long:"dbg" env:"DEBUG" description:"Debug mode"`
-	DB        string `long:"db" env:"DB" description:"реплицировать только эту базу: поток уровня базы, права на источнике — только на неё. Rename коллекций внутри базы поддерживается, перенос коллекций между базами не предусмотрен"`
-	AllDBs    bool   `long:"all-dbs" env:"ALL_DBS" description:"реплицировать все базы, кроме служебных (нужна readAnyDatabase на источнике)"`
+	DB        string `long:"db" env:"DB" required:"true" description:"база источника: поток уровня базы, права на источнике — только на неё. Rename коллекций внутри базы поддерживается, перенос коллекций между базами не предусмотрен"`
 }
 
 var revision = "unknown"
@@ -100,21 +99,12 @@ func parseOpts(args []string) (options, error) {
 	if opts.BatchSize < 1 || opts.BatchSize > math.MaxInt32 {
 		return opts, fmt.Errorf("--batch должен быть от 1 до %d, получено %d", math.MaxInt32, opts.BatchSize)
 	}
-	// режим всех баз — только явно, чтобы не запустить его случайно. go-flags
-	// читает пустую bool-переменную как true: ALL_DBS= из шаблона деплоя
-	// включил бы все базы.
-	if v, ok := os.LookupEnv("ALL_DBS"); ok && v == "" {
-		return opts, errors.New("ALL_DBS задан пустым: укажите true/false или уберите переменную")
+	// DB= из env go-flags считает заданной опцией
+	if opts.DB == "" {
+		return opts, errors.New("--db не может быть пустой")
 	}
-	switch {
-	case opts.DB == "" && !opts.AllDBs:
-		return opts, errors.New("укажите --db <база> или --all-dbs")
-	case opts.DB != "" && opts.AllDBs:
-		return opts, errors.New("--db и --all-dbs взаимоисключающие")
-	case opts.DB != "":
-		if err := checkDBName(opts.DB); err != nil {
-			return opts, err
-		}
+	if err := checkDBName(opts.DB); err != nil {
+		return opts, err
 	}
 	return opts, nil
 }
@@ -191,7 +181,7 @@ func hint(err error) string {
 	case errors.Is(err, replicator.ErrNoStartPoint):
 		return "задайте --start-ts"
 	case errors.Is(err, replicator.ErrDBMismatch):
-		return "чекпойнт на цели записан для другой базы: верните прежние --db/--all-dbs " +
+		return "чекпойнт на цели записан для другой базы: верните прежнюю --db " +
 			"или остановите репликатор, удалите чекпойнт и залейте цель заново; " +
 			"если на эту цель пишет второй экземпляр — у каждого должна быть своя цель"
 	case errors.Is(err, replicator.ErrStreamInvalidated):

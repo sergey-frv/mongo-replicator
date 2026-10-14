@@ -58,10 +58,10 @@ func TestFlagGiven(t *testing.T) {
 		args []string
 		want bool
 	}{
-		{"--src x", []string{"--src", "x", "--all-dbs"}, true},
+		{"--src x", []string{"--src", "x", "--db", "a"}, true},
 		{"--src=x", []string{"--dst", "d", "--src=x"}, true},
 		{"нет аргументов (только env)", nil, false},
-		{"другие опции", []string{"--dst", "d", "--all-dbs"}, false},
+		{"другие опции", []string{"--dst", "d", "--db", "a"}, false},
 		{"--srcfoo", []string{"--srcfoo", "x"}, false},
 		{"значение другой опции через =", []string{"--db=--src"}, false},
 		{"после --", []string{"--dst", "d", "--", "--src"}, false},

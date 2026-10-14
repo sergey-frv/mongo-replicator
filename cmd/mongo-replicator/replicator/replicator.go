@@ -26,8 +26,7 @@ import (
 // ErrNoStartPoint — на цели нет чекпойнта и StartTS не задан: неизвестно, откуда читать поток.
 var ErrNoStartPoint = errors.New("чекпойнта нет и start-ts не задан: неизвестно, откуда читать")
 
-// ErrDBMismatch — чекпойнт на цели записан для другой базы (или другого режима),
-// чем задана: продолжать с него значило бы тихо разойтись с источником.
+// ErrDBMismatch — чекпойнт на цели записан для другой базы, чем задана: продолжать с него значило бы тихо разойтись с источником.
 var ErrDBMismatch = errors.New("чекпойнт записан для другой базы")
 
 // ErrStreamInvalidated — поток закрыт сервером событием invalidate (dropDatabase
@@ -41,7 +40,7 @@ var SystemDBs = []string{"admin", "config", "local", ckptDB}
 type Config struct {
 	StartTS   uint32 // unix-сек, старт при отсутствии чекпойнта
 	BatchSize int    // максимум операций в одной пачке записи
-	DB        string // "" — все базы, кроме служебных
+	DB        string // база источника
 }
 
 // Replicator переносит изменения из src в dst.
@@ -84,18 +83,7 @@ func (r *Replicator) flush(ctx context.Context) error {
 	return nil
 }
 
-// streamPipeline — pipeline потока. Поток уровня кластера (db == "") отсекает
-// служебные базы; поток уровня базы сервер сам ограничивает этой базой.
-func streamPipeline(db string) mongo.Pipeline {
-	if db != "" {
-		return mongo.Pipeline{}
-	}
-	return mongo.Pipeline{{{Key: "$match", Value: bson.M{
-		"ns.db": bson.M{"$nin": SystemDBs},
-	}}}}
-}
-
-// checkDB сверяет базу чекпойнта с заданной; "" — все базы.
+// checkDB сверяет базу чекпойнта с заданной.
 func checkDB(saved, want string) error {
 	if saved != want {
 		return fmt.Errorf("%w: в чекпойнте %q, задано %q", ErrDBMismatch, saved, want)
@@ -106,6 +94,9 @@ func checkDB(saved, want string) error {
 // Run открывает поток и работает до ошибки или отмены контекста.
 // Несохранённый хвост прошлого запуска отбрасывается: его перечитаем с чекпойнта.
 func (r *Replicator) Run(ctx context.Context) error {
+	if r.cfg.DB == "" {
+		return errors.New("не задана база источника")
+	}
 	r.pending = batch{}
 	// и при ошибке: если Run раз за разом падает, лаг в логе всё равно растёт
 	defer r.logProgress(ctx)
@@ -137,16 +128,9 @@ func (r *Replicator) Run(ctx context.Context) error {
 		return ErrNoStartPoint
 	}
 
-	// Поток уровня базы требует прав только на неё, уровня кластера — на все базы.
-	pipeline := streamPipeline(r.cfg.DB)
-	var cs *mongo.ChangeStream
-	if r.cfg.DB == "" {
-		log.Info().Str("db", "all").Msg("открываю поток уровня кластера")
-		cs, err = r.src.Watch(ctx, pipeline, opts)
-	} else {
-		log.Info().Str("db", r.cfg.DB).Msg("открываю поток уровня базы")
-		cs, err = r.src.Database(r.cfg.DB).Watch(ctx, pipeline, opts)
-	}
+	// Поток уровня базы требует прав только на неё.
+	log.Info().Str("db", r.cfg.DB).Msg("открываю поток уровня базы")
+	cs, err := r.src.Database(r.cfg.DB).Watch(ctx, mongo.Pipeline{}, opts)
 	if err != nil {
 		return fmt.Errorf("открытие change stream: %w", err)
 	}

@@ -152,13 +152,13 @@ type Config struct {
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 - Modify: `Makefile`, `docker-compose.yml` (если там `ALL_DBS`)
 
-- [ ] `--db` обязательна; удалить `AllDBs`, правило «ровно одно из», ветку потока уровня кластера и `$nin`-pipeline (`streamPipeline`); `Run` всегда `src.Database(cfg.DB).Watch`, пустой `DB` → ошибка
-- [ ] устаревшие тексты: подсказка `ErrDBMismatch` без `--all-dbs`; комментарии `Config.DB`/`checkpoint.DB` («"" — все базы»); `Makefile` `run` → `--db test`, комментарий к `-p 1`
-- [ ] `main_test.go`: `clearEnv` без `ALL_DBS`; `TestParseOptsEnv`/`Defaults`/`FlagsOverrideEnv` — на `--db`, ожидаемые `options` с `DB`; удалить/переписать `TestParseOptsMode`; `TestParseOptsHelp` — без `--all-dbs`; новые случаи: без `--db` → ошибка, `DB=` → ошибка, `--all-dbs` → неизвестная опция
-- [ ] `credentials_test.go` `TestFlagGiven`: заменить токен `--all-dbs` на существующий
-- [ ] `replicator_test.go`: удалить тесты `streamPipeline`
-- [ ] интеграционные: все `Config{...}` без `DB` → `Config{DB: db, ...}`; `TestIntegrationDDL` — убрать часть с базой `other` (`waitSame(other)`, `dropDatabase other`); `TestIntegrationDBMismatch` — убрать случаи `""`/все базы и «чекпойнт без db»; `TestIntegrationIdleCheckpoint` — адаптировать к потоку уровня базы (позиция двигается от записей в другую базу) или удалить, если дублирует `TestIntegrationLagPosition`
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] `--db` обязательна; удалить `AllDBs`, правило «ровно одно из», ветку потока уровня кластера и `$nin`-pipeline (`streamPipeline`); `Run` всегда `src.Database(cfg.DB).Watch`, пустой `DB` → ошибка
+- [x] устаревшие тексты: подсказка `ErrDBMismatch` без `--all-dbs`; комментарии `Config.DB`/`checkpoint.DB` («"" — все базы»); `Makefile` `run` → `--db test`, комментарий к `-p 1`
+- [x] `main_test.go`: `clearEnv` без `ALL_DBS`; `TestParseOptsEnv`/`Defaults`/`FlagsOverrideEnv` — на `--db`, ожидаемые `options` с `DB`; удалить/переписать `TestParseOptsMode`; `TestParseOptsHelp` — без `--all-dbs`; новые случаи: без `--db` → ошибка, `DB=` → ошибка, `--all-dbs` → неизвестная опция
+- [x] `credentials_test.go` `TestFlagGiven`: заменить токен `--all-dbs` на существующий
+- [x] `replicator_test.go`: удалить тесты `streamPipeline`
+- [x] интеграционные: все `Config{...}` без `DB` → `Config{DB: db, ...}`; `TestIntegrationDDL` — убрать часть с базой `other` (`waitSame(other)`, `dropDatabase other`); `TestIntegrationDBMismatch` — убрать случаи `""`/все базы и «чекпойнт без db»; `TestIntegrationIdleCheckpoint` — адаптировать к потоку уровня базы (позиция двигается от записей в другую базу) или удалить, если дублирует `TestIntegrationLagPosition` (удалён: дублирует `LagPosition`)
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
 
 ### Task 2: `--dst-db` и сопоставление на цели
 
