@@ -131,16 +131,16 @@ func setupLog(opts options) (*os.File, error)
 - Modify: `cmd/mongo-replicator/main.go`
 - Create: `cmd/mongo-replicator/log_test.go`
 
-- [ ] `newLogger` и `setupLog(opts) (*os.File, error)` по Technical Details; строка «лог» в `setupLog`; `main`: ошибка `setupLog` → stderr + exit 2
-- [ ] write tests `newLogger` (буферы вместо stdout/файла, `t.Cleanup` восстанавливает `log.Logger`):
+- [x] `newLogger` и `setupLog(opts) (*os.File, error)` по Technical Details; строка «лог» в `setupLog`; `main`: ошибка `setupLog` → stderr + exit 2
+- [x] write tests `newLogger` (буферы вместо stdout/файла, `t.Cleanup` восстанавливает `log.Logger`):
   - `consoleTTY=true` → консоль — текст: содержит `INF` и сообщение, **не** содержит `m=`, `l=`, `t=` (иначе имена полей рассинхронизированы с `ConsoleWriter`); событие `.Err(...)` даёт `e=` с текстом ошибки и уровень `ERR`
   - `consoleTTY=false` → консоль — JSON с полями `m`, `l`, `t`; у ошибки — `e`
   - файл — всегда JSON с `m`, `l`, `t`
   - консоль `info`, файл `debug` → DEBUG только в файле, INFO в обоих
   - консоль `debug`, файл `warn` → INFO только в консоли, WARN в обоих
   - `file == nil` → пишется только консоль, без паники
-- [ ] write tests `setupLog` (`t.TempDir`, файл закрывается в `t.Cleanup`): каталог не существует → ошибка; существующий файл с содержимым → старое содержимое на месте, новые строки дописаны JSON-ом, среди них «лог» с `console`, `file`, `file_level`; без `--log-file` → возвращается `nil`, файл не создаётся
-- [ ] `make test` и `make lint` — должно пройти
+- [x] write tests `setupLog` (`t.TempDir`, файл закрывается в `t.Cleanup`): каталог не существует → ошибка; существующий файл с содержимым → старое содержимое на месте, новые строки дописаны JSON-ом, среди них «лог» с `console`, `file`, `file_level`; без `--log-file` → возвращается `nil`, файл не создаётся
+- [x] `make test` и `make lint` — должно пройти
 
 ### Task 3: Makefile и README
 

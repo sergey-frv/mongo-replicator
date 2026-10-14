@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	mongoopts "go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
+	"golang.org/x/term"
 
 	"mongo-replicator/cmd/mongo-replicator/replicator"
 )
@@ -65,7 +67,10 @@ func main() {
 		os.Exit(2)
 	}
 
-	setupLog(opts.LogLevel == "debug")
+	if _, err = setupLog(opts); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	log.Info().Str("revision", revision).Send()
 	if len(opts.ApplyDrops) > 0 {
@@ -403,21 +408,68 @@ func logURI(uri string) string {
 	return "(скрыт: в нём может быть пароль)"
 }
 
-func setupLog(debug bool) {
-	if debug {
-		// В дебаге выводим плоские строки
-		cw := zerolog.ConsoleWriter{Out: os.Stdout}
-		log.Logger = zerolog.New(cw).With().Timestamp().Logger()
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-		return
-	}
+// logLevels — значения --log-level и --log-file-level (choice уже проверен go-flags);
+// не zerolog.ParseLevel: тот принимает "1", "INFO", "trace"
+var logLevels = map[string]zerolog.Level{
+	"debug": zerolog.DebugLevel,
+	"info":  zerolog.InfoLevel,
+	"warn":  zerolog.WarnLevel,
+	"error": zerolog.ErrorLevel,
+}
 
-	// Иначе логируем в stdout в json'е; время нужно для оценки лага в долгоживущем процессе
-	log.Logger = zerolog.New(os.Stdout).With().Timestamp().Logger()
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
-
+// newLogger собирает логгер из двух приёмников; file == nil — только консоль.
+// Выставляет короткие имена полей zerolog.
+func newLogger(console io.Writer, consoleTTY bool, consoleLevel zerolog.Level,
+	file io.Writer, fileLevel zerolog.Level,
+) zerolog.Logger {
+	// ConsoleWriter читает имена полей в момент записи, так что они общие для обоих приёмников
 	zerolog.MessageFieldName = "m"
 	zerolog.ErrorFieldName = "e"
 	zerolog.LevelFieldName = "l"
 	zerolog.TimestampFieldName = "t"
+
+	// в терминале — текст для человека, при перенаправлении — JSON
+	if consoleTTY {
+		console = zerolog.ConsoleWriter{Out: console, TimeFormat: time.RFC3339}
+	}
+	cons := &zerolog.FilteredLevelWriter{Writer: zerolog.LevelWriterAdapter{Writer: console}, Level: consoleLevel}
+	if file == nil {
+		return zerolog.New(cons).Level(consoleLevel).With().Timestamp().Logger()
+	}
+
+	fileW := &zerolog.FilteredLevelWriter{Writer: zerolog.LevelWriterAdapter{Writer: file}, Level: fileLevel}
+	return zerolog.New(zerolog.MultiLevelWriter(cons, fileW)).
+		Level(min(consoleLevel, fileLevel)).With().Timestamp().Logger()
+}
+
+// setupLog открывает файл (если задан), определяет TTY stdout, ставит log.Logger
+// и пишет строку «лог». Возвращает открытый файл (nil без --log-file).
+// Запись без буфера: os.Exit и сигналы ничего не теряют, Sync не нужен.
+func setupLog(opts options) (*os.File, error) {
+	var (
+		f    *os.File
+		file io.Writer // только после успешного открытия: typed-nil *os.File не равен nil
+	)
+	if opts.LogFile != "" {
+		var err error
+		f, err = os.OpenFile(opts.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640) //nolint:gosec // путь и права задаёт оператор (--log-file), группе — чтение
+		if err != nil {
+			return nil, fmt.Errorf("открыть файл лога: %w", err)
+		}
+		file = f
+	}
+
+	tty := term.IsTerminal(int(os.Stdout.Fd())) //nolint:gosec // дескриптор stdout помещается в int
+	log.Logger = newLogger(os.Stdout, tty, logLevels[opts.LogLevel], file, logLevels[opts.LogFileLevel])
+
+	format := "json"
+	if tty {
+		format = "text"
+	}
+	ev := log.Info().Str("console", opts.LogLevel+"/"+format).Str("file", opts.LogFile)
+	if f != nil {
+		ev = ev.Str("file_level", opts.LogFileLevel)
+	}
+	ev.Msg("лог")
+	return f, nil
 }
