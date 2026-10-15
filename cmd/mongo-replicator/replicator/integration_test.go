@@ -40,7 +40,7 @@ const (
 
 var (
 	srcClient, dstClient *mongo.Client
-	dstURI               string
+	srcURI, dstURI       string
 	// секунда последней операции на источнике, сделанной обвязкой предыдущего
 	// теста (или prepare текущего); srcNow ждёт, пока время уйдёт дальше
 	lastSrcSec uint32
@@ -49,7 +49,7 @@ var (
 func TestMain(m *testing.M) {
 	// свои переменные, а не SRC_URI/DST_URI: тесты удаляют чекпойнт и базы,
 	// и шелл с загруженным .env не должен направить их на рабочие кластеры
-	srcURI := os.Getenv("IT_SRC_URI")
+	srcURI = os.Getenv("IT_SRC_URI")
 	dstURI = os.Getenv("IT_DST_URI")
 	if srcURI == "" || dstURI == "" {
 		log.Fatal("IT_SRC_URI и IT_DST_URI не заданы: интеграционные тесты запускаются через make test-integration")
@@ -1233,6 +1233,46 @@ func TestIntegrationTwoProcessesOneTarget(t *testing.T) {
 		ids = append(ids, d.ID)
 	}
 	assert.Equal(t, []string{dbA, dbB}, ids, "по документу чекпойнта на базу цели")
+}
+
+// Трафик считается через диалеры клиентов: поток источника отдаёт fullDocument
+// каждой вставки, а запись на цель отправляет его же — оба счётчика не меньше
+// суммарного размера документов. Оценка верна без compressors в URI: со сжатием
+// байт по сети может быть меньше bsonsize.
+func TestIntegrationTraffic(t *testing.T) {
+	db := prepare(t)
+
+	tr := &Traffic{}
+	src, err := connectIT(options.Client().ApplyURI(srcURI).SetDialer(tr.SrcDialer()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = src.Disconnect(context.Background()) })
+	dst, err := connectIT(options.Client().ApplyURI(dstURI).
+		SetWriteConcern(writeconcern.Majority()).SetDialer(tr.DstDialer()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = dst.Disconnect(context.Background()) })
+
+	r := New(src, dst, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db, Traffic: tr})
+	r.leaseTTL, r.leaseRenew = itLeaseTTL, itLeaseRenew
+	rn := startOn(t, r)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	var size uint64
+	for i := range 20 {
+		doc := bson.D{{Key: "_id", Value: int32(i)}, {Key: "pad", Value: strings.Repeat("x", 10_000)}}
+		raw, err := bson.Marshal(doc)
+		require.NoError(t, err)
+		size += uint64(len(raw))
+		_, err = srcClient.Database(db).Collection("items").InsertOne(ctx, doc)
+		require.NoError(t, err)
+	}
+	rn.waitSame(db)
+
+	got := tr.Snapshot()
+	assert.GreaterOrEqual(t, got.SrcIn, size, "поток отдал все документы")
+	assert.GreaterOrEqual(t, got.DstOut, size, "запись отправила все документы")
+	assert.Positive(t, got.SrcOut)
+	assert.Positive(t, got.DstIn)
 }
 
 // leaseState — аренда и позиция из документа чекпойнта.

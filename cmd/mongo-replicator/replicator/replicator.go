@@ -52,6 +52,7 @@ type Config struct {
 	DB         string   // база источника
 	DstDB      string   // база цели; New: пусто — как DB
 	ApplyDrops []string // namespace источника (<DB>.<коллекция>), drop которых разрешён
+	Traffic    *Traffic // счётчики байт клиентов (их диалеры); nil — трафик не учитывается
 }
 
 // Replicator переносит изменения из src в dst.
@@ -72,8 +73,9 @@ type Replicator struct {
 	appliedTS bson.Timestamp // время последнего сохранённого токена: всё до него на цели
 
 	// лог прогресса переживает перезапуски Run: при ретраях лаг тоже виден
-	lastLog time.Time
-	lastN   int64
+	lastLog     time.Time
+	lastN       int64
+	lastTraffic TrafficInfo
 
 	owner      string        // владелец аренды базы цели (newOwner): один на экземпляр, и для повторных Run
 	leaseTTL   time.Duration // срок аренды
@@ -93,7 +95,8 @@ func New(src, dst *mongo.Client, cfg Config) *Replicator {
 		applyDrops[ns] = true
 	}
 	return &Replicator{
-		src: src, dst: dst, cfg: cfg, applyDrops: applyDrops, lastLog: time.Now(),
+		src: src, dst: dst, cfg: cfg, applyDrops: applyDrops,
+		lastLog: time.Now(), lastTraffic: cfg.Traffic.Snapshot(),
 		owner: newOwner(), leaseTTL: defaultLeaseTTL, leaseRenew: defaultLeaseRenew,
 	}
 }
@@ -318,9 +321,13 @@ func (r *Replicator) logProgress(ctx context.Context) {
 		return
 	}
 	n, prevN := r.applied.Load(), r.lastN
-	r.lastLog, r.lastN = time.Now(), n
+	tr, prevTr := r.cfg.Traffic.Snapshot(), r.lastTraffic
+	r.lastLog, r.lastN, r.lastTraffic = time.Now(), n, tr
 	e := log.Info().Int64("applied", n).
 		Float64("rate", math.Round(float64(n-prevN)/elapsed.Seconds()*10)/10)
+	if r.cfg.Traffic != nil {
+		e = trafficFields(e, tr, prevTr, elapsed)
+	}
 	// ещё ничего не сохранено — лаг неизвестен, ping не нужен
 	if !r.appliedTS.IsZero() {
 		e = e.Time("applied_at", time.Unix(int64(r.appliedTS.T), 0).UTC())

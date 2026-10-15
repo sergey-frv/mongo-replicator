@@ -216,11 +216,11 @@ func (r *Replicator) SetRetry(n int, err error)   // из цикла повто�
 - Modify: `cmd/mongo-replicator/main.go`
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] `Traffic`, `countingConn`, `SrcDialer()`/`DstDialer()`; `Config.Traffic`; диалеры в `main` до `connect`
-- [ ] строка `прогресс`: `src_in`…`dst_out` и `*_bps`; INFO `трафик` при выходе (`main`, после `Release`)
-- [ ] write unit tests: TCP-слушатель на `127.0.0.1`, через `countingConn` отправить N и получить M байт → `out == N`, `in == M` для обоих диалеров; частичная запись/чтение с ошибкой — `n` учтён, ошибка не обёрнута (`errors.As` на `net.Error`); `Dial` на закрытый порт — ошибка, счётчики 0
-- [ ] write integration test: свои клиенты с `SetDialer(tr.SrcDialer())`/`DstDialer()` (общие из `TestMain` без диалера), закрываются в cleanup; после DML `SrcIn`/`DstOut` > 0 и `SrcIn` ≥ суммы `bsonsize` записанных документов (комментарий: оценка верна без `compressors` в URI)
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] `Traffic`, `countingConn`, `SrcDialer()`/`DstDialer()`; `Config.Traffic`; диалеры в `main` до `connect`
+- [x] строка `прогресс`: `src_in`…`dst_out` и `*_bps`; INFO `трафик` при выходе (`main`, после `Release`)
+- [x] write unit tests: TCP-слушатель на `127.0.0.1`, через `countingConn` отправить N и получить M байт → `out == N`, `in == M` для обоих диалеров; частичная запись/чтение с ошибкой — `n` учтён, ошибка не обёрнута (`errors.As` на `net.Error`); `Dial` на закрытый порт — ошибка, счётчики 0
+- [x] write integration test: свои клиенты с `SetDialer(tr.SrcDialer())`/`DstDialer()` (общие из `TestMain` без диалера), закрываются в cleanup; после DML `SrcIn`/`DstOut` > 0 и `SrcIn` ≥ суммы `bsonsize` записанных документов (комментарий: оценка верна без `compressors` в URI)
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
 
 ### Task 5: Трафик в чекпойнте и сводка по процессам
 

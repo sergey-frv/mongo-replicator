@@ -190,6 +190,14 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// диалеры — до подключения: иначе пул и мониторинг пойдут мимо счётчиков
+	tr := &replicator.Traffic{}
+	srcOpts.SetDialer(tr.SrcDialer())
+	dstOpts.SetDialer(tr.DstDialer())
+	// первым, чтобы сработать последним: после снятия аренды и отключения клиентов
+	started := time.Now()
+	defer logTraffic(tr, started)
+
 	src, err := connect(ctx, srcOpts.SetAppName(appName))
 	if err != nil {
 		return failCode(ctx, err, "источник")
@@ -205,7 +213,7 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 
 	r := replicator.New(src, dst, replicator.Config{
 		StartTS: opts.StartTS, BatchSize: opts.BatchSize, DB: opts.DB, DstDB: opts.DstDB,
-		ApplyDrops: opts.ApplyDrops,
+		ApplyDrops: opts.ApplyDrops, Traffic: tr,
 	})
 	// на любом выходе, включая return 1 и панику: иначе база цели занята до истечения аренды
 	defer func() {
@@ -233,6 +241,14 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 	log.Info().Int64("applied", r.Applied()).
 		Msg("остановлен по сигналу; незаписанный хвост будет перечитан при следующем запуске")
 	return 0
+}
+
+// logTraffic пишет итог трафика процесса (байты с начала) при выходе.
+func logTraffic(tr *replicator.Traffic, started time.Time) {
+	t := tr.Snapshot()
+	log.Info().Uint64("src_in", t.SrcIn).Uint64("src_out", t.SrcOut).
+		Uint64("dst_in", t.DstIn).Uint64("dst_out", t.DstOut).
+		Str("uptime", time.Since(started).Round(time.Second).String()).Msg("трафик")
 }
 
 // permanent сообщает, что ретраи ошибку не исправят и нужен оператор.
