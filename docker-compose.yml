@@ -28,6 +28,10 @@ services:
       start_period: 30s
       retries: 30
 
+  # сетевые интеграционные тесты: прокси src (27001) и dst (27002) создаёт TestMain
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+
   app:
     build:
       context: .
@@ -41,11 +45,18 @@ services:
       DST_URI: mongodb://mongo-dst:27017/?replicaSet=rsdst
       IT_SRC_URI: mongodb://mongo-src:27017/?replicaSet=rs8
       IT_DST_URI: mongodb://mongo-dst:27017/?replicaSet=rsdst
+      # directConnection=true: иначе драйвер пойдёт к узлу по адресу из конфигурации replica set мимо прокси
+      IT_PROXY_API: http://toxiproxy:8474
+      IT_SRC_PROXY_URI: mongodb://toxiproxy:27001/?directConnection=true&heartbeatFrequencyMS=500&connectTimeoutMS=2000&serverSelectionTimeoutMS=2000
+      IT_DST_PROXY_URI: mongodb://toxiproxy:27002/?directConnection=true&heartbeatFrequencyMS=500&connectTimeoutMS=2000&serverSelectionTimeoutMS=2000
     depends_on:
       mongo-src:
         condition: service_healthy
       mongo-dst:
         condition: service_healthy
+      # образ без healthcheck: готовность API ждёт TestMain
+      toxiproxy:
+        condition: service_started
 
   linter:
     build:

@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode"
 
+	toxiproxy "github.com/Shopify/toxiproxy/v2/client"
 	"github.com/rs/zerolog"
 	zlog "github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -44,6 +45,9 @@ const (
 var (
 	srcClient, dstClient *mongo.Client
 	srcURI, dstURI       string
+	// сетевые тесты: прокси Toxiproxy и URI кластеров через них; без IT_PROXY_API — nil
+	srcProxy, dstProxy       *toxiproxy.Proxy
+	srcProxyURI, dstProxyURI string
 	// секунда последней операции на источнике, сделанной обвязкой предыдущего
 	// теста (или prepare текущего); srcNow ждёт, пока время уйдёт дальше
 	lastSrcSec uint32
@@ -68,11 +72,48 @@ func TestMain(m *testing.M) {
 		SetWriteConcern(writeconcern.Majority())); err != nil {
 		log.Fatalf("цель: %v", err)
 	}
+	if api := os.Getenv("IT_PROXY_API"); api != "" {
+		srcProxyURI, dstProxyURI = os.Getenv("IT_SRC_PROXY_URI"), os.Getenv("IT_DST_PROXY_URI")
+		if srcProxyURI == "" || dstProxyURI == "" {
+			log.Fatal("IT_PROXY_API задан без IT_SRC_PROXY_URI и IT_DST_PROXY_URI")
+		}
+		if srcProxy, dstProxy, err = populateProxies(api); err != nil {
+			log.Fatalf("toxiproxy: %v", err)
+		}
+	}
 
 	code := m.Run()
 	_ = srcClient.Disconnect(context.Background())
 	_ = dstClient.Disconnect(context.Background())
 	os.Exit(code)
+}
+
+// populateProxies создаёт (пересоздаёт существующие) прокси src и dst. У образа
+// нет healthcheck: API может ещё не слушать — повторяем до готовности.
+func populateProxies(api string) (src, dst *toxiproxy.Proxy, err error) {
+	cl := toxiproxy.NewClient(api)
+	cfg := []toxiproxy.Proxy{
+		{Name: "src", Listen: "0.0.0.0:27001", Upstream: "mongo-src:27017", Enabled: true},
+		{Name: "dst", Listen: "0.0.0.0:27002", Upstream: "mongo-dst:27017", Enabled: true},
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, err = cl.Populate(cfg)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return nil, nil, err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	// прокси из Populate не помечены созданными: их Enable/Disable пытаются создать
+	// прокси заново (409), поэтому берём их через Proxy
+	if src, err = cl.Proxy("src"); err != nil {
+		return nil, nil, err
+	}
+	dst, err = cl.Proxy("dst")
+	return src, dst, err
 }
 
 func connectIT(opts *options.ClientOptions) (*mongo.Client, error) {
@@ -2619,4 +2660,81 @@ func TestIntegrationStatusRetry(t *testing.T) {
 	s = r.Status()
 	assert.Equal(t, StateStopped, s.State)
 	assert.Empty(t, s.LastErr, "остановка отменой — не ошибка")
+}
+
+// netEnv — клиенты сетевого теста через прокси src и dst.
+type netEnv struct {
+	t        *testing.T
+	src, dst *mongo.Client
+	traffic  *Traffic
+}
+
+// netCase готовит сетевой тест: клиенты через Toxiproxy с диалерами Traffic.
+// Вызывать до start: cleanup (сеть восстановлена, токсики сняты, клиенты закрыты)
+// выполнится после остановки репликатора. Без Toxiproxy тест пропускается.
+func netCase(t *testing.T) *netEnv {
+	t.Helper()
+	if srcProxy == nil {
+		t.Skip("IT_PROXY_API не задан: сетевые тесты запускаются через make test-integration")
+	}
+	resetProxies(t) // остатки упавшего теста
+	nc := &netEnv{t: t, traffic: &Traffic{}}
+	var err error
+	nc.src, err = connectIT(options.Client().ApplyURI(srcProxyURI).
+		SetAppName("cs-replicator").SetDialer(nc.traffic.SrcDialer()))
+	require.NoError(t, err)
+	nc.dst, err = connectIT(options.Client().ApplyURI(dstProxyURI).
+		SetAppName("cs-replicator").SetWriteConcern(writeconcern.Majority()).
+		SetDialer(nc.traffic.DstDialer()))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		resetProxies(t)
+		_ = nc.src.Disconnect(context.Background())
+		_ = nc.dst.Disconnect(context.Background())
+	})
+	return nc
+}
+
+// resetProxies включает прокси и снимает все токсики.
+func resetProxies(t *testing.T) {
+	t.Helper()
+	for _, p := range []*toxiproxy.Proxy{srcProxy, dstProxy} {
+		require.NoError(t, p.Enable(), p.Name)
+		toxics, err := p.Toxics()
+		require.NoError(t, err, p.Name)
+		for _, tx := range toxics {
+			require.NoError(t, p.RemoveToxic(tx.Name), p.Name)
+		}
+	}
+}
+
+// newIT — репликатор на клиентах через прокси с короткой арендой; трафик считает nc.traffic.
+func (nc *netEnv) newIT(cfg Config) *Replicator {
+	cfg.Traffic = nc.traffic
+	r := New(nc.src, nc.dst, cfg)
+	r.leaseTTL, r.leaseRenew, r.stateEvery = itLeaseTTL, itLeaseRenew, itStateEvery
+	return r
+}
+
+// Через прокси репликация работает: DML доезжает, трафик идёт через диалеры клиентов прокси.
+func TestIntegrationNetProxy(t *testing.T) {
+	db := prepare(t)
+	nc := netCase(t)
+	rn := startOn(t, nc.newIT(Config{StartTS: srcNow(t), BatchSize: 1000, DB: db}))
+
+	size := insertPadded(t, db, 20)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	items := srcClient.Database(db).Collection("items")
+	_, err := items.UpdateOne(ctx, bson.M{"_id": 1}, bson.D{{Key: "$set", Value: bson.D{{Key: "pad", Value: "y"}}}})
+	require.NoError(t, err)
+	_, err = items.DeleteOne(ctx, bson.M{"_id": 2})
+	require.NoError(t, err)
+	rn.waitSame(db)
+
+	got := nc.traffic.Snapshot()
+	assert.GreaterOrEqual(t, got.SrcIn, size, "поток отдал все документы через прокси")
+	assert.GreaterOrEqual(t, got.DstOut, size, "запись отправила все документы через прокси")
+	assert.Positive(t, got.SrcOut)
+	assert.Positive(t, got.DstIn)
 }

@@ -211,11 +211,12 @@ var streamPipeline = mongo.Pipeline{
 - Modify: `go.mod`, `go.sum`, `vendor/`
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] сервис `toxiproxy` (`ghcr.io/shopify/toxiproxy:2.12.0`), `depends_on` у `app`, env `IT_PROXY_API`, `IT_SRC_PROXY_URI`, `IT_DST_PROXY_URI` (Technical Details)
-- [ ] сначала код с импортом `github.com/Shopify/toxiproxy/v2/client`, затем `go get github.com/Shopify/toxiproxy/v2@v2.12.0 && go mod tidy && go mod vendor`; проверить, что директива `go` в `go.mod` осталась 1.26
-- [ ] `TestMain`: `Populate` с повтором до готовности; `netCase(t)` с клиентами через прокси, диалерами `Traffic` и `t.Cleanup`
-- [ ] write integration test-sanity: через прокси репликация работает (DML доезжает), `Traffic` растёт
-- [ ] `make test-integration`, `make lint` — должно пройти
+- [x] сервис `toxiproxy` (`ghcr.io/shopify/toxiproxy:2.12.0`), `depends_on` у `app`, env `IT_PROXY_API`, `IT_SRC_PROXY_URI`, `IT_DST_PROXY_URI` (Technical Details)
+- [x] сначала код с импортом `github.com/Shopify/toxiproxy/v2/client`, затем `go get github.com/Shopify/toxiproxy/v2@v2.12.0 && go mod tidy && go mod vendor`; проверить, что директива `go` в `go.mod` осталась 1.26
+- [x] `TestMain`: `Populate` с повтором до готовности; `netCase(t)` с клиентами через прокси, диалерами `Traffic` и `t.Cleanup`
+- [x] write integration test-sanity: через прокси репликация работает (DML доезжает), `Traffic` растёт
+- [x] `make test-integration`, `make lint` — должно пройти
+- ➕ прокси из `Populate` не помечены клиентом как созданные (`Enable`/`Disable` → 409 «proxy already exists»): `populateProxies` после `Populate` берёт их через `Proxy(name)`; сетевой sanity-тест — `TestIntegrationNetProxy`
 
 ### Task 6: Сетевые сценарии
 

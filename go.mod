@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	charm.land/bubbletea/v2 v2.1.0
 	charm.land/lipgloss/v2 v2.0.6
+	github.com/Shopify/toxiproxy/v2 v2.12.0
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
