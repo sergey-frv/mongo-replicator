@@ -97,15 +97,6 @@ func stateFileName(dstDB, key string) string {
 	return dstDB + "." + hex.EncodeToString(sum[:4]) + ".json"
 }
 
-// readState читает файл состояния; файла нет — нулевое состояние без ошибки.
-func readState(path string) (state, error) {
-	s, err := loadState(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return state{}, nil
-	}
-	return s, err
-}
-
 // loadState читает файл состояния; отсутствие файла — ошибка fs.ErrNotExist.
 func loadState(path string) (state, error) {
 	b, err := os.ReadFile(path) //nolint:gosec // путь из --state-dir
@@ -183,16 +174,21 @@ func moveAside(path, reason string) (string, error) {
 
 // machineTraffic суммирует трафик по файлам *.json каталога; нечитаемые файлы
 // пропускаются с WARN, исчезнувшие после листинга — молча. Активный — обновлённый
-// не раньше stateActiveFor до now.
+// не раньше stateActiveFor до now. Листинг — ReadDir, не Glob: "[", "*" и "?"
+// в пути каталога Glob понял бы как шаблон.
 func machineTraffic(dir string, now time.Time) (MachineTraffic, error) {
-	paths, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return MachineTraffic{}, fmt.Errorf("сводка трафика: %w", err)
 	}
 	mt := MachineTraffic{At: now}
-	for _, p := range paths {
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
 		s, err := loadState(p)
-		if errors.Is(err, fs.ErrNotExist) { // удалён или перенесён в сторону после Glob
+		if errors.Is(err, fs.ErrNotExist) { // удалён или перенесён в сторону после листинга
 			continue
 		}
 		if err != nil {
@@ -211,7 +207,10 @@ func machineTraffic(dir string, now time.Time) (MachineTraffic, error) {
 // startState загружает накопленный трафик из файла состояния, сразу пишет файл
 // и запускает писателя. Один раз за процесс: второй процесс на ту же базу аренда
 // не пустит, а потеряв аренду, процесс завершается — пересчитывать базу незачем.
-// Писатель не привязан к Run и пишет и в паузах повторов: трафик растёт и тогда.
+// Писатель не привязан к Run и пишет и в паузах повторов, пока аренда не устарела
+// (checkLease): трафик растёт и тогда. С устаревшей арендой базу может забрать другой
+// процесс с этой машины, и запись затёрла бы его файл; пропуск ничего не теряет —
+// следующая запись после нового захвата содержит всё накопленное.
 func (r *Replicator) startState() {
 	if r.cfg.StateFile == "" || r.stateLoaded {
 		return
@@ -221,7 +220,7 @@ func (r *Replicator) startState() {
 	if !ok {
 		return
 	}
-	r.stateBase, r.stateStarted = base, r.Status().Started
+	r.stateBase = base
 	r.writeStateFile()
 	stop, done := make(chan struct{}), make(chan struct{})
 	r.stateStop, r.stateDone = stop, done
@@ -234,7 +233,9 @@ func (r *Replicator) startState() {
 			case <-stop:
 				return
 			case <-t.C:
-				r.writeStateFile()
+				if r.checkLease() == nil {
+					r.writeStateFile()
+				}
 			}
 		}
 	}()
@@ -274,7 +275,7 @@ func (r *Replicator) loadStateBase() (TrafficInfo, bool) {
 func (r *Replicator) writeStateFile() {
 	s := state{
 		DB: r.cfg.DB, DstDB: r.cfg.DstDB, Cluster: r.cfg.Cluster, Owner: r.owner,
-		StartedAt: r.stateStarted.UTC(), UpdatedAt: time.Now().UTC(),
+		StartedAt: r.Status().Started.UTC(), UpdatedAt: time.Now().UTC(),
 		Traffic: r.stateBase.add(r.cfg.Traffic.Snapshot()),
 	}
 	if err := writeState(r.cfg.StateFile, s); err != nil {

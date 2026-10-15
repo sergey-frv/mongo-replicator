@@ -103,12 +103,11 @@ type Replicator struct {
 
 	// файл состояния (Config.StateFile): читается один раз за процесс, пишет его
 	// горутина-писатель от загрузки до Release
-	stateLoaded  bool          // загрузка была; повторный Run её не повторяет
-	stateBase    TrafficInfo   // накопленное прошлыми процессами
-	stateStarted time.Time     // started_at файла: старт процесса
-	stateEvery   time.Duration // интервал записи
-	stateStop    chan struct{} // остановка писателя; nil — писатель не запущен
-	stateDone    chan struct{} // закрывается, когда писатель вышел
+	stateLoaded bool          // загрузка была; повторный Run её не повторяет
+	stateBase   TrafficInfo   // накопленное прошлыми процессами
+	stateEvery  time.Duration // интервал записи
+	stateStop   chan struct{} // остановка писателя; nil — писатель не запущен
+	stateDone   chan struct{} // закрывается, когда писатель вышел
 
 	machineEvery time.Duration // интервал сводки трафика на машине
 	lastMachine  time.Time     // время последней сводки

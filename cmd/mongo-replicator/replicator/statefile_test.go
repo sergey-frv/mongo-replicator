@@ -2,6 +2,7 @@ package replicator
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -54,22 +55,21 @@ func TestWriteReadState(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.0123abcd.json")
 
-	got, err := readState(path)
-	require.NoError(t, err)
-	assert.Equal(t, state{}, got, "нет файла — нули")
+	_, err := loadState(path)
+	require.ErrorIs(t, err, fs.ErrNotExist, "нет файла")
 
 	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	first := state{DB: "app", DstDB: "app", Cluster: "h1:27017", Owner: "host:1:abc",
 		StartedAt: at, UpdatedAt: at.Add(time.Second),
 		Traffic: TrafficInfo{SrcIn: 1 << 40, SrcOut: 2, DstIn: 3, DstOut: 4}}
 	require.NoError(t, writeState(path, first))
-	got, err = readState(path)
+	got, err := loadState(path)
 	require.NoError(t, err)
 	assert.Equal(t, first, got)
 
 	second := state{DB: "app", DstDB: "app", UpdatedAt: at.Add(time.Minute), Traffic: TrafficInfo{DstOut: 5}}
 	require.NoError(t, writeState(path, second))
-	got, err = readState(path)
+	got, err = loadState(path)
 	require.NoError(t, err)
 	assert.Equal(t, second, got, "содержимое заменено целиком")
 
@@ -90,7 +90,7 @@ func TestWriteStateNoDir(t *testing.T) {
 func TestReadStateCorrupt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "app.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{"traffic": `), 0o600))
-	_, err := readState(path)
+	_, err := loadState(path)
 	require.ErrorIs(t, err, ErrStateCorrupt)
 }
 
@@ -135,11 +135,27 @@ func TestMachineTraffic(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "d.00000004.json"), []byte("{"), 0o600))
 		write("e.00000005.json.corrupt-20261015T110000Z", state{Traffic: TrafficInfo{SrcIn: 1000}})
 		write("notes.txt", state{Traffic: TrafficInfo{SrcIn: 1000}})
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "f.json"), 0o750))
 
 		mt, err := machineTraffic(dir, now)
 		require.NoError(t, err)
 		assert.Equal(t, MachineTraffic{At: now, Processes: 3, Active: 2,
 			Traffic: TrafficInfo{SrcIn: 111, SrcOut: 222, DstIn: 333, DstOut: 444}}, mt)
+	})
+
+	t.Run("символы шаблона в пути каталога", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "repl[1]")
+		require.NoError(t, os.Mkdir(dir, 0o750))
+		require.NoError(t, writeState(filepath.Join(dir, "a.00000001.json"),
+			state{UpdatedAt: now, Traffic: TrafficInfo{SrcIn: 7}}))
+		mt, err := machineTraffic(dir, now)
+		require.NoError(t, err)
+		assert.Equal(t, MachineTraffic{At: now, Processes: 1, Active: 1, Traffic: TrafficInfo{SrcIn: 7}}, mt)
+	})
+
+	t.Run("нет каталога", func(t *testing.T) {
+		_, err := machineTraffic(filepath.Join(t.TempDir(), "missing"), now)
+		require.ErrorIs(t, err, fs.ErrNotExist)
 	})
 }
 
@@ -194,17 +210,37 @@ func TestStartStateContinues(t *testing.T) {
 	assert.Equal(t, r.owner, s.Owner)
 }
 
-// Писатель обновляет файл сам, без Run.
+// Писатель обновляет файл сам, без Run, пока аренда свежая.
 func TestStartStateWriter(t *testing.T) {
 	tr := &Traffic{}
 	r := newState(t, t.TempDir(), tr)
 	r.stateEvery = 10 * time.Millisecond
+	now := time.Now()
+	r.leaseOK.Store(&now)
 	r.startState()
 	tr.SrcIn.Store(42)
 	require.Eventually(t, func() bool {
 		s, err := loadState(r.cfg.StateFile)
 		return err == nil && s.Traffic.SrcIn == 42
 	}, 5*time.Second, 10*time.Millisecond)
+}
+
+// С устаревшей арендой писатель файл не трогает: базу мог забрать другой процесс
+// с этой машины и писать в тот же файл.
+func TestStartStateWriterStaleLease(t *testing.T) {
+	tr := &Traffic{}
+	r := newState(t, t.TempDir(), tr)
+	r.stateEvery = 10 * time.Millisecond
+	stale := time.Now().Add(-r.leaseTTL)
+	r.leaseOK.Store(&stale)
+	r.startState()
+	require.NoError(t, writeState(r.cfg.StateFile, state{DB: "src", DstDB: "app", Cluster: "h1:27017",
+		Owner: "other:1:00000000", Traffic: TrafficInfo{SrcIn: 1000}}))
+	tr.SrcIn.Store(42)
+	time.Sleep(100 * time.Millisecond)
+	s, err := loadState(r.cfg.StateFile)
+	require.NoError(t, err)
+	assert.Equal(t, "other:1:00000000", s.Owner, "файл другого процесса не затёрт")
 }
 
 // База загружается один раз за процесс: повторный Run файл не перечитывает.
@@ -226,6 +262,7 @@ func TestStartStateMovesAside(t *testing.T) {
 	}{
 		{"битый", `{"traffic": `, "corrupt"},
 		{"другая база источника", `{"db":"other","dst_db":"app","cluster":"h1:27017","traffic":{"src_in":9}}`, "mismatch"},
+		{"другая база цели", `{"db":"src","dst_db":"other","cluster":"h1:27017","traffic":{"src_in":9}}`, "mismatch"},
 		{"другой кластер", `{"db":"src","dst_db":"app","cluster":"h9:27017","traffic":{"src_in":9}}`, "mismatch"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -247,6 +284,24 @@ func TestStartStateMovesAside(t *testing.T) {
 	}
 }
 
+// Битый файл не перенесён в сторону (на месте имени переноса — каталог): писать
+// в него нельзя — писатель не запускается, файл не тронут.
+func TestStartStateMoveAsideFails(t *testing.T) {
+	r := newState(t, t.TempDir(), &Traffic{})
+	const content = `{"traffic": `
+	require.NoError(t, os.WriteFile(r.cfg.StateFile, []byte(content), 0o600))
+	now := time.Now().UTC()
+	for i := range 3 { // имя переноса — с точностью до секунды
+		at := now.Add(time.Duration(i) * time.Second).Format("20060102T150405Z")
+		require.NoError(t, os.Mkdir(r.cfg.StateFile+".corrupt-"+at, 0o750))
+	}
+	r.startState()
+	assert.Nil(t, r.stateStop, "писатель не запущен")
+	b, err := os.ReadFile(r.cfg.StateFile)
+	require.NoError(t, err)
+	assert.Equal(t, content, string(b), "файл не тронут")
+}
+
 // Файл не прочитан (не файл, а каталог): писать в него нельзя — писатель не запускается.
 func TestStartStateUnreadable(t *testing.T) {
 	r := newState(t, t.TempDir(), &Traffic{})
@@ -266,6 +321,8 @@ func TestLogMachine(t *testing.T) {
 	require.NotNil(t, m, "первая сводка — сразу")
 	assert.Equal(t, 1, m.Processes)
 	assert.Equal(t, 1, m.Active)
+	r.logMachine(context.Background())
+	assert.Same(t, m, r.Status().Machine, "до machineEvery сводка не пересчитывается")
 
 	r.cfg.StateDir = ""
 	r.lastMachine = time.Time{}

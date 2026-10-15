@@ -1518,9 +1518,12 @@ func readStateFile(t *testing.T, path string) state {
 }
 
 // Трафик процесса — в файле состояния на машине, не в документе чекпойнта.
+// Писатель запускается с часовым интервалом: в файле только первая запись (до
+// вставок) и последняя — из Release.
 func TestIntegrationStateFile(t *testing.T) {
 	db := prepare(t)
 	r := newTrafficIT(t, withState(Config{StartTS: srcNow(t), BatchSize: 1000, DB: db}, t.TempDir()))
+	r.stateEvery = time.Hour
 	rn := startOn(t, r)
 	size := insertPadded(t, db, 20)
 	rn.waitSame(db)
@@ -1532,8 +1535,8 @@ func TestIntegrationStateFile(t *testing.T) {
 	assert.Equal(t, db, s.DstDB)
 	assert.Equal(t, r.cfg.Cluster, s.Cluster)
 	assert.Equal(t, r.owner, s.Owner)
-	assert.GreaterOrEqual(t, s.Traffic.SrcIn, size, "поток отдал все документы до Release")
-	assert.GreaterOrEqual(t, s.Traffic.DstOut, size, "запись отправила все документы до Release")
+	assert.GreaterOrEqual(t, s.Traffic.SrcIn, size, "последняя запись — в Release")
+	assert.GreaterOrEqual(t, s.Traffic.DstOut, size, "последняя запись — в Release")
 	now := r.cfg.Traffic.Snapshot()
 	assert.LessOrEqual(t, s.Traffic.SrcIn, now.SrcIn, "в файле — не больше насчитанного")
 	assert.LessOrEqual(t, s.Traffic.DstOut, now.DstOut)
@@ -1569,6 +1572,9 @@ func TestIntegrationStateFileRetryPause(t *testing.T) {
 	}
 
 	r := newIT(dstClient, withState(Config{StartTS: startTS, BatchSize: 1, DB: db}, dir))
+	// повтора Run в тесте нет: аренда, захваченная Run, должна остаться свежей всю паузу,
+	// как в main, где повтор раз в 5 с захватывает её заново при TTL 60 с
+	r.leaseTTL = time.Minute
 	runErr := r.Run(ctx)
 	require.True(t, mongo.IsDuplicateKeyError(runErr), "%v", runErr)
 	returned := time.Now()
@@ -1700,23 +1706,35 @@ func readLease(t *testing.T, dstDB string) (leaseState, bool) {
 	return st, true
 }
 
-// Второй процесс на ту же базу цели не стартует, пока первый работает; после
-// остановки первого (со снятием аренды) — стартует сразу, не дожидаясь её истечения.
+// Второй процесс на ту же базу цели не стартует, пока первый работает, и не трогает
+// общий файл состояния; после остановки первого (со снятием аренды) — стартует
+// сразу, не дожидаясь её истечения.
 func TestIntegrationLeaseHeld(t *testing.T) {
 	db := prepare(t)
+	dir := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
 
-	rnA := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	rA := newIT(dstClient, withState(Config{StartTS: srcNow(t), BatchSize: 1000, DB: db}, dir))
+	rA.stateEvery = time.Hour // пока A работает, файл может изменить только второй процесс
+	rnA := startOn(t, rA)
 	items := srcClient.Database(db).Collection("items")
 	_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
 	rnA.waitSame(db)
 	rnA.waitQuiet()
 
-	_, err = runErr(t, Config{BatchSize: 1000, DB: db})
+	before, err := os.ReadFile(rnA.r.cfg.StateFile)
+	require.NoError(t, err)
+	_, err = runErr(t, withState(Config{BatchSize: 1000, DB: db}, dir))
 	require.ErrorIs(t, err, ErrLeaseHeld)
 	assert.ErrorContains(t, err, rnA.r.owner)
+	after, err := os.ReadFile(rnA.r.cfg.StateFile)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "второй процесс файл не тронул")
+	files, err := filepath.Glob(filepath.Join(dir, "*"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{rnA.r.cfg.StateFile}, files, "без переносов в сторону")
 	st, _ := readLease(t, db)
 	assert.Equal(t, rnA.r.owner, st.Owner, "неудачный захват и Release второго не трогают аренду первого")
 
@@ -1728,7 +1746,7 @@ func TestIntegrationLeaseHeld(t *testing.T) {
 	assert.NotNil(t, st.Token)
 
 	// без StartTS: B продолжает с чекпойнта A
-	rnB := start(t, Config{BatchSize: 1000, DB: db})
+	rnB := start(t, withState(Config{BatchSize: 1000, DB: db}, dir))
 	_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 	require.NoError(t, err)
 	rnB.waitSame(db)
@@ -2918,7 +2936,10 @@ func TestIntegrationNetSrcDown(t *testing.T) {
 	waitApplied(t, db, 5)
 
 	require.NoError(t, srcProxy.Disable())
-	time.Sleep(4 * time.Second)
+	time.Sleep(time.Second)
+	cut := nc.traffic.Snapshot().SrcIn
+	time.Sleep(3 * time.Second)
+	assert.Equal(t, cut, nc.traffic.Snapshot().SrcIn, "обрыв дошёл до репликатора: с источника ничего не приходит")
 	require.NoError(t, srcProxy.Enable())
 	time.Sleep(time.Second) // записи и после восстановления
 	w.stop()
@@ -2986,9 +3007,10 @@ func TestIntegrationNetSrcHang(t *testing.T) {
 	w := startWriter(t, db)
 	waitApplied(t, db, 5)
 
+	before := len(rt.runErrs())
 	hung := time.Now()
 	hang(t, srcProxy)
-	err := rt.waitErr(1, 15*time.Second)
+	err := rt.waitErr(before+1, 15*time.Second)
 	t.Logf("Run вернул ошибку через %s: %v", time.Since(hung).Round(100*time.Millisecond), err)
 	resetProxies(t)
 	w.stop()
