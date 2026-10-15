@@ -167,10 +167,10 @@
 **Files:**
 - Modify: `CLAUDE.md`
 
-- [ ] добавить раздел «Тесты» по Technical Details
-- [ ] в разделы «Интеграционные тесты» и «Сетевые тесты (Toxiproxy)» добавить указатели на `harness_integration_test.go` и `network_integration_test.go`
-- [ ] `grep -rn 'integration_test\.go' --exclude-dir=vendor --exclude-dir=completed .` — нет ссылок на старый файл
-- [ ] отдельный коммит
+- [x] добавить раздел «Тесты» по Technical Details
+- [x] в разделы «Интеграционные тесты» и «Сетевые тесты (Toxiproxy)» добавить указатели на `harness_integration_test.go` и `network_integration_test.go`
+- [x] `grep -rn 'integration_test\.go' --exclude-dir=vendor --exclude-dir=completed .` — нет ссылок на старый файл (совпадения только в этом плане)
+- [x] отдельный коммит
 
 ### Task 5: Verify acceptance criteria
 - [ ] `integration_test.go` нет; самый большой тестовый файл — заметно меньше прежних 3124 строк
