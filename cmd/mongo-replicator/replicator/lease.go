@@ -188,28 +188,27 @@ func (r *Replicator) leaseLostErr() error {
 
 // Release снимает аренду и останавливает писателя файла состояния. Документ без позиции
 // (старт не удался: нет --start-ts, неверный --dst-db) удаляется, чтобы не оставлять
-// его на цели. Последняя запись файла — только если аренда была нашей: иначе базу
-// реплицирует другой процесс, возможно, с этой же машины и в этот же файл.
-// Вызывать после возврата Run; повторный вызов и вызов без захвата безвредны.
+// его на цели. Последняя запись файла — только если продление подтвердило аренду, и до
+// её снятия: иначе базу реплицирует другой процесс, возможно, с этой же машины и в этот
+// же файл, а снятая раньше записи аренда пустила бы преемника прочитать файл без
+// последних счётчиков. Вызывать после возврата Run; повторный вызов и вызов без
+// захвата безвредны.
 func (r *Replicator) Release(ctx context.Context) error {
-	writer := r.stopState()
+	if r.stopState() && r.renewOnce(ctx) == nil {
+		r.writeStateFile()
+	}
 	res, err := r.ckpt().DeleteOne(ctx,
 		bson.M{"_id": ckptID, "owner": r.owner, "token": bson.M{"$exists": false}})
 	if err != nil {
 		return fmt.Errorf("снятие аренды: %w", err)
 	}
-	owned := res.DeletedCount > 0
-	if !owned {
-		up, err := r.ckpt().UpdateOne(ctx,
-			bson.M{"_id": ckptID, "owner": r.owner},
-			bson.M{"$unset": bson.M{"owner": "", "lease_until": ""}})
-		if err != nil {
-			return fmt.Errorf("снятие аренды: %w", err)
-		}
-		owned = up.MatchedCount > 0
+	if res.DeletedCount > 0 {
+		return nil
 	}
-	if writer && owned {
-		r.writeStateFile()
+	if _, err := r.ckpt().UpdateOne(ctx,
+		bson.M{"_id": ckptID, "owner": r.owner},
+		bson.M{"$unset": bson.M{"owner": "", "lease_until": ""}}); err != nil {
+		return fmt.Errorf("снятие аренды: %w", err)
 	}
 	return nil
 }

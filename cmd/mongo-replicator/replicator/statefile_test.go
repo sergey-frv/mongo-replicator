@@ -111,6 +111,31 @@ func TestMoveAside(t *testing.T) {
 	require.Error(t, err, "файла уже нет")
 }
 
+// Имя переноса занято (второй перенос за секунду): прежний перенос не заменяется.
+func TestMoveAsideTaken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.0123abcd.json")
+	now := time.Now().UTC()
+	for i := range 3 { // имя переноса — с точностью до секунды
+		at := now.Add(time.Duration(i) * time.Second).Format("20060102T150405Z")
+		require.NoError(t, os.WriteFile(path+".corrupt-"+at, []byte(`old`), 0o600))
+	}
+	require.NoError(t, os.WriteFile(path, []byte(`new`), 0o600))
+
+	_, err := moveAside(path, "corrupt")
+	require.ErrorIs(t, err, fs.ErrExist)
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, `new`, string(b), "файл не перенесён")
+	aside, err := filepath.Glob(path + ".corrupt-*")
+	require.NoError(t, err)
+	for _, a := range aside {
+		b, err := os.ReadFile(a)
+		require.NoError(t, err)
+		assert.Equal(t, `old`, string(b), "прежний перенос не заменён: %s", a)
+	}
+}
+
 func TestMachineTraffic(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 
@@ -172,6 +197,8 @@ func newState(t *testing.T, dir string, tr *Traffic) *Replicator {
 	quietLog(t)
 	path, cluster := StatePath(dir, "app", "mongodb://h1")
 	r := New(nil, nil, Config{DB: "src", DstDB: "app", Traffic: tr, StateFile: path, StateDir: dir, Cluster: cluster})
+	now := time.Now()
+	r.leaseOK.Store(&now)
 	t.Cleanup(func() { r.stopState() })
 	return r
 }
@@ -215,8 +242,6 @@ func TestStartStateWriter(t *testing.T) {
 	tr := &Traffic{}
 	r := newState(t, t.TempDir(), tr)
 	r.stateEvery = 10 * time.Millisecond
-	now := time.Now()
-	r.leaseOK.Store(&now)
 	r.startState()
 	tr.SrcIn.Store(42)
 	require.Eventually(t, func() bool {
@@ -231,9 +256,9 @@ func TestStartStateWriterStaleLease(t *testing.T) {
 	tr := &Traffic{}
 	r := newState(t, t.TempDir(), tr)
 	r.stateEvery = 10 * time.Millisecond
+	r.startState()
 	stale := time.Now().Add(-r.leaseTTL)
 	r.leaseOK.Store(&stale)
-	r.startState()
 	require.NoError(t, writeState(r.cfg.StateFile, state{DB: "src", DstDB: "app", Cluster: "h1:27017",
 		Owner: "other:1:00000000", Traffic: TrafficInfo{SrcIn: 1000}}))
 	tr.SrcIn.Store(42)
@@ -241,6 +266,28 @@ func TestStartStateWriterStaleLease(t *testing.T) {
 	s, err := loadState(r.cfg.StateFile)
 	require.NoError(t, err)
 	assert.Equal(t, "other:1:00000000", s.Owner, "файл другого процесса не затёрт")
+}
+
+// Аренда устарела к загрузке (процесс стоял после захвата): файл не читается
+// и не пишется, загрузка — при следующем вызове со свежей арендой.
+func TestStartStateStaleLease(t *testing.T) {
+	r := newState(t, t.TempDir(), &Traffic{})
+	other := state{DB: "src", DstDB: "app", Cluster: "h1:27017", Owner: "other:1:00000000",
+		Traffic: TrafficInfo{SrcIn: 1000}}
+	require.NoError(t, writeState(r.cfg.StateFile, other))
+	stale := time.Now().Add(-r.leaseTTL)
+	r.leaseOK.Store(&stale)
+	r.startState()
+	assert.Nil(t, r.stateStop, "писатель не запущен")
+	s, err := loadState(r.cfg.StateFile)
+	require.NoError(t, err)
+	assert.Equal(t, other.Owner, s.Owner, "файл другого процесса не затёрт")
+
+	now := time.Now()
+	r.leaseOK.Store(&now)
+	r.startState()
+	assert.NotNil(t, r.stateStop, "писатель запущен")
+	assert.Equal(t, other.Traffic, r.stateBase)
 }
 
 // База загружается один раз за процесс: повторный Run файл не перечитывает.

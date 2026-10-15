@@ -164,8 +164,17 @@ func writeTemp(dir, pattern string, b []byte) (string, error) {
 
 // moveAside переименовывает файл в "<path>.<reason>-<UTC-время>" (corrupt,
 // mismatch): накопленная история не стирается, а в сводку файл больше не входит.
+// Имя занято (второй перенос за секунду) — ошибка: Rename заменил бы прежний
+// перенос. Проверка и Rename не атомарны, но переносы одного файла разделены
+// арендой: путь файла задают база и кластер цели.
 func moveAside(path, reason string) (string, error) {
 	to := path + "." + reason + "-" + time.Now().UTC().Format("20060102T150405Z")
+	if _, err := os.Lstat(to); !errors.Is(err, fs.ErrNotExist) {
+		if err == nil {
+			err = fmt.Errorf("%s: %w", to, fs.ErrExist)
+		}
+		return "", fmt.Errorf("файл состояния: %w", err)
+	}
 	if err := os.Rename(path, to); err != nil {
 		return "", fmt.Errorf("файл состояния: %w", err)
 	}
@@ -210,9 +219,11 @@ func machineTraffic(dir string, now time.Time) (MachineTraffic, error) {
 // Писатель не привязан к Run и пишет и в паузах повторов, пока аренда не устарела
 // (checkLease): трафик растёт и тогда. С устаревшей арендой базу может забрать другой
 // процесс с этой машины, и запись затёрла бы его файл; пропуск ничего не теряет —
-// следующая запись после нового захвата содержит всё накопленное.
+// следующая запись после нового захвата содержит всё накопленное. Так же и загрузка
+// с первой записью: аренда устарела (процесс стоял после захвата) — файл не трогается,
+// загрузка — при следующем вызове.
 func (r *Replicator) startState() {
-	if r.cfg.StateFile == "" || r.stateLoaded {
+	if r.cfg.StateFile == "" || r.stateLoaded || r.checkLease() != nil {
 		return
 	}
 	r.stateLoaded = true
