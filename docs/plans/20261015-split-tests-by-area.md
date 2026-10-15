@@ -156,11 +156,11 @@
 - Create: `cmd/mongo-replicator/errors_test.go`
 - Modify: `cmd/mongo-replicator/main_test.go`
 
-- [ ] перенести тесты по таблице «Раскладка `main_test.go`» без изменения тел, с doc-комментариями; `restoreLogger` и `captureStdout` остаются в `log_test.go`
-- [ ] в каждом файле — только нужные импорты
-- [ ] проверка: имена объявлений и список юнит-тестов совпадают с эталоном; `strip`-diff с `/tmp/split-tests/main_test.go` пустой
-- [ ] `make test`, `make lint` — должно пройти
-- [ ] отдельный коммит
+- [x] перенести тесты по таблице «Раскладка `main_test.go`» без изменения тел, с doc-комментариями; `restoreLogger` и `captureStdout` остаются в `log_test.go`
+- [x] в каждом файле — только нужные импорты
+- [x] проверка: имена объявлений и список юнит-тестов совпадают с эталоном; `strip`-diff с `/tmp/split-tests/main_test.go` пустой
+- [x] `make test`, `make lint` — должно пройти
+- [x] отдельный коммит
 
 ### Task 4: Раздел «Тесты» в `CLAUDE.md`
 
