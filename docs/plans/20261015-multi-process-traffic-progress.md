@@ -119,16 +119,17 @@ type Status struct {
     LastDDL    *DDLInfo         // время, op, ns, детали
     Traffic    TrafficInfo      // байты процесса
     Cluster    *ClusterTraffic  // последняя сводка (nil — ещё не было) + её время
-    State      string           // "работает" | "повтор" | "остановлен"
+    State      string           // "запуск" | "работает" | "повтор" | "остановлен"
     Retry      int
     LastErr    string
 }
 func (r *Replicator) Status() Status
-func (r *Replicator) SetRetry(n int, err error)   // из цикла повторов main, перед паузой
+func (r *Replicator) SetRetry(err error)   // из цикла повторов main, перед паузой; Retry++ (сбрасывает Run)
 ```
 - `LastBatch`/`LastDDL`/`Cluster` — при каждом обновлении создаются новые значения, существующие не изменяются (копии из `Status()` безопасны без глубокого копирования)
 - обновления: `flush` → `LastBatch` (`batch.add` учитывает вид операции); `applyDDL` → `LastDDL`; `logProgress` → `Rate`, `Lag`, `AppliedAt`; `clusterTraffic` → `Cluster`; **`Run` сам** выставляет `State = "работает"` и сбрасывает `Retry`/`LastErr` после открытия потока
 - скорости трафика (`/с`) считает модель панели по разнице снимков между тиками
+- ➕ `New` — «запуск»; возврат `Run` — «остановлен» (`LastErr` — если не отмена вызывающим), временную ошибку `main` сразу переводит в «повтор»; `LastDDL` пишется и для пропущенных DDL (view, неподдерживаемые, drop без коллекции на цели) с пометкой в `Details`
 
 ### Панель (`cmd/mongo-replicator/progress.go`)
 - библиотеки: `charm.land/bubbletea/v2` (v2.1.0), `charm.land/lipgloss/v2` (v2.0.6)
@@ -247,10 +248,10 @@ func (r *Replicator) SetRetry(n int, err error)   // из цикла повто�
 - Modify: `cmd/mongo-replicator/replicator/ddl.go`
 - Modify: `cmd/mongo-replicator/main.go`
 
-- [ ] `Status`, `BatchInfo`, `DDLInfo`, `Status()`, `SetRetry`; `batch.add` учитывает вид операции; обновления в `flush`, `applyDDL`, `logProgress`, `clusterTraffic`; `Run` выставляет «работает» и сбрасывает повтор после открытия потока; `main` вызывает `SetRetry` перед паузой повтора
-- [ ] write unit tests: `flush` с пачкой (ins/upd/rep/del в нескольких коллекциях) → `LastBatch` (счётчики, список коллекций с усечением «и ещё N»); `applyDDL` → `LastDDL`; `SetRetry` → «повтор»; копия из `Status()` не меняется при последующих обновлениях
-- [ ] write integration test: после временной ошибки и успешного повторного `Run` состояние снова «работает»
-- [ ] `make test` (с `-race`), `make test-integration`, `make lint` — должно пройти
+- [x] `Status`, `BatchInfo`, `DDLInfo`, `Status()`, `SetRetry`; `batch.add` учитывает вид операции; обновления в `flush`, `applyDDL`, `logProgress`, `clusterTraffic`; `Run` выставляет «работает» и сбрасывает повтор после открытия потока; `main` вызывает `SetRetry` перед паузой повтора
+- [x] write unit tests (⚠️ успешный `flush` без сервера не проверить: состав пачки — через `batchInfo`, `flush` — ошибка и пустой flush не меняют `LastBatch`, запись пачки — в `TestIntegrationStatus`): `flush` с пачкой (ins/upd/rep/del в нескольких коллекциях) → `LastBatch` (счётчики, список коллекций с усечением «и ещё N»); `applyDDL` → `LastDDL`; `SetRetry` → «повтор»; копия из `Status()` не меняется при последующих обновлениях
+- [x] write integration test (`TestIntegrationStatusRetry`, `TestIntegrationStatus`): после временной ошибки и успешного повторного `Run` состояние снова «работает»
+- [x] `make test` (с `-race`), `make test-integration`, `make lint` — должно пройти
 
 ### Task 7: Панель `--progress` на bubbletea v2
 

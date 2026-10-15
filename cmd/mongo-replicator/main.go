@@ -233,6 +233,7 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 			return 1
 		}
 		log.Warn().Err(err).Str("retry", retryTimeout.String()).Msg("ошибка репликации, повтор")
+		r.SetRetry(err)
 		select {
 		case <-ctx.Done():
 		case <-time.After(retryTimeout):

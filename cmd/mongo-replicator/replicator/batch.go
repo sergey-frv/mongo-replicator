@@ -5,12 +5,14 @@ import "go.mongodb.org/mongo-driver/v2/mongo"
 // batch копит операции по коллекциям. Порядок внутри коллекции сохраняется,
 // между коллекциями он не важен.
 type batch struct {
-	order []namespace
-	ops   map[namespace][]mongo.WriteModel
-	n     int
+	order  []namespace
+	ops    map[namespace][]mongo.WriteModel
+	n      int
+	counts OpCounts // по видам событий: модели insert/update/replace одинаковые (replace-upsert)
 }
 
-func (b *batch) add(ns namespace, m mongo.WriteModel) {
+// add добавляет операцию события op (insert, update, replace, delete).
+func (b *batch) add(ns namespace, op string, m mongo.WriteModel) {
 	if b.ops == nil {
 		b.ops = make(map[namespace][]mongo.WriteModel)
 	}
@@ -19,4 +21,14 @@ func (b *batch) add(ns namespace, m mongo.WriteModel) {
 	}
 	b.ops[ns] = append(b.ops[ns], m)
 	b.n++
+	switch op {
+	case "insert":
+		b.counts.Ins++
+	case "update":
+		b.counts.Upd++
+	case "replace":
+		b.counts.Rep++
+	case "delete":
+		b.counts.Del++
+	}
 }

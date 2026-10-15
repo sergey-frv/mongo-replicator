@@ -135,9 +135,9 @@ func TestBatchOrder(t *testing.T) {
 	var b batch
 	a, c := namespace{"d", "a"}, namespace{"d", "c"}
 	m1, m2, m3 := mongo.NewDeleteOneModel(), mongo.NewDeleteOneModel(), mongo.NewDeleteOneModel()
-	b.add(a, m1)
-	b.add(c, m2)
-	b.add(a, m3)
+	b.add(a, "delete", m1)
+	b.add(c, "delete", m2)
+	b.add(a, "delete", m3)
 	if b.n != 3 || len(b.order) != 2 || b.order[0] != a || b.order[1] != c {
 		t.Fatalf("order=%v n=%d", b.order, b.n)
 	}

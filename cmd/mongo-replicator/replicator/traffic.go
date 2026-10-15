@@ -133,6 +133,7 @@ func (r *Replicator) logCluster(ctx context.Context) {
 		}
 		return
 	}
+	r.update(func(s *Status) { s.Cluster = &ct })
 	log.Info().Int("processes", ct.Processes).Int("active", ct.Active).
 		Uint64("src_in", ct.Traffic.SrcIn).Uint64("src_out", ct.Traffic.SrcOut).
 		Uint64("dst_in", ct.Traffic.DstIn).Uint64("dst_out", ct.Traffic.DstOut).

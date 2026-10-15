@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -85,6 +86,9 @@ type Replicator struct {
 	clusterEvery time.Duration // интервал сводки трафика всех процессов
 	lastCluster  time.Time     // время последней сводки
 
+	mu sync.Mutex // st: читает Status из другой горутины
+	st Status     // без Applied и Traffic: их Status берёт из счётчиков
+
 	ddlHook func() // тесты: вызывается в начале applyDDL
 }
 
@@ -103,6 +107,7 @@ func New(src, dst *mongo.Client, cfg Config) *Replicator {
 		lastLog: time.Now(), lastTraffic: cfg.Traffic.Snapshot(),
 		owner: newOwner(), leaseTTL: defaultLeaseTTL, leaseRenew: defaultLeaseRenew,
 		clusterEvery: defaultClusterEvery,
+		st: Status{DB: cfg.DB, DstDB: cfg.DstDB, Started: time.Now(), Lag: -1, State: StateStarting},
 	}
 }
 
@@ -119,6 +124,9 @@ func (r *Replicator) flush(ctx context.Context) error {
 		}
 	}
 	r.applied.Add(int64(r.pending.n))
+	if bi := batchInfo(&r.pending, time.Now()); bi != nil {
+		r.update(func(s *Status) { s.LastBatch = bi })
+	}
 	r.pending = batch{}
 	return nil
 }
@@ -166,10 +174,12 @@ func checkDBs(saved, want dbPair) error {
 // контекста. Аренда продлевается в своей горутине; потерянная аренда останавливает Run.
 // По возврату аренда не снимается (повторный Run её подхватит): снять — Release.
 // Несохранённый хвост прошлого запуска отбрасывается: его перечитаем с чекпойнта.
-func (r *Replicator) Run(ctx context.Context) error {
+func (r *Replicator) Run(ctx context.Context) (retErr error) {
 	if r.cfg.DB == "" {
 		return errors.New("не задана база источника")
 	}
+	// «остановлен»: при временной ошибке main сразу сменит на «повтор» (SetRetry)
+	defer func() { r.stopped(ctx, retErr) }()
 	r.pending = batch{}
 	// и при ошибке: если Run раз за разом падает, лаг в логе всё равно растёт
 	defer r.logProgress(ctx)
@@ -234,6 +244,7 @@ func (r *Replicator) stream(ctx context.Context) error {
 		return fmt.Errorf("открытие change stream: %w", err)
 	}
 	defer cs.Close(context.Background()) //nolint:errcheck // поток закрывается при выходе, ошибка не важна
+	r.streamOpened()
 
 	var lastToken bson.Raw
 	commit := func() error {
@@ -260,7 +271,7 @@ func (r *Replicator) stream(ctx context.Context) error {
 			switch ev.OperationType {
 			case "insert", "replace", "update", "delete":
 				if m, ok := toModel(&ev); ok {
-					r.pending.add(ev.NS, m)
+					r.pending.add(ev.NS, ev.OperationType, m)
 				}
 				lastToken = ev.ID
 				// Пачка пишется по размеру или когда вычитан ответ сервера: при ровном
@@ -329,20 +340,24 @@ func (r *Replicator) logProgress(ctx context.Context) {
 	n, prevN := r.applied.Load(), r.lastN
 	tr, prevTr := r.cfg.Traffic.Snapshot(), r.lastTraffic
 	r.lastLog, r.lastN, r.lastTraffic = time.Now(), n, tr
-	e := log.Info().Int64("applied", n).
-		Float64("rate", math.Round(float64(n-prevN)/elapsed.Seconds()*10)/10)
+	rate := math.Round(float64(n-prevN)/elapsed.Seconds()*10) / 10
+	e := log.Info().Int64("applied", n).Float64("rate", rate)
 	if r.cfg.Traffic != nil {
 		e = trafficFields(e, tr, prevTr, elapsed)
 	}
+	var appliedAt time.Time
+	lag := time.Duration(-1)
 	// ещё ничего не сохранено — лаг неизвестен, ping не нужен
 	if !r.appliedTS.IsZero() {
-		e = e.Time("applied_at", time.Unix(int64(r.appliedTS.T), 0).UTC())
+		appliedAt = time.Unix(int64(r.appliedTS.T), 0).UTC()
+		e = e.Time("applied_at", appliedAt)
 		if now, err := r.srcTime(ctx); err != nil {
 			log.Debug().Err(err).Msg("ping источника: лаг неизвестен")
 		} else {
-			lag := lagOf(now, r.appliedTS)
+			lag = lagOf(now, r.appliedTS)
 			e = e.Str("lag", lag.String()).Int64("lag_sec", int64(lag/time.Second))
 		}
 	}
+	r.update(func(s *Status) { s.Rate, s.AppliedAt, s.Lag = rate, appliedAt, lag })
 	e.Msg("прогресс")
 }

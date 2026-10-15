@@ -102,8 +102,12 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 	switch ev.OperationType {
 	case "drop":
 		apply, allowErr := r.dropAllowed(ctx, db, ev)
-		if !apply || allowErr != nil {
+		if allowErr != nil {
 			return allowErr
+		}
+		if !apply {
+			r.noteDDL(ev, "на цели нет, пропущено")
+			return nil
 		}
 		err = db.Collection(ev.NS.Coll).Drop(ctx)
 
@@ -128,6 +132,7 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 		if _, lookupErr := ev.OpDesc.LookupErr("viewOn"); lookupErr == nil {
 			log.Warn().Str("ns", ev.NS.String()).Str("desc", ev.OpDesc.String()).
 				Msg("view не создаётся автоматически")
+			r.noteDDL(ev, "view, пропущено")
 			return nil
 		}
 		if elems, _ := ev.OpDesc.Elements(); len(elems) > 1 { // кроме idIndex
@@ -162,15 +167,18 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 		// modify (collMod), shardCollection, refineCollectionShardKey и т.п.
 		log.Warn().Str("op", ev.OperationType).Str("ns", ev.NS.String()).Str("desc", ev.OpDesc.String()).
 			Msg("событие не поддерживается и пропущено")
+		r.noteDDL(ev, "не поддерживается, пропущено")
 		return nil
 	}
 
 	if hasCode(err, codeNamespaceNotFound, codeIndexNotFound, codeNamespaceExists) {
+		r.noteDDL(ev, ddlDetails(ev))
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", ev.OperationType, r.nsName(ev.NS), err)
 	}
+	r.noteDDL(ev, ddlDetails(ev))
 	l := log.Info().Str("op", ev.OperationType).Str("ns", ev.NS.String())
 	if ev.To != nil {
 		l = l.Str("to", ev.To.String())
