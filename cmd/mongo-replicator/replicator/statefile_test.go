@@ -77,6 +77,9 @@ func TestWriteReadState(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "временных файлов нет")
 	assert.Equal(t, "app.0123abcd.json", entries[0].Name())
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o640), fi.Mode().Perm(), "группа читает файл для сводки")
 }
 
 func TestWriteStateNoDir(t *testing.T) {

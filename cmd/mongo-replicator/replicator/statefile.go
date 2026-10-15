@@ -147,13 +147,17 @@ func writeState(path string, s state) error {
 }
 
 // writeTemp пишет b во временный файл каталога dir с Sync и возвращает его путь;
-// при ошибке файл удаляется.
+// при ошибке файл удаляется. Права 0640 (CreateTemp создаёт 0600): в общем
+// --state-dir сводку пользователей одной группы собирают из чужих файлов.
 func writeTemp(dir, pattern string, b []byte) (string, error) {
 	f, err := os.CreateTemp(dir, pattern)
 	if err != nil {
 		return "", err
 	}
-	_, err = f.Write(b)
+	err = f.Chmod(0o640)
+	if err == nil {
+		_, err = f.Write(b)
+	}
 	if err == nil {
 		err = f.Sync()
 	}

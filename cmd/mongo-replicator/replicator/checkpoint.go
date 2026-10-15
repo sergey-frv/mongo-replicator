@@ -73,7 +73,7 @@ func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
 			ts = r.appliedTS
 		}
 	}
-	// без upsert: документ создан захватом аренды; owner и traffic не затираются
+	// без upsert: документ создан захватом аренды; owner не затирается
 	res, err := r.ckpt().UpdateOne(ctx,
 		bson.M{"_id": ckptID, "owner": r.owner},
 		bson.M{"$set": bson.M{
