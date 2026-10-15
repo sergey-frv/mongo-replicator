@@ -179,12 +179,13 @@ var streamPipeline = mongo.Pipeline{
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 - Modify: `Makefile`
 
-- [ ] `ckptColl = "_replicator_checkpoint"`, `ckptID = "checkpoint"`, удалить `ckptDB`; `ckpt()` — коллекция в `r.cfg.DstDB`; фильтры аренды и сохранения — по `_id: ckptID`
-- [ ] `SystemDBs` без `_replicator`; doc-комментарий `main.go:5`; подсказки `hint()` для `ErrDBMismatch`, `dropDatabase`, `ErrStreamInvalidated` (Technical Details); комментарий к `-p 1` в `Makefile`
-- [ ] update unit tests `main_test.go`: `:450` (`_replicator` теперь допустимое имя для `--db` и `--dst-db`), `:499` (новая подсказка `ErrDBMismatch`), `TestPermanent`
-- [ ] интеграционная обвязка: `collNames` исключает `ckptColl`; убрать глобальный дроп из `prepare`; `cleanDB` для `it_mismatch_a`, `it_mismatch_a2`, `it_mismatch_a3`; `writeCkpt` пишет `_id: ckptID` в базу `pair.dst`; хелперы аренды и двух процессов — на `<dst-db>._replicator_checkpoint`; точные списки коллекций (`:1042,1099,1698,1718,2105`, `DropDatabaseStops`, `DstDB`, `SingleDB`, `CrossDBRenameIn`) — без служебной коллекции
-- [ ] write integration tests: чекпойнт лежит в `<dst-db>._replicator_checkpoint`, базы `_replicator` на цели нет; два процесса — у каждой базы своя служебная коллекция, обе сходятся; удаление служебной коллекции во время работы → `ErrLeaseLost`, при рестарте → `ErrNoStartPoint`
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] `ckptColl = "_replicator_checkpoint"`, `ckptID = "checkpoint"`, удалить `ckptDB`; `ckpt()` — коллекция в `r.cfg.DstDB`; фильтры аренды и сохранения — по `_id: ckptID`
+- [x] `SystemDBs` без `_replicator`; doc-комментарий `main.go:5`; подсказки `hint()` для `ErrDBMismatch`, `dropDatabase`, `ErrStreamInvalidated` (Technical Details); комментарий к `-p 1` в `Makefile`
+- [x] update unit tests `main_test.go`: `:450` (`_replicator` теперь допустимое имя для `--db` и `--dst-db`), `:499` (новая подсказка `ErrDBMismatch`), `TestPermanent`
+- [x] интеграционная обвязка: `collNames` исключает `ckptColl`; убрать глобальный дроп из `prepare`; `cleanDB` для `it_mismatch_a`, `it_mismatch_a2`, `it_mismatch_a3`; `writeCkpt` пишет `_id: ckptID` в базу `pair.dst`; хелперы аренды и двух процессов — на `<dst-db>._replicator_checkpoint`; точные списки коллекций (`:1042,1099,1698,1718,2105`, `DropDatabaseStops`, `DstDB`, `SingleDB`, `CrossDBRenameIn`) — без служебной коллекции
+- [x] write integration tests: чекпойнт лежит в `<dst-db>._replicator_checkpoint`, базы `_replicator` на цели нет; два процесса — у каждой базы своя служебная коллекция, обе сходятся; удаление служебной коллекции во время работы → `ErrLeaseLost`, при рестарте → `ErrNoStartPoint`
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
+- ➕ проверки списков коллекций цели в `TestIntegrationDDL` и `TestIntegrationRestartAfterDDL` переведены с `ListCollectionNames` на `collNames` (служебная коллекция исключается); хелперы `ckptOf(dstDB)` и `cleanDBs`; `runner.ckptDB()` переименован в `ckptPair()`
 
 ### Task 4: Фильтр служебной коллекции и защита rename
 

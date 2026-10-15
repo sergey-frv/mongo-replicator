@@ -13,19 +13,19 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
 
-// Чекпойнт хранится на цели: он двигается только после успешной записи данных.
-// Документ на базу цели (_id — её имя): процессы разных баз пишут в один кластер
-// и не мешают друг другу.
+// Чекпойнт хранится на цели, в служебной коллекции самой базы цели: он двигается
+// только после успешной записи данных, на цели достаточно прав на одну базу,
+// а удаляется чекпойнт вместе с данными. Документ в коллекции один (_id — ckptID).
 const (
-	ckptDB   = "_replicator"
-	ckptColl = "checkpoint"
+	ckptColl = "_replicator_checkpoint"
+	ckptID   = "checkpoint"
 )
 
 // ckpt читает чекпойнт только с primary, не наследуя read preference из URI цели:
 // устаревший токен с отстающей secondary повторил бы rename с dropTarget поверх
 // уже применённого состояния и уничтожил бы целевую коллекцию.
 func (r *Replicator) ckpt() *mongo.Collection {
-	return r.dst.Database(ckptDB).Collection(ckptColl,
+	return r.dst.Database(r.cfg.DstDB).Collection(ckptColl,
 		options.Collection().SetReadPreference(readpref.Primary()))
 }
 
@@ -43,7 +43,7 @@ func (c checkpoint) dbs() dbPair { return dbPair{src: c.DB, dst: c.DstDB} }
 
 func (r *Replicator) loadCheckpoint(ctx context.Context) (checkpoint, error) {
 	var c checkpoint
-	err := r.ckpt().FindOne(ctx, bson.M{"_id": r.cfg.DstDB}).Decode(&c)
+	err := r.ckpt().FindOne(ctx, bson.M{"_id": ckptID}).Decode(&c)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return checkpoint{}, nil
 	}
@@ -75,7 +75,7 @@ func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
 	}
 	// без upsert: документ создан захватом аренды; owner и traffic не затираются
 	res, err := r.ckpt().UpdateOne(ctx,
-		bson.M{"_id": r.cfg.DstDB, "owner": r.owner},
+		bson.M{"_id": ckptID, "owner": r.owner},
 		bson.M{"$set": bson.M{
 			"token":       token,
 			"clusterTime": ts,

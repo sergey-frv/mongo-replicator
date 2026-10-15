@@ -346,6 +346,7 @@ func TestParseOptsDB(t *testing.T) {
 		{"DB из env", map[string]string{"DB": "urlshrinker"}, nil, "urlshrinker"},
 		{"флаг перекрывает env", map[string]string{"DB": "env"}, []string{"--db", "flag"}, "flag"},
 		{"имя ровно 63 байта", nil, []string{"--db", strings.Repeat("a", 63)}, strings.Repeat("a", 63)},
+		{"_replicator — обычное имя", nil, []string{"--db", "_replicator"}, "_replicator"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -373,6 +374,7 @@ func TestParseOptsDstDB(t *testing.T) {
 		{"--dst-db", nil, []string{"--dst-db", "urlshrinker_v2"}, "urlshrinker_v2"},
 		{"DST_DB из env", map[string]string{"DST_DB": "urlshrinker_v2"}, nil, "urlshrinker_v2"},
 		{"флаг перекрывает env", map[string]string{"DST_DB": "env"}, []string{"--dst-db", "flag"}, "flag"},
+		{"_replicator — обычное имя", nil, []string{"--dst-db", "_replicator"}, "_replicator"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -486,7 +488,6 @@ func TestParseOptsDBName(t *testing.T) {
 		{"admin", "admin", "служебная база"},
 		{"config", "config", "служебная база"},
 		{"local", "local", "служебная база"},
-		{"_replicator", "_replicator", "служебная база"},
 		{"Admin", "Admin", "служебная база"},
 		{"LOCAL", "LOCAL", "служебная база"},
 	}
@@ -535,14 +536,14 @@ func TestPermanent(t *testing.T) {
 		{"history lost", fmt.Errorf("run: %w", mongo.CommandError{Code: 286}), "выпала из oplog"},
 		{"событие больше 16 МБ", fmt.Errorf("change stream: %w", mongo.CommandError{Code: 10334}), "больше 16 МБ"},
 		{"нет точки старта", fmt.Errorf("run: %w", replicator.ErrNoStartPoint), "--start-ts"},
-		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), `deleteOne({_id: "<dst-db>"})`},
+		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), "<dst-db>._replicator_checkpoint"},
 		{"аренда занята", fmt.Errorf("run: %w", replicator.ErrLeaseHeld), "аренда истечёт через ≤60 с"},
 		{"аренда потеряна", fmt.Errorf("сохранение чекпойнта: %w", replicator.ErrLeaseLost), "два репликатора на одну базу"},
 		{"событие другой базы", fmt.Errorf("run: %w", replicator.ErrForeignNamespace), "сообщите о баге"},
-		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), "новая полная заливка"},
+		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), "<dst-db>._replicator_checkpoint"},
 		{"база в другом регистре", fmt.Errorf("bulk write: %w", mongo.CommandError{Code: 13297}), "--dst-db"},
 		{"drop коллекции", fmt.Errorf("run: %w", &replicator.DropError{NS: "db.c"}), "--apply-drop db.c"},
-		{"dropDatabase", fmt.Errorf("run: %w", &replicator.DropError{NS: "db", Database: true}), "новая полная заливка"},
+		{"dropDatabase", fmt.Errorf("run: %w", &replicator.DropError{NS: "db", Database: true}), "<dst-db>._replicator_checkpoint"},
 		{"обычная ошибка", errors.New("boom"), ""},
 		{"отмена", context.Canceled, ""},
 	}

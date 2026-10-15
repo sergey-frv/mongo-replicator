@@ -44,7 +44,7 @@ var ErrForeignNamespace = errors.New("событие другой базы в п
 var streamPipeline = mongo.Pipeline{{{Key: "$unset", Value: "updateDescription"}}}
 
 // SystemDBs — служебные базы, которые не реплицируются.
-var SystemDBs = []string{"admin", "config", "local", ckptDB}
+var SystemDBs = []string{"admin", "config", "local"}
 
 // Config — параметры репликации.
 type Config struct {

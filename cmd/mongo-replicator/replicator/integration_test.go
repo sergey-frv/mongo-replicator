@@ -156,26 +156,31 @@ func dropDB(t *testing.T, db string) {
 	lastSrcSec = srcOpTime(t).T
 }
 
-// prepare выдаёт тесту чистую базу на обоих кластерах и пустой чекпойнт.
-// Вызывать до start: cleanup выполняются в обратном порядке, и база
-// дропается уже после остановки репликатора.
+// prepare выдаёт тесту чистую базу на обоих кластерах; чекпойнт лежит в базе цели
+// и уходит вместе с ней. Вызывать до start: cleanup выполняются в обратном порядке,
+// и база дропается уже после остановки репликатора.
 func prepare(t *testing.T) (db string) {
 	t.Helper()
 	db = "it_" + snake(t.Name())
 	cleanDB(t, db)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	require.NoError(t, dstClient.Database(ckptDB).Collection(ckptColl).Drop(ctx))
 	return db
 }
 
-// cleanDB дропает базу на обоих кластерах сейчас и в cleanup теста.
-// Как и prepare, вызывать до start.
+// cleanDB дропает базу на обоих кластерах (на цели — вместе с чекпойнтом) сейчас
+// и в cleanup теста. Как и prepare, вызывать до start.
 func cleanDB(t *testing.T, db string) {
 	t.Helper()
 	dropDB(t, db) // остатки упавших прогонов: контейнеры живут между запусками
 	t.Cleanup(func() { dropDB(t, db) })
+}
+
+// cleanDBs — cleanDB для баз с фиксированными именами (тесты несовпадения пары баз):
+// захват аренды создаёт на цели служебную коллекцию и в базах, где позиции нет.
+func cleanDBs(t *testing.T, dbs ...string) {
+	t.Helper()
+	for _, db := range dbs {
+		cleanDB(t, db)
+	}
 }
 
 // newIT — New с короткой арендой.
@@ -314,8 +319,8 @@ func (rn *runner) ckptToken() bson.Raw {
 	return ck.Token
 }
 
-// ckptDB — пара баз, для которой записан чекпойнт.
-func (rn *runner) ckptDB() dbPair {
+// ckptPair — пара баз, для которой записан чекпойнт.
+func (rn *runner) ckptPair() dbPair {
 	rn.t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -332,6 +337,11 @@ func (rn *runner) ckptTime() bson.Timestamp {
 	ck, err := rn.r.loadCheckpoint(ctx)
 	require.NoError(rn.t, err)
 	return ck.ClusterTime
+}
+
+// ckptOf — служебная коллекция чекпойнта базы цели dstDB.
+func ckptOf(dstDB string) *mongo.Collection {
+	return dstClient.Database(dstDB).Collection(ckptColl)
 }
 
 // same сравнивает одноимённую базу на источнике и цели.
@@ -366,11 +376,12 @@ func sameDBs(srcDB, dstDB string) (ok bool, diff string) {
 	return true, ""
 }
 
-// collNames — обычные коллекции базы: views и system.* не реплицируются.
+// collNames — обычные коллекции базы: views, system.* и служебная коллекция
+// чекпойнта не реплицируются.
 func collNames(ctx context.Context, c *mongo.Client, db string) ([]string, error) {
 	names, err := c.Database(db).ListCollectionNames(ctx, bson.M{
 		"type": "collection",
-		"name": bson.M{"$not": bson.Regex{Pattern: `^system\.`}},
+		"name": bson.M{"$not": bson.Regex{Pattern: `^system\.`}, "$ne": ckptColl},
 	})
 	slices.Sort(names)
 	return names, err
@@ -720,7 +731,7 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 	rn.stop()
 
 	// сброс чекпойнта базы: поток перечитывается с того же StartTS поверх готовой цели
-	_, err = dstClient.Database(ckptDB).Collection(ckptColl).DeleteOne(ctx, bson.M{"_id": db})
+	_, err = ckptOf(db).DeleteOne(ctx, bson.M{"_id": ckptID})
 	require.NoError(t, err)
 	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, ApplyDrops: []string{db + ".gone"}})
 
@@ -981,7 +992,7 @@ func TestIntegrationDDL(t *testing.T) {
 
 	rn.waitSame(db)
 
-	colls, err := dstClient.Database(db).ListCollectionNames(ctx, bson.D{})
+	colls, err := collNames(ctx, dstClient, db)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"b"}, colls)
 	assert.Equal(t, []string{"_id_", "a_code_u", "a_k_n", "a_status_p", "a_ttl"}, indexNames(ctx, t, dstClient, db, "b"),
@@ -1105,7 +1116,7 @@ func TestIntegrationDstDB(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 3, n, "0, 1 из a и 10; документ старой b удалён dropTarget")
 	assert.False(t, dbExists(ctx, t, dstClient, db), "база источника %s появилась на цели", db)
-	assert.Equal(t, dbPair{src: db, dst: dstDB}, rn.ckptDB())
+	assert.Equal(t, dbPair{src: db, dst: dstDB}, rn.ckptPair())
 }
 
 // Режим одной базы: чекпойнт помнит базу, рестарт продолжает с токена.
@@ -1124,7 +1135,7 @@ func TestIntegrationSingleDBResume(t *testing.T) {
 	rn.waitSame(db)
 	rn.waitQuiet()
 	rn.stop()
-	assert.Equal(t, dbPair{src: db, dst: db}, rn.ckptDB())
+	assert.Equal(t, dbPair{src: db, dst: db}, rn.ckptPair())
 
 	const n = 2
 	for i := 3; i < 3+n; i++ {
@@ -1137,7 +1148,7 @@ func TestIntegrationSingleDBResume(t *testing.T) {
 	rn2.waitSame(db)
 	rn2.waitQuiet()
 	assert.EqualValues(t, n, rn2.r.Applied())
-	assert.Equal(t, dbPair{src: db, dst: db}, rn2.ckptDB())
+	assert.Equal(t, dbPair{src: db, dst: db}, rn2.ckptPair())
 }
 
 // writeCkpt записывает на цель чекпойнт базы цели pair.dst с токеном-заглушкой.
@@ -1145,9 +1156,9 @@ func writeCkpt(t *testing.T, pair dbPair) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
-	_, err := dstClient.Database(ckptDB).Collection(ckptColl).ReplaceOne(ctx,
-		bson.M{"_id": pair.dst},
-		bson.M{"_id": pair.dst, "token": bson.M{"_data": "00"}, "db": pair.src, "dst_db": pair.dst},
+	_, err := ckptOf(pair.dst).ReplaceOne(ctx,
+		bson.M{"_id": ckptID},
+		bson.M{"_id": ckptID, "token": bson.M{"_data": "00"}, "db": pair.src, "dst_db": pair.dst},
 		options.Replace().SetUpsert(true))
 	require.NoError(t, err)
 }
@@ -1155,7 +1166,7 @@ func writeCkpt(t *testing.T, pair dbPair) {
 // Чекпойнт базы цели записан для другой базы источника: Run отказывается стартовать.
 // Токен произвольный: проверка идёт до открытия потока.
 func TestIntegrationDBMismatch(t *testing.T) {
-	prepare(t)
+	cleanDBs(t, "it_mismatch_a", "it_mismatch_b")
 	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a"})
 
 	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_b", DstDB: "it_mismatch_a"})
@@ -1174,7 +1185,7 @@ func TestIntegrationDBMismatch(t *testing.T) {
 
 // Другая база цели — другой чекпойнт: чужой не подхватывается, стартовать не с чего.
 func TestIntegrationDstDBMismatch(t *testing.T) {
-	prepare(t)
+	cleanDBs(t, "it_mismatch_a", "it_mismatch_a2", "it_mismatch_a3")
 	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a2"})
 
 	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a", DstDB: "it_mismatch_a3"})
@@ -1189,8 +1200,8 @@ func TestIntegrationDstDBMismatch(t *testing.T) {
 	assert.ErrorContains(t, err, "открытие change stream", "чекпойнт прочитан, сервер отверг токен-заглушку")
 }
 
-// Два процесса разных баз пишут в один целевой кластер: у каждого свой чекпойнт,
-// обе базы сходятся независимо.
+// Два процесса разных баз пишут в один целевой кластер: у каждой базы цели своя
+// служебная коллекция чекпойнта, обе базы сходятся независимо.
 func TestIntegrationTwoProcessesOneTarget(t *testing.T) {
 	dbA := prepare(t)
 	dbB := dbA + "_b"
@@ -1221,21 +1232,79 @@ func TestIntegrationTwoProcessesOneTarget(t *testing.T) {
 	rnB.waitQuiet()
 	assert.EqualValues(t, 4, rnA.r.Applied(), "3 insert + update — только своей базы")
 	assert.EqualValues(t, 4, rnB.r.Applied(), "3 insert + delete — только своей базы")
-	assert.Equal(t, dbPair{src: dbA, dst: dbA}, rnA.ckptDB())
-	assert.Equal(t, dbPair{src: dbB, dst: dbB}, rnB.ckptDB())
+	assert.Equal(t, dbPair{src: dbA, dst: dbA}, rnA.ckptPair())
+	assert.Equal(t, dbPair{src: dbB, dst: dbB}, rnB.ckptPair())
 
-	cur, err := dstClient.Database(ckptDB).Collection(ckptColl).Find(ctx, bson.D{},
-		options.Find().SetProjection(bson.M{"_id": 1}).SetSort(bson.M{"_id": 1}))
+	for _, db := range []string{dbA, dbB} {
+		n, err := ckptOf(db).CountDocuments(ctx, bson.D{})
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, n, "в служебной коллекции %s один документ чекпойнта", db)
+	}
+}
+
+// Чекпойнт лежит в служебной коллекции базы цели: отдельной базы на цели нет,
+// база источника (при --dst-db) не появляется.
+func TestIntegrationCheckpointInDstDB(t *testing.T) {
+	db := prepare(t)
+	dstDB := db + "_v2"
+	cleanDB(t, dstDB)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	// база прежнего формата могла остаться в контейнере от старых прогонов
+	require.NoError(t, dstClient.Database("_replicator").Drop(ctx))
+
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db, DstDB: dstDB})
+	_, err := srcClient.Database(db).Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
-	var docs []struct {
-		ID string `bson:"_id"`
+	rn.waitSameDBs(db, dstDB)
+	rn.waitQuiet()
+
+	var doc struct {
+		DB    string   `bson:"db"`
+		DstDB string   `bson:"dst_db"`
+		Owner string   `bson:"owner"`
+		Token bson.Raw `bson:"token"`
 	}
-	require.NoError(t, cur.All(ctx, &docs))
-	ids := make([]string, 0, len(docs))
-	for _, d := range docs {
-		ids = append(ids, d.ID)
-	}
-	assert.Equal(t, []string{dbA, dbB}, ids, "по документу чекпойнта на базу цели")
+	require.NoError(t, ckptOf(dstDB).FindOne(ctx, bson.M{"_id": ckptID}).Decode(&doc))
+	assert.Equal(t, db, doc.DB)
+	assert.Equal(t, dstDB, doc.DstDB)
+	assert.Equal(t, rn.r.owner, doc.Owner)
+	assert.NotNil(t, doc.Token)
+	n, err := ckptOf(dstDB).CountDocuments(ctx, bson.D{})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, n)
+
+	names, err := dstClient.Database(dstDB).ListCollectionNames(ctx, bson.D{})
+	require.NoError(t, err)
+	slices.Sort(names)
+	assert.Equal(t, []string{ckptColl, "items"}, names)
+	assert.False(t, dbExists(ctx, t, dstClient, "_replicator"), "отдельной базы чекпойнтов на цели нет")
+	assert.False(t, dbExists(ctx, t, dstClient, db), "база источника %s появилась на цели", db)
+}
+
+// Служебную коллекцию удалили вручную: во время работы — ErrLeaseLost на ближайшем
+// продлении (документ не пересоздаётся), при рестарте без --start-ts — ErrNoStartPoint.
+func TestIntegrationCheckpointCollDropped(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	_, err := srcClient.Database(db).Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	rn.waitSame(db)
+	rn.waitQuiet()
+
+	require.NoError(t, ckptOf(db).Drop(ctx))
+	require.ErrorIs(t, rn.waitExit(), ErrLeaseLost)
+	rn.stop()
+	_, found := readLease(t, db)
+	assert.False(t, found, "ни продление, ни Release документ не пересоздают")
+
+	_, err = runErr(t, Config{BatchSize: 1000, DB: db})
+	require.ErrorIs(t, err, ErrNoStartPoint)
+	_, found = readLease(t, db)
+	assert.False(t, found, "документ без позиции удалён при снятии аренды")
 }
 
 // Трафик считается через диалеры клиентов: поток источника отдаёт fullDocument
@@ -1342,7 +1411,7 @@ func TestIntegrationStateFile(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
-	raw, err := dstClient.Database(ckptDB).Collection(ckptColl).FindOne(ctx, bson.M{"_id": db}).Raw()
+	raw, err := ckptOf(db).FindOne(ctx, bson.M{"_id": ckptID}).Raw()
 	require.NoError(t, err)
 	_, err = raw.LookupErr("traffic")
 	assert.Error(t, err, "в чекпойнте трафика нет")
@@ -1418,7 +1487,7 @@ func TestIntegrationStateFileContinues(t *testing.T) {
 // Неверный --db (ErrDBMismatch): файл состояния базы цели не тронут — ни записи,
 // ни переноса в сторону как файла другой пары баз.
 func TestIntegrationStateFileDBMismatch(t *testing.T) {
-	prepare(t)
+	cleanDBs(t, "it_mismatch_a", "it_mismatch_b")
 	dir := t.TempDir()
 	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a"})
 	cfg := withState(Config{BatchSize: 1000, DB: "it_mismatch_b", DstDB: "it_mismatch_a"}, dir)
@@ -1494,7 +1563,7 @@ func readLease(t *testing.T, dstDB string) (leaseState, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var st leaseState
-	err := dstClient.Database(ckptDB).Collection(ckptColl).FindOne(ctx, bson.M{"_id": dstDB}).Decode(&st)
+	err := ckptOf(dstDB).FindOne(ctx, bson.M{"_id": ckptID}).Decode(&st)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return leaseState{}, false
 	}
@@ -1543,8 +1612,8 @@ func TestIntegrationLeaseExpired(t *testing.T) {
 	db := prepare(t)
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
-	_, err := dstClient.Database(ckptDB).Collection(ckptColl).InsertOne(ctx, bson.M{
-		"_id": db, "owner": "crashed:1:deadbeef", "lease_until": time.Now().Add(-time.Minute),
+	_, err := ckptOf(db).InsertOne(ctx, bson.M{
+		"_id": ckptID, "owner": "crashed:1:deadbeef", "lease_until": time.Now().Add(-time.Minute),
 	})
 	require.NoError(t, err)
 
@@ -1563,8 +1632,8 @@ func TestIntegrationLeaseHeldNoToken(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
 	const holder = "starting:1:00000000"
-	_, err := dstClient.Database(ckptDB).Collection(ckptColl).InsertOne(ctx, bson.M{
-		"_id": db, "owner": holder, "lease_until": time.Now().Add(time.Minute),
+	_, err := ckptOf(db).InsertOne(ctx, bson.M{
+		"_id": ckptID, "owner": holder, "lease_until": time.Now().Add(time.Minute),
 	})
 	require.NoError(t, err)
 
@@ -1591,8 +1660,8 @@ func TestIntegrationSaveTokenNotOwner(t *testing.T) {
 
 	require.NoError(t, r.acquireLease(ctx))
 	const intruder = "intruder:1:00000000"
-	_, err = dstClient.Database(ckptDB).Collection(ckptColl).UpdateOne(ctx,
-		bson.M{"_id": db}, bson.M{"$set": bson.M{"owner": intruder}})
+	_, err = ckptOf(db).UpdateOne(ctx,
+		bson.M{"_id": ckptID}, bson.M{"$set": bson.M{"owner": intruder}})
 	require.NoError(t, err)
 	require.ErrorIs(t, r.saveToken(ctx, token), ErrLeaseLost)
 	st, _ := readLease(t, db)
@@ -1627,8 +1696,8 @@ func TestIntegrationLeaseLost(t *testing.T) {
 	}, waitTimeout, pollEvery)
 
 	const intruder = "intruder:1:00000000"
-	_, err := dstClient.Database(ckptDB).Collection(ckptColl).UpdateOne(ctx,
-		bson.M{"_id": db}, bson.M{"$set": bson.M{"owner": intruder}})
+	_, err := ckptOf(db).UpdateOne(ctx,
+		bson.M{"_id": ckptID}, bson.M{"$set": bson.M{"owner": intruder}})
 	require.NoError(t, err)
 
 	require.ErrorIs(t, rn.waitExit(), ErrLeaseLost)
@@ -1715,7 +1784,7 @@ func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
 	assert.Equal(t, r.lastTS, r.appliedTS)
 	rn := &runner{t: t, r: r}
 	assert.Equal(t, r.lastTS, rn.ckptTime())
-	assert.Equal(t, dbPair{src: db, dst: db}, rn.ckptDB())
+	assert.Equal(t, dbPair{src: db, dst: db}, rn.ckptPair())
 
 	// рестарт: событий ещё нет, lastTS пуст — позиция берётся из чекпойнта
 	// и пустой getMore с неразобранным токеном её не обнуляет
@@ -2286,9 +2355,8 @@ func TestIntegrationRestartAfterDDL(t *testing.T) {
 	rn2.waitQuiet()
 	assert.EqualValues(t, n, rn2.r.Applied())
 
-	colls, err := dstClient.Database(db).ListCollectionNames(ctx, bson.D{})
+	colls, err := collNames(ctx, dstClient, db)
 	require.NoError(t, err)
-	slices.Sort(colls)
 	assert.Equal(t, []string{"a", "b"}, colls)
 }
 

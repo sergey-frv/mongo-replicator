@@ -75,12 +75,12 @@ func (r *Replicator) leaseUntil() bson.M {
 // upsert вставляет документ с тем же _id и получает E11000.
 func (r *Replicator) acquireLease(ctx context.Context) error {
 	update := mongo.Pipeline{{{Key: "$set", Value: bson.M{"owner": r.owner, "lease_until": r.leaseUntil()}}}}
-	existing := bson.M{"_id": r.cfg.DstDB, "$or": bson.A{
+	existing := bson.M{"_id": ckptID, "$or": bson.A{
 		bson.M{"owner": bson.M{"$exists": false}},
 		bson.M{"owner": r.owner},
 		bson.M{"$expr": bson.M{"$lt": bson.A{"$lease_until", "$$NOW"}}},
 	}}
-	free := bson.M{"_id": r.cfg.DstDB, "owner": bson.M{"$exists": false}}
+	free := bson.M{"_id": ckptID, "owner": bson.M{"$exists": false}}
 	for retried := false; ; retried = true {
 		res, err := r.ckpt().UpdateOne(ctx, existing, update)
 		if err != nil {
@@ -100,7 +100,7 @@ func (r *Replicator) acquireLease(ctx context.Context) error {
 			Owner      string    `bson:"owner"`
 			LeaseUntil time.Time `bson:"lease_until"`
 		}
-		findErr := r.ckpt().FindOne(ctx, bson.M{"_id": r.cfg.DstDB}).Decode(&cur)
+		findErr := r.ckpt().FindOne(ctx, bson.M{"_id": ckptID}).Decode(&cur)
 		switch {
 		case findErr != nil && !errors.Is(findErr, mongo.ErrNoDocuments):
 			return fmt.Errorf("захват аренды: чтение владельца: %w", findErr)
@@ -171,7 +171,7 @@ func (r *Replicator) renewOnce(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, r.leaseRenew)
 	defer cancel()
 	res, err := r.ckpt().UpdateOne(ctx,
-		bson.M{"_id": r.cfg.DstDB, "owner": r.owner},
+		bson.M{"_id": ckptID, "owner": r.owner},
 		mongo.Pipeline{{{Key: "$set", Value: bson.M{"lease_until": r.leaseUntil()}}}})
 	if err != nil {
 		return err
@@ -194,14 +194,14 @@ func (r *Replicator) leaseLostErr() error {
 func (r *Replicator) Release(ctx context.Context) error {
 	writer := r.stopState()
 	res, err := r.ckpt().DeleteOne(ctx,
-		bson.M{"_id": r.cfg.DstDB, "owner": r.owner, "token": bson.M{"$exists": false}})
+		bson.M{"_id": ckptID, "owner": r.owner, "token": bson.M{"$exists": false}})
 	if err != nil {
 		return fmt.Errorf("снятие аренды: %w", err)
 	}
 	owned := res.DeletedCount > 0
 	if !owned {
 		up, err := r.ckpt().UpdateOne(ctx,
-			bson.M{"_id": r.cfg.DstDB, "owner": r.owner},
+			bson.M{"_id": ckptID, "owner": r.owner},
 			bson.M{"$unset": bson.M{"owner": "", "lease_until": ""}})
 		if err != nil {
 			return fmt.Errorf("снятие аренды: %w", err)

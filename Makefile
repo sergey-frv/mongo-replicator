@@ -20,7 +20,8 @@ test:
 		CGO_ENABLED=1 go test -race -timeout=\"300s\" ./..."
 
 # -count=1: иначе go-build-cache отдаёт (cached) без обращения к MongoDB
-# -p 1: пакеты не параллельно — тесты очищают общую коллекцию чекпойнтов на цели
+# -p 1: пакеты не параллельно — тесты делят кластеры, а тесты аренды
+# чувствительны ко времени и нагрузке
 .PHONY: test-integration
 test-integration:
 	docker compose run --rm app /bin/sh -c "\

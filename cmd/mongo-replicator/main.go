@@ -2,7 +2,8 @@
 //
 // Требования:
 //   - источник: replica set, MongoDB 6.0+ (нужен showExpandedEvents для DDL);
-//   - цель: в базу --dst-db (и в _replicator) пишет только репликатор;
+//   - цель: в базу --dst-db пишет только репликатор (чекпойнт — в её коллекции
+//     _replicator_checkpoint);
 //   - на цели уже восстановлен полный дамп источника, а --start-ts указывает
 //     на момент ДО начала этого дампа и ещё попадает в окно oplog источника.
 package main
@@ -336,7 +337,7 @@ func hint(err error) string {
 	switch {
 	case errors.As(err, &dropErr) && dropErr.Database:
 		return "база удалена на источнике; на цели данные остались — нужна новая полная заливка: " +
-			"удалите чекпойнт, залейте базу, запустите с --start-ts"
+			"удалите <dst-db>._replicator_checkpoint (или всю базу цели) и залейте заново с --start-ts"
 	case errors.As(err, &dropErr):
 		return fmt.Sprintf("на источнике удалена коллекция %s (вручную, перенос в другую базу или dropDatabase); "+
 			"если удаление ожидаемое — перезапустите с --apply-drop %s", dropErr.NS, dropErr.NS)
@@ -349,7 +350,7 @@ func hint(err error) string {
 		return "задайте --start-ts"
 	case errors.Is(err, replicator.ErrDBMismatch):
 		return "чекпойнт этой базы цели записан для другой базы источника: верните прежний --db " +
-			"или удалите чекпойнт этой базы (deleteOne({_id: \"<dst-db>\"})) и залейте заново"
+			"или удалите <dst-db>._replicator_checkpoint (или всю базу цели) и залейте заново"
 	case errors.Is(err, replicator.ErrLeaseHeld):
 		return "другой процесс реплицирует эту базу; если он упал — аренда истечёт через ≤60 с"
 	case errors.Is(err, replicator.ErrLeaseLost):
@@ -358,7 +359,7 @@ func hint(err error) string {
 		return "в потоке событие другой базы — сообщите о баге"
 	case errors.Is(err, replicator.ErrStreamInvalidated):
 		return "поток закрыт сервером; на цели данные остались — нужна новая полная заливка: " +
-			"удалите чекпойнт, залейте базу, запустите с --start-ts"
+			"удалите <dst-db>._replicator_checkpoint (или всю базу цели) и залейте заново с --start-ts"
 	case replicator.IsDBCaseConflict(err):
 		return "на цели есть база с тем же именем в другом регистре — проверьте --dst-db"
 	}
