@@ -73,10 +73,10 @@
 ```
 - **owner** генерируется в `New` (`hostname:pid:<nonce>`): два контейнера с одинаковыми hostname и PID 1 и два `Replicator` в одном тестовом бинаре — разные владельцы; повторный `Run` того же `Replicator` — тот же владелец
 - поля `Replicator`: `leaseTTL` (60 с), `leaseRenew` (10 с), `clusterEvery` (60 с) — значения по умолчанию из констант, в тестах переопределяются
-- **захват** (`acquireLease`, в начале `Run` до `loadCheckpoint`): `UpdateOne(filter, pipeline, SetUpsert(true))`
-  - фильтр: `{_id: dst, $or: [{owner: {$exists: false}}, {owner: me}, {$expr: {$lt: ["$lease_until", "$$NOW"]}}]}` (без `lease_until` — свободна)
-  - update: `[{$set: {owner: me, lease_until: {$add: ["$$NOW", ttlMs]}}}]`
-  - при upsert-вставке `_id` берётся из равенства верхнего уровня; при живой чужой аренде — E11000 (`mongo.IsDuplicateKeyError`); два одновременных старта — проигравший тоже получает E11000
+- **захват** (`acquireLease`, в начале `Run` до `loadCheckpoint`) — ⚠️ в два запроса: `$expr` в фильтре upsert сервер отвергает («$expr is not allowed in the query predicate for an upsert»)
+  - update (оба шага): `[{$set: {owner: me, lease_until: {$add: ["$$NOW", ttlMs]}}}]`
+  - шаг 1, `UpdateOne` без upsert: `{_id: dst, $or: [{owner: {$exists: false}}, {owner: me}, {$expr: {$lt: ["$lease_until", "$$NOW"]}}]}` — свободная, своя или истёкшая; `MatchedCount > 0` → захвачено
+  - шаг 2, `UpdateOne` с upsert: `{_id: dst, owner: {$exists: false}}` — документа нет (или освобождён между шагами); при upsert-вставке `_id` берётся из равенства верхнего уровня; при живой чужой аренде — E11000 (`mongo.IsDuplicateKeyError`); два одновременных старта — проигравший тоже получает E11000
   - E11000 → прочитать документ: есть живой владелец → `ErrLeaseHeld` (`базу <dst> уже реплицирует <owner>, аренда до <lease_until>`); владельца нет (освобождён между попытками) → один повтор захвата
 - **продление**: горутина, запускается `Run` после захвата, контекст производный от контекста `Run` (`context.WithCancelCause`); раз в `leaseRenew`:
   - `UpdateOne({_id, owner: me}, [{$set: {lease_until: {$add: ["$$NOW", ttlMs]}, "traffic.src_in": {$add: [{$ifNull: ["$traffic.src_in", 0]}, Δ]}, … (4 поля)}}])` — дельты `int64`; пайплайн с `$ifNull` — один атомарный запрос, поля создаются при первом продлении
@@ -199,13 +199,13 @@ func (r *Replicator) SetRetry(n int, err error)   // из цикла повто�
 - Modify: `cmd/mongo-replicator/main.go`, `cmd/mongo-replicator/main_test.go`
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] `owner` на экземпляр (`hostname:pid:<nonce>`) в `New`; поля `leaseTTL`/`leaseRenew`; `acquireLease` (`UpdateOne` + upsert, E11000 → `ErrLeaseHeld` или один повтор), горутина продления с отменой `Run` (`ErrLeaseLost`, `errLeaseExpiring`), `Run` ждёт горутину; `Release(ctx)` (снятие; удаление документа без `token`)
-- [ ] `saveToken` → `UpdateOne({_id, owner})` без upsert (`MatchedCount == 0` → `ErrLeaseLost`)
-- [ ] `main`: `defer Release` сразу после `replicator.New`; `permanent`/`hint` для `ErrLeaseHeld`/`ErrLeaseLost`
-- [ ] интеграционная обвязка: `runner.stop` и `runErr` вызывают `Release` (контекст с таймаутом); `TestIntegrationSaveTokenUnparsedTime` — явный `acquireLease` перед `saveToken`, `Release` перед `r2.Run`; тестовые `leaseRenew` ≈ 300 мс, `leaseTTL` ≈ 2 с
-- [ ] write unit tests: тексты `ErrLeaseHeld` (владелец, время); `permanent`/`hint` для обеих ошибок; формат `owner` (уникален между двумя `New`); самоостановка по времени последнего успешного продления (чистая функция/часы через поле)
-- [ ] write integration tests (`runErr`/`Eventually`): A работает → B на ту же базу цели — `ErrLeaseHeld`; A остановлен (`stop` с `Release`) → B стартует сразу; документ с чужим `owner` и прошедшим `lease_until` → старт; подмена `owner` во время работы A → A завершается с `ErrLeaseLost` (`Eventually`, несколько секунд); повторный `Run` того же `Replicator` после временной ошибки — захват своей аренды; **продление идёт при заблокированном цикле** — хук в `applyDDL` (поле-функция для тестов) засыпает дольше `leaseTTL`, аренда в документе продолжает продлеваться, B получает `ErrLeaseHeld`; `ErrNoStartPoint` → после `Release` документа нет
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] `owner` на экземпляр (`hostname:pid:<nonce>`) в `New`; поля `leaseTTL`/`leaseRenew`; `acquireLease` (`UpdateOne` + upsert, E11000 → `ErrLeaseHeld` или один повтор), горутина продления с отменой `Run` (`ErrLeaseLost`, `errLeaseExpiring`), `Run` ждёт горутину; `Release(ctx)` (снятие; удаление документа без `token`)
+- [x] `saveToken` → `UpdateOne({_id, owner})` без upsert (`MatchedCount == 0` → `ErrLeaseLost`)
+- [x] `main`: `defer Release` сразу после `replicator.New`; `permanent`/`hint` для `ErrLeaseHeld`/`ErrLeaseLost`
+- [x] интеграционная обвязка: `runner.stop` и `runErr` вызывают `Release` (контекст с таймаутом); `TestIntegrationSaveTokenUnparsedTime` — явный `acquireLease` перед `saveToken`, `Release` перед `r2.Run`; тестовые `leaseRenew` ≈ 300 мс, `leaseTTL` ≈ 2 с
+- [x] write unit tests: тексты `ErrLeaseHeld` (владелец, время); `permanent`/`hint` для обеих ошибок; формат `owner` (уникален между двумя `New`); самоостановка по времени последнего успешного продления (чистая функция/часы через поле)
+- [x] write integration tests (`runErr`/`Eventually`): A работает → B на ту же базу цели — `ErrLeaseHeld`; A остановлен (`stop` с `Release`) → B стартует сразу; документ с чужим `owner` и прошедшим `lease_until` → старт; подмена `owner` во время работы A → A завершается с `ErrLeaseLost` (`Eventually`, несколько секунд); повторный `Run` того же `Replicator` после временной ошибки — захват своей аренды; **продление идёт при заблокированном цикле** — хук в `applyDDL` (поле-функция для тестов) засыпает дольше `leaseTTL`, аренда в документе продолжает продлеваться, B получает `ErrLeaseHeld`; `ErrNoStartPoint` → после `Release` документа нет
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
 
 ### Task 4: Счётчики трафика
 

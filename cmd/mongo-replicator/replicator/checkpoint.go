@@ -29,7 +29,8 @@ func (r *Replicator) ckpt() *mongo.Collection {
 		options.Collection().SetReadPreference(readpref.Primary()))
 }
 
-// checkpoint — сохранённая позиция; пустой Token — чекпойнта нет.
+// checkpoint — сохранённая позиция; пустой Token — чекпойнта нет (документ может
+// быть создан захватом аренды без позиции).
 type checkpoint struct {
 	Token       bson.Raw       `bson:"token"`
 	DB          string         `bson:"db"`     // база источника, для которой записан токен
@@ -72,20 +73,23 @@ func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
 			ts = r.appliedTS
 		}
 	}
-	_, err := r.ckpt().ReplaceOne(ctx,
-		bson.M{"_id": r.cfg.DstDB},
-		bson.M{
-			"_id":         r.cfg.DstDB,
+	// без upsert: документ создан захватом аренды; owner и traffic не затираются
+	res, err := r.ckpt().UpdateOne(ctx,
+		bson.M{"_id": r.cfg.DstDB, "owner": r.owner},
+		bson.M{"$set": bson.M{
 			"token":       token,
 			"clusterTime": ts,
 			"updatedAt":   time.Now().UTC(),
 			"db":          r.cfg.DB,
 			"dst_db":      r.cfg.DstDB,
-		},
-		options.Replace().SetUpsert(true))
-	if err == nil {
-		r.saved = token
-		r.appliedTS = ts
+		}})
+	if err != nil {
+		return err
 	}
-	return err
+	if res.MatchedCount == 0 {
+		return r.leaseLostErr()
+	}
+	r.saved = token
+	r.appliedTS = ts
+	return nil
 }

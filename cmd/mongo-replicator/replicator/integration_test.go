@@ -5,6 +5,7 @@ package replicator
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -32,6 +33,9 @@ const (
 	// больше maxAwaitTime потока (1 с): за это время Run успевает сделать
 	// хотя бы один пустой getMore и сохранить чекпойнт
 	quietInterval = 1600 * time.Millisecond
+	// аренда в тестах: истечение ждём секунды, а не минуту
+	itLeaseTTL   = 2 * time.Second
+	itLeaseRenew = 300 * time.Millisecond
 )
 
 var (
@@ -171,20 +175,36 @@ func cleanDB(t *testing.T, db string) {
 	t.Cleanup(func() { dropDB(t, db) })
 }
 
+// newIT — New с короткой арендой.
+func newIT(dst *mongo.Client, cfg Config) *Replicator {
+	r := New(srcClient, dst, cfg)
+	r.leaseTTL, r.leaseRenew = itLeaseTTL, itLeaseRenew
+	return r
+}
+
+// release снимает аренду, как defer в main.
+func release(t *testing.T, r *Replicator) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	assert.NoError(t, r.Release(ctx))
+}
+
 // runner — репликатор, запущенный в горутине.
 type runner struct {
-	t    *testing.T
-	r    *Replicator
-	stop func()
-	done chan struct{}
-	err  error // читать только после закрытия done
+	t        *testing.T
+	r        *Replicator
+	stop     func()
+	done     chan struct{}
+	err      error // читать только после закрытия done
+	selfExit bool  // Run вернулся сам (waitExit): stop не ждёт отмены
 }
 
 // start запускает Run нового репликатора в горутине и регистрирует остановку
 // в t.Cleanup: упавший require не оставит репликатор работать в следующих тестах.
 func start(t *testing.T, cfg Config) *runner {
 	t.Helper()
-	return startOn(t, New(srcClient, dstClient, cfg))
+	return startOn(t, newIT(dstClient, cfg))
 }
 
 // startOn — как start, но для уже созданного репликатора (повторный Run, как в ретраях main).
@@ -202,7 +222,10 @@ func startOn(t *testing.T, r *Replicator) *runner {
 		once.Do(func() {
 			cancel()
 			<-rn.done
-			assert.ErrorIs(t, rn.err, context.Canceled, "Run должен завершиться только отменой контекста")
+			if !rn.selfExit {
+				assert.ErrorIs(t, rn.err, context.Canceled, "Run должен завершиться только отменой контекста")
+			}
+			release(t, rn.r)
 		})
 	}
 	t.Cleanup(rn.stop)
@@ -217,6 +240,18 @@ func (rn *runner) exited() (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// waitExit ждёт, пока Run вернётся сам, и возвращает его ошибку.
+func (rn *runner) waitExit() error {
+	rn.t.Helper()
+	select {
+	case <-rn.done:
+	case <-time.After(waitTimeout):
+		rn.t.Fatalf("Run не вернулся за %s", waitTimeout)
+	}
+	rn.selfExit = true
+	return rn.err
 }
 
 // waitSame ждёт совпадения одноимённой базы на кластерах.
@@ -720,7 +755,7 @@ func TestIntegrationCheckpointReadsPrimary(t *testing.T) {
 	t.Cleanup(func() { _ = secDst.Disconnect(context.Background()) })
 
 	// без StartTS: Run обязан прочитать чекпойнт, иначе вернёт ErrNoStartPoint
-	rn2 := startOn(t, New(srcClient, secDst, Config{BatchSize: 1000, DB: db}))
+	rn2 := startOn(t, newIT(secDst, Config{BatchSize: 1000, DB: db}))
 	_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 	require.NoError(t, err)
 	rn2.waitSame(db)
@@ -730,18 +765,27 @@ func TestIntegrationNoStartPoint(t *testing.T) {
 	db := prepare(t)
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
-	err := New(srcClient, dstClient, Config{BatchSize: 1000, DB: db}).Run(ctx)
+	r := newIT(dstClient, Config{BatchSize: 1000, DB: db})
+	err := r.Run(ctx)
 	require.ErrorIs(t, err, ErrNoStartPoint)
+
+	_, found := readLease(t, db)
+	require.True(t, found, "документ создан захватом аренды")
+	require.NoError(t, r.Release(ctx))
+	_, found = readLease(t, db)
+	assert.False(t, found, "документ без позиции удалён при снятии аренды")
 }
 
-// runErr выполняет Run нового репликатора синхронно: ожидается ошибка от цели, а не таймаут.
+// runErr выполняет Run нового репликатора синхронно и снимает аренду, как main:
+// ожидается ошибка от цели, а не таймаут.
 func runErr(t *testing.T, cfg Config) (*Replicator, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
-	r := New(srcClient, dstClient, cfg)
+	r := newIT(dstClient, cfg)
 	err := r.Run(ctx)
 	require.NoError(t, ctx.Err(), "Run должен вернуть ошибку цели до таймаута")
+	release(t, r)
 	return r, err
 }
 
@@ -1191,13 +1235,175 @@ func TestIntegrationTwoProcessesOneTarget(t *testing.T) {
 	assert.Equal(t, []string{dbA, dbB}, ids, "по документу чекпойнта на базу цели")
 }
 
+// leaseState — аренда и позиция из документа чекпойнта.
+type leaseState struct {
+	Owner      string    `bson:"owner"`
+	LeaseUntil time.Time `bson:"lease_until"`
+	Token      bson.Raw  `bson:"token"`
+}
+
+// readLease читает документ чекпойнта базы цели dstDB; false — документа нет.
+func readLease(t *testing.T, dstDB string) (leaseState, bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var st leaseState
+	err := dstClient.Database(ckptDB).Collection(ckptColl).FindOne(ctx, bson.M{"_id": dstDB}).Decode(&st)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return leaseState{}, false
+	}
+	require.NoError(t, err)
+	return st, true
+}
+
+// Второй процесс на ту же базу цели не стартует, пока первый работает; после
+// остановки первого (со снятием аренды) — стартует сразу, не дожидаясь её истечения.
+func TestIntegrationLeaseHeld(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	rnA := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	items := srcClient.Database(db).Collection("items")
+	_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	rnA.waitSame(db)
+	rnA.waitQuiet()
+
+	_, err = runErr(t, Config{BatchSize: 1000, DB: db})
+	require.ErrorIs(t, err, ErrLeaseHeld)
+	assert.ErrorContains(t, err, rnA.r.owner)
+	st, _ := readLease(t, db)
+	assert.Equal(t, rnA.r.owner, st.Owner, "неудачный захват и Release второго не трогают аренду первого")
+
+	rnA.stop()
+	st, found := readLease(t, db)
+	require.True(t, found, "документ с позицией остаётся")
+	assert.Empty(t, st.Owner, "аренда снята")
+	assert.True(t, st.LeaseUntil.IsZero())
+	assert.NotNil(t, st.Token)
+
+	// без StartTS: B продолжает с чекпойнта A
+	rnB := start(t, Config{BatchSize: 1000, DB: db})
+	_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
+	require.NoError(t, err)
+	rnB.waitSame(db)
+	st, _ = readLease(t, db)
+	assert.Equal(t, rnB.r.owner, st.Owner)
+}
+
+// Документ с чужой истёкшей арендой (процесс упал, не сняв её): захват проходит.
+func TestIntegrationLeaseExpired(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	_, err := dstClient.Database(ckptDB).Collection(ckptColl).InsertOne(ctx, bson.M{
+		"_id": db, "owner": "crashed:1:deadbeef", "lease_until": time.Now().Add(-time.Minute),
+	})
+	require.NoError(t, err)
+
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	_, err = srcClient.Database(db).Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	rn.waitSame(db)
+	st, _ := readLease(t, db)
+	assert.Equal(t, rn.r.owner, st.Owner)
+}
+
+// Аренду забрали во время работы: Run завершается с ErrLeaseLost, а Release
+// не снимает чужую аренду.
+func TestIntegrationLeaseLost(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	require.Eventually(t, func() bool {
+		st, _ := readLease(t, db)
+		return st.Owner == rn.r.owner
+	}, waitTimeout, pollEvery)
+
+	const intruder = "intruder:1:00000000"
+	_, err := dstClient.Database(ckptDB).Collection(ckptColl).UpdateOne(ctx,
+		bson.M{"_id": db}, bson.M{"$set": bson.M{"owner": intruder}})
+	require.NoError(t, err)
+
+	require.ErrorIs(t, rn.waitExit(), ErrLeaseLost)
+	rn.stop()
+	st, _ := readLease(t, db)
+	assert.Equal(t, intruder, st.Owner)
+}
+
+// Повторный Run того же репликатора после временной ошибки захватывает свою же
+// аренду, а другой процесс между запусками её не получает.
+func TestIntegrationLeaseRerun(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	// токен-заглушка: Run захватывает аренду и падает на открытии потока
+	writeCkpt(t, dbPair{src: db, dst: db})
+
+	r := newIT(dstClient, Config{BatchSize: 1000, DB: db})
+	r.leaseTTL = time.Minute // не истечёт между запусками
+	t.Cleanup(func() { release(t, r) })
+	require.ErrorContains(t, r.Run(ctx), "открытие change stream")
+	st, _ := readLease(t, db)
+	assert.Equal(t, r.owner, st.Owner, "аренда остаётся за репликатором и после возврата Run")
+
+	_, err := runErr(t, Config{BatchSize: 1000, DB: db})
+	require.ErrorIs(t, err, ErrLeaseHeld)
+
+	require.ErrorContains(t, r.Run(ctx), "открытие change stream", "своя аренда захватывается снова")
+}
+
+// Аренда продлевается, пока основной цикл стоит в долгом DDL (createIndexes с
+// w:majority ждёт сборки индекса): другой процесс её не получает и через срок аренды.
+func TestIntegrationLeaseRenewDuringLongDDL(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	r := newIT(dstClient, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	inDDL := make(chan struct{})
+	var once sync.Once
+	r.ddlHook = func() {
+		once.Do(func() {
+			close(inDDL)
+			time.Sleep(3 * itLeaseTTL)
+		})
+	}
+	rn := startOn(t, r)
+	require.NoError(t, srcClient.Database(db).CreateCollection(ctx, "c"))
+	select {
+	case <-inDDL:
+	case <-ctx.Done():
+		t.Fatal("DDL не дошёл до применения")
+	}
+
+	before, _ := readLease(t, db)
+	time.Sleep(itLeaseTTL + itLeaseRenew) // без продления аренда уже истекла бы
+	after, _ := readLease(t, db)
+	assert.Equal(t, r.owner, after.Owner)
+	assert.True(t, after.LeaseUntil.After(before.LeaseUntil), "аренда продлевается: %v → %v",
+		before.LeaseUntil, after.LeaseUntil)
+
+	_, err := runErr(t, Config{BatchSize: 1000, DB: db})
+	require.ErrorIs(t, err, ErrLeaseHeld)
+
+	// DDL завершился, репликация продолжается
+	_, err = srcClient.Database(db).Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+	require.NoError(t, err)
+	rn.waitSame(db)
+}
+
 // Токен не разобран: clusterTime чекпойнта — время последнего события.
 func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
 	db := prepare(t)
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
 
-	r := New(srcClient, dstClient, Config{BatchSize: 1000, DB: db})
+	r := newIT(dstClient, Config{BatchSize: 1000, DB: db})
+	require.NoError(t, r.acquireLease(ctx), "saveToken пишет только под арендой")
 	r.lastTS = bson.Timestamp{T: 1000, I: 3}
 	token, err := bson.Marshal(bson.M{"_data": "zz"})
 	require.NoError(t, err)
@@ -1211,7 +1417,9 @@ func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
 	// рестарт: событий ещё нет, lastTS пуст — позиция берётся из чекпойнта
 	// и пустой getMore с неразобранным токеном её не обнуляет
 	// Run берёт позицию из чекпойнта до открытия потока; сам поток с токеном-заглушкой не откроется
-	r2 := New(srcClient, dstClient, Config{BatchSize: 1000, DB: db})
+	require.NoError(t, r.Release(ctx))
+	r2 := newIT(dstClient, Config{BatchSize: 1000, DB: db})
+	t.Cleanup(func() { release(t, r2) })
 	require.ErrorContains(t, r2.Run(ctx), "открытие change stream")
 	require.Equal(t, r.lastTS, r2.appliedTS)
 	token2, err := bson.Marshal(bson.M{"_data": "yy"})

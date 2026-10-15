@@ -50,10 +50,11 @@ type options struct {
 var revision = "unknown"
 
 const (
-	appName      = "cs-replicator"
-	pingTimeout  = 10 * time.Second
-	retryTimeout = 5 * time.Second
-	maxDBNameLen = 63 // MongoDB: имя базы короче 64 байт
+	appName        = "cs-replicator"
+	pingTimeout    = 10 * time.Second
+	retryTimeout   = 5 * time.Second
+	releaseTimeout = 5 * time.Second // снятие аренды при выходе
+	maxDBNameLen   = 63              // MongoDB: имя базы короче 64 байт
 )
 
 func main() {
@@ -206,6 +207,14 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 		StartTS: opts.StartTS, BatchSize: opts.BatchSize, DB: opts.DB, DstDB: opts.DstDB,
 		ApplyDrops: opts.ApplyDrops,
 	})
+	// на любом выходе, включая return 1 и панику: иначе база цели занята до истечения аренды
+	defer func() {
+		relCtx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+		defer cancel()
+		if err := r.Release(relCtx); err != nil {
+			log.Warn().Err(err).Msg("аренда не снята: база цели освободится по её истечении")
+		}
+	}()
 	for ctx.Err() == nil {
 		err := r.Run(ctx)
 		if ctx.Err() != nil {
@@ -249,6 +258,10 @@ func hint(err error) string {
 	case errors.Is(err, replicator.ErrDBMismatch):
 		return "чекпойнт этой базы цели записан для другой базы источника: верните прежний --db " +
 			"или удалите чекпойнт этой базы (deleteOne({_id: \"<dst-db>\"})) и залейте заново"
+	case errors.Is(err, replicator.ErrLeaseHeld):
+		return "другой процесс реплицирует эту базу; если он упал — аренда истечёт через ≤60 с"
+	case errors.Is(err, replicator.ErrLeaseLost):
+		return "аренду забрал другой процесс — проверьте, не запущены ли два репликатора на одну базу"
 	case errors.Is(err, replicator.ErrForeignNamespace):
 		return "в потоке событие другой базы — сообщите о баге"
 	case errors.Is(err, replicator.ErrStreamInvalidated):

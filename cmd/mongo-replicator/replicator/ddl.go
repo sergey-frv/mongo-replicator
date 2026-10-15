@@ -93,6 +93,9 @@ func (r *Replicator) dropAllowed(ctx context.Context, db *mongo.Database, ev *ev
 // applyDDL переносит изменения схемы. Ошибки «уже есть» / «уже нет»
 // игнорируются: они означают повторное применение после рестарта.
 func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
+	if r.ddlHook != nil {
+		r.ddlHook()
+	}
 	db := r.dst.Database(r.cfg.DstDB)
 	var err error
 

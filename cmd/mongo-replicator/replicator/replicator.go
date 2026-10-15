@@ -74,6 +74,12 @@ type Replicator struct {
 	// лог прогресса переживает перезапуски Run: при ретраях лаг тоже виден
 	lastLog time.Time
 	lastN   int64
+
+	owner      string        // владелец аренды базы цели (newOwner): один на экземпляр, и для повторных Run
+	leaseTTL   time.Duration // срок аренды
+	leaseRenew time.Duration // интервал продления
+
+	ddlHook func() // тесты: вызывается в начале applyDDL
 }
 
 // New создаёт репликатор. dst должен быть подключён с w:majority,
@@ -86,7 +92,10 @@ func New(src, dst *mongo.Client, cfg Config) *Replicator {
 	for _, ns := range cfg.ApplyDrops {
 		applyDrops[ns] = true
 	}
-	return &Replicator{src: src, dst: dst, cfg: cfg, applyDrops: applyDrops, lastLog: time.Now()}
+	return &Replicator{
+		src: src, dst: dst, cfg: cfg, applyDrops: applyDrops, lastLog: time.Now(),
+		owner: newOwner(), leaseTTL: defaultLeaseTTL, leaseRenew: defaultLeaseRenew,
+	}
 }
 
 // Applied возвращает число применённых на цели DML-операций.
@@ -145,7 +154,9 @@ func checkDBs(saved, want dbPair) error {
 	return nil
 }
 
-// Run открывает поток и работает до ошибки или отмены контекста.
+// Run захватывает аренду базы цели, открывает поток и работает до ошибки или отмены
+// контекста. Аренда продлевается в своей горутине; потерянная аренда останавливает Run.
+// По возврату аренда не снимается (повторный Run её подхватит): снять — Release.
 // Несохранённый хвост прошлого запуска отбрасывается: его перечитаем с чекпойнта.
 func (r *Replicator) Run(ctx context.Context) error {
 	if r.cfg.DB == "" {
@@ -155,6 +166,32 @@ func (r *Replicator) Run(ctx context.Context) error {
 	// и при ошибке: если Run раз за разом падает, лаг в логе всё равно растёт
 	defer r.logProgress(ctx)
 
+	acquired := time.Now()
+	if err := r.acquireLease(ctx); err != nil {
+		return err
+	}
+	runCtx, cancel := context.WithCancelCause(ctx)
+	renewed := make(chan struct{})
+	go func() {
+		defer close(renewed)
+		r.renewLease(runCtx, cancel, acquired)
+	}()
+	// и при панике: горутина продления не переживает Run
+	defer func() {
+		cancel(nil)
+		<-renewed
+	}()
+
+	err := r.stream(runCtx)
+	// Run отменён арендой, а не вызывающим: причина важнее ошибки отменённой операции
+	if cause := context.Cause(runCtx); cause != nil && ctx.Err() == nil {
+		return cause
+	}
+	return err
+}
+
+// stream читает поток с чекпойнта (или StartTS) и применяет события на цели.
+func (r *Replicator) stream(ctx context.Context) error {
 	opts := options.ChangeStream().
 		SetFullDocument(options.UpdateLookup).
 		SetShowExpandedEvents(true).
