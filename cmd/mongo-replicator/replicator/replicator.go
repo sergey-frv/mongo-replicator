@@ -81,6 +81,10 @@ type Replicator struct {
 	leaseTTL   time.Duration // срок аренды
 	leaseRenew time.Duration // интервал продления
 
+	ckptTraffic  TrafficInfo   // счётчики на момент последней успешной записи трафика в чекпойнт
+	clusterEvery time.Duration // интервал сводки трафика всех процессов
+	lastCluster  time.Time     // время последней сводки
+
 	ddlHook func() // тесты: вызывается в начале applyDDL
 }
 
@@ -98,6 +102,7 @@ func New(src, dst *mongo.Client, cfg Config) *Replicator {
 		src: src, dst: dst, cfg: cfg, applyDrops: applyDrops,
 		lastLog: time.Now(), lastTraffic: cfg.Traffic.Snapshot(),
 		owner: newOwner(), leaseTTL: defaultLeaseTTL, leaseRenew: defaultLeaseRenew,
+		clusterEvery: defaultClusterEvery,
 	}
 }
 
@@ -310,6 +315,7 @@ func (r *Replicator) stream(ctx context.Context) error {
 		}
 
 		r.logProgress(ctx)
+		r.logCluster(ctx)
 	}
 }
 

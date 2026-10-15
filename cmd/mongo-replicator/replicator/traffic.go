@@ -2,13 +2,20 @@ package replicator
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
+
+// defaultClusterEvery — интервал сводки трафика всех процессов цели.
+const defaultClusterEvery = 60 * time.Second
 
 // Traffic — счётчики байт через сокеты драйвера: In — получено, Out — отправлено.
 // Считаются реальные байты по сети (после TLS и сжатия), включая heartbeat,
@@ -34,6 +41,102 @@ func (t *Traffic) Snapshot() TrafficInfo {
 		return TrafficInfo{}
 	}
 	return TrafficInfo{SrcIn: t.SrcIn.Load(), SrcOut: t.SrcOut.Load(), DstIn: t.DstIn.Load(), DstOut: t.DstOut.Load()}
+}
+
+// sub — прирост счётчиков со снимка prev.
+func (t TrafficInfo) sub(prev TrafficInfo) TrafficInfo {
+	return TrafficInfo{SrcIn: t.SrcIn - prev.SrcIn, SrcOut: t.SrcOut - prev.SrcOut,
+		DstIn: t.DstIn - prev.DstIn, DstOut: t.DstOut - prev.DstOut}
+}
+
+// ckptFields — счётчики по полям traffic.* документа чекпойнта (long).
+func (t TrafficInfo) ckptFields() map[string]int64 {
+	//nolint:gosec // байт за процесс меньше 2^63
+	return map[string]int64{
+		"traffic.src_in": int64(t.SrcIn), "traffic.src_out": int64(t.SrcOut),
+		"traffic.dst_in": int64(t.DstIn), "traffic.dst_out": int64(t.DstOut),
+	}
+}
+
+// saveTraffic передаёт write прирост счётчиков с последней успешной записи в чекпойнт
+// и сдвигает снимок, только если write удалась: неудачная дельта войдёт в следующую.
+// Вызывается из горутины продления и из Release после возврата Run — не одновременно.
+func (r *Replicator) saveTraffic(write func(d TrafficInfo) error) error {
+	cur := r.cfg.Traffic.Snapshot()
+	if err := write(cur.sub(r.ckptTraffic)); err != nil {
+		return err
+	}
+	r.ckptTraffic = cur
+	return nil
+}
+
+// ClusterTraffic — сводка трафика по документам чекпойнта всех процессов цели.
+type ClusterTraffic struct {
+	At        time.Time   // время сводки
+	Processes int         // документы с позицией
+	Active    int         // из них с живой арендой
+	Traffic   TrafficInfo // сумма накопленного в документах
+}
+
+// clusterTraffic суммирует трафик, накопленный в документах чекпойнта. Документы
+// без позиции (процесс стартует или старт не удался) не учитываются; в документе,
+// ещё не продлевавшем аренду, трафика нет — $sum по отсутствующему полю даёт 0.
+func (r *Replicator) clusterTraffic(ctx context.Context) (ClusterTraffic, error) {
+	group := bson.M{
+		"_id":       nil,
+		"processes": bson.M{"$sum": 1},
+		"active":    bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$gt": bson.A{"$lease_until", "$$NOW"}}, 1, 0}}},
+	}
+	for f := range (TrafficInfo{}).ckptFields() {
+		group[f[len("traffic."):]] = bson.M{"$sum": "$" + f}
+	}
+	cur, err := r.ckpt().Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"token": bson.M{"$exists": true}}}},
+		{{Key: "$group", Value: group}},
+	})
+	if err != nil {
+		return ClusterTraffic{}, fmt.Errorf("сводка трафика: %w", err)
+	}
+	var res []struct {
+		Processes int   `bson:"processes"`
+		Active    int   `bson:"active"`
+		SrcIn     int64 `bson:"src_in"`
+		SrcOut    int64 `bson:"src_out"`
+		DstIn     int64 `bson:"dst_in"`
+		DstOut    int64 `bson:"dst_out"`
+	}
+	if err := cur.All(ctx, &res); err != nil {
+		return ClusterTraffic{}, fmt.Errorf("сводка трафика: %w", err)
+	}
+	ct := ClusterTraffic{At: time.Now()}
+	if len(res) > 0 {
+		g := res[0]
+		ct.Processes, ct.Active = g.Processes, g.Active
+		//nolint:gosec // суммы записанных дельт неотрицательны
+		ct.Traffic = TrafficInfo{SrcIn: uint64(g.SrcIn), SrcOut: uint64(g.SrcOut),
+			DstIn: uint64(g.DstIn), DstOut: uint64(g.DstOut)}
+	}
+	return ct, nil
+}
+
+// logCluster раз в clusterEvery пишет сводку трафика всех процессов цели; первую —
+// сразу после старта.
+func (r *Replicator) logCluster(ctx context.Context) {
+	if time.Since(r.lastCluster) < r.clusterEvery || ctx.Err() != nil {
+		return
+	}
+	r.lastCluster = time.Now()
+	ct, err := r.clusterTraffic(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Warn().Err(err).Msg("сводка трафика всех процессов не получена")
+		}
+		return
+	}
+	log.Info().Int("processes", ct.Processes).Int("active", ct.Active).
+		Uint64("src_in", ct.Traffic.SrcIn).Uint64("src_out", ct.Traffic.SrcOut).
+		Uint64("dst_in", ct.Traffic.DstIn).Uint64("dst_out", ct.Traffic.DstOut).
+		Msg("трафик всех процессов")
 }
 
 // trafficFields добавляет в запись лога счётчики с начала процесса и среднюю

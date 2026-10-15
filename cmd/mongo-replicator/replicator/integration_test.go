@@ -1239,9 +1239,10 @@ func TestIntegrationTwoProcessesOneTarget(t *testing.T) {
 // каждой вставки, а запись на цель отправляет его же — оба счётчика не меньше
 // суммарного размера документов. Оценка верна без compressors в URI: со сжатием
 // байт по сети может быть меньше bsonsize.
-func TestIntegrationTraffic(t *testing.T) {
-	db := prepare(t)
-
+// newTrafficIT — newIT со своими клиентами, считающими трафик (у общих из TestMain
+// диалера нет); клиенты закрываются в cleanup теста.
+func newTrafficIT(t *testing.T, cfg Config) *Replicator {
+	t.Helper()
 	tr := &Traffic{}
 	src, err := connectIT(options.Client().ApplyURI(srcURI).SetDialer(tr.SrcDialer()))
 	require.NoError(t, err)
@@ -1251,14 +1252,19 @@ func TestIntegrationTraffic(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = dst.Disconnect(context.Background()) })
 
-	r := New(src, dst, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db, Traffic: tr})
+	cfg.Traffic = tr
+	r := New(src, dst, cfg)
 	r.leaseTTL, r.leaseRenew = itLeaseTTL, itLeaseRenew
-	rn := startOn(t, r)
+	return r
+}
 
+// insertPadded вставляет в db.items n документов по ~10 КБ и возвращает их суммарный bsonsize.
+func insertPadded(t *testing.T, db string, n int) uint64 {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
 	var size uint64
-	for i := range 20 {
+	for i := range n {
 		doc := bson.D{{Key: "_id", Value: int32(i)}, {Key: "pad", Value: strings.Repeat("x", 10_000)}}
 		raw, err := bson.Marshal(doc)
 		require.NoError(t, err)
@@ -1266,13 +1272,128 @@ func TestIntegrationTraffic(t *testing.T) {
 		_, err = srcClient.Database(db).Collection("items").InsertOne(ctx, doc)
 		require.NoError(t, err)
 	}
+	return size
+}
+
+func TestIntegrationTraffic(t *testing.T) {
+	db := prepare(t)
+	r := newTrafficIT(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	rn := startOn(t, r)
+	size := insertPadded(t, db, 20)
 	rn.waitSame(db)
 
-	got := tr.Snapshot()
+	got := r.cfg.Traffic.Snapshot()
 	assert.GreaterOrEqual(t, got.SrcIn, size, "поток отдал все документы")
 	assert.GreaterOrEqual(t, got.DstOut, size, "запись отправила все документы")
 	assert.Positive(t, got.SrcOut)
 	assert.Positive(t, got.DstIn)
+}
+
+// readCkptTraffic читает поля traffic.* документа чекпойнта базы цели dstDB;
+// false — документа или полей ещё нет. Каждое поле — long.
+func readCkptTraffic(t *testing.T, dstDB string) (TrafficInfo, bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	raw, err := dstClient.Database(ckptDB).Collection(ckptColl).FindOne(ctx, bson.M{"_id": dstDB}).Raw()
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return TrafficInfo{}, false
+	}
+	require.NoError(t, err)
+	if _, err := raw.LookupErr("traffic"); err != nil {
+		return TrafficInfo{}, false
+	}
+	field := func(name string) uint64 {
+		v := raw.Lookup("traffic", name)
+		require.Equal(t, bson.TypeInt64, v.Type, "traffic.%s — long", name)
+		return uint64(v.Int64()) //nolint:gosec // накопленные дельты неотрицательны
+	}
+	return TrafficInfo{SrcIn: field("src_in"), SrcOut: field("src_out"),
+		DstIn: field("dst_in"), DstOut: field("dst_out")}, true
+}
+
+// Трафик накапливается в документе чекпойнта: первое продление создаёт поля
+// traffic.*, Release дописывает прирост с последнего продления.
+func TestIntegrationTrafficCheckpoint(t *testing.T) {
+	db := prepare(t)
+	r := newTrafficIT(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	rn := startOn(t, r)
+
+	var first TrafficInfo
+	require.Eventually(t, func() bool {
+		var ok bool
+		first, ok = readCkptTraffic(t, db)
+		return ok
+	}, waitTimeout, pollEvery, "первое продление создаёт поля трафика")
+	assert.Positive(t, first.SrcIn)
+	assert.Positive(t, first.SrcOut)
+	assert.Positive(t, first.DstIn)
+	assert.Positive(t, first.DstOut)
+
+	size := insertPadded(t, db, 20)
+	rn.waitSame(db)
+	rn.stop()
+
+	got, ok := readCkptTraffic(t, db)
+	require.True(t, ok)
+	assert.GreaterOrEqual(t, got.SrcIn, size, "поток отдал все документы до Release")
+	assert.GreaterOrEqual(t, got.DstOut, size, "запись отправила все документы до Release")
+	now := r.cfg.Traffic.Snapshot()
+	assert.LessOrEqual(t, got.SrcIn, now.SrcIn, "в документе — не больше насчитанного")
+	assert.LessOrEqual(t, got.DstOut, now.DstOut)
+	st, _ := readLease(t, db)
+	assert.Empty(t, st.Owner, "аренда снята")
+}
+
+// Сводка по процессам: сумма трафика документов с позицией, active — живые аренды.
+func TestIntegrationClusterTraffic(t *testing.T) {
+	dbA := prepare(t)
+	dbB := dbA + "_b"
+	cleanDB(t, dbB)
+	logs := captureLog(t)
+
+	startTS := srcNow(t)
+	rnA := startOn(t, newTrafficIT(t, Config{StartTS: startTS, BatchSize: 1000, DB: dbA}))
+	rnB := startOn(t, newTrafficIT(t, Config{StartTS: startTS, BatchSize: 1000, DB: dbB}))
+	insertPadded(t, dbA, 3)
+	insertPadded(t, dbB, 3)
+	rnA.waitSame(dbA)
+	rnB.waitSame(dbB)
+	rnA.waitQuiet()
+	rnB.waitQuiet()
+	rnA.stop()
+	rnB.stop()
+
+	// документ без позиции (процесс стартует) в сводку не входит
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	_, err := dstClient.Database(ckptDB).Collection(ckptColl).InsertOne(ctx, bson.M{
+		"_id": "it_starting", "owner": "starting:1:00000000", "lease_until": time.Now().Add(time.Minute),
+		"traffic": bson.M{"src_in": int64(1 << 40)},
+	})
+	require.NoError(t, err)
+
+	a, ok := readCkptTraffic(t, dbA)
+	require.True(t, ok)
+	b, ok := readCkptTraffic(t, dbB)
+	require.True(t, ok)
+	ct, err := rnA.r.clusterTraffic(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, ct.Processes)
+	assert.Equal(t, 0, ct.Active, "оба процесса освободили аренду")
+	assert.Equal(t, TrafficInfo{
+		SrcIn: a.SrcIn + b.SrcIn, SrcOut: a.SrcOut + b.SrcOut,
+		DstIn: a.DstIn + b.DstIn, DstOut: a.DstOut + b.DstOut,
+	}, ct.Traffic)
+	assert.Positive(t, ct.Traffic.SrcIn)
+	assert.Contains(t, logs.String(), "трафик всех процессов", "первая сводка — сразу после старта")
+
+	// A снова работает (с чекпойнта): активен один процесс
+	startOn(t, newIT(dstClient, Config{BatchSize: 1000, DB: dbA}))
+	require.Eventually(t, func() bool {
+		ct, err := rnA.r.clusterTraffic(ctx)
+		return err == nil && ct.Processes == 2 && ct.Active == 1
+	}, waitTimeout, pollEvery)
 }
 
 // leaseState — аренда и позиция из документа чекпойнта.

@@ -231,11 +231,11 @@ func (r *Replicator) SetRetry(n int, err error)   // из цикла повто�
 - Modify: `cmd/mongo-replicator/replicator/traffic_test.go`
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] дельты в пайплайне продления (`$ifNull`) и в `$inc` освобождения; снимок сдвигается только после успеха
-- [ ] `clusterTraffic` раз в `clusterEvery` (только документы с `token`); INFO `трафик всех процессов`; ошибка → WARN
-- [ ] write unit tests: дельта (успех сдвигает снимок; неуспех — нет, следующая дельта включает пропущенное)
-- [ ] write integration tests: первое продление на документе без `traffic` → поля `traffic.*` — `long` > 0; после DML и `Release` — `traffic.src_in`, `traffic.dst_out` > 0; два процесса остановлены и освобождены → `clusterTraffic` = сумма полей двух документов, `processes = 2`, `active = 0`; один процесс работает → `active = 1` (`Eventually`)
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] дельты в пайплайне продления (`$ifNull`) и в `$inc` освобождения; снимок сдвигается только после успеха
+- [x] `clusterTraffic` раз в `clusterEvery` (только документы с `token`); INFO `трафик всех процессов`; ошибка → WARN
+- [x] write unit tests: дельта (успех сдвигает снимок; неуспех — нет, следующая дельта включает пропущенное)
+- [x] write integration tests (`TestIntegrationTrafficCheckpoint`, `TestIntegrationClusterTraffic`; первая сводка — сразу после старта, затем раз в `clusterEvery`; `Release` без своей аренды не сдвигает снимок): первое продление на документе без `traffic` → поля `traffic.*` — `long` > 0; после DML и `Release` — `traffic.src_in`, `traffic.dst_out` > 0; два процесса остановлены и освобождены → `clusterTraffic` = сумма полей двух документов, `processes = 2`, `active = 0`; один процесс работает → `active = 1` (`Eventually`)
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
 
 ### Task 6: Снимок статуса
 
