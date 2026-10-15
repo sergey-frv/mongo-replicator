@@ -38,7 +38,7 @@
   blk && /^\)/ { blk=""; next }
   blk && /^\t[A-Za-z_]/ { s=substr($0,2); match(s,/^[A-Za-z_][A-Za-z0-9_]*(, *[A-Za-z_][A-Za-z0-9_]*)*/); n=split(substr(s,RSTART,RLENGTH),a,/, */); for(i=1;i<=n;i++) print blk " " a[i] }
   ```
-  по пакету: `awk -f /tmp/split-tests/decls.awk cmd/mongo-replicator/replicator/*_test.go | sort` и то же для `cmd/mongo-replicator/*_test.go` (сейчас 138 и 76 объявлений)
+  по пакету: `awk -f /tmp/split-tests/decls.awk cmd/mongo-replicator/replicator/*_test.go | sort` и то же для `cmd/mongo-replicator/*_test.go` (сейчас 226 и 76 объявлений; 138 из 226 — в `integration_test.go`)
 - **строки тел** — мультимножество строк без импортов, build-тегов, `package` и пустых строк; ловит изменённую строку и потерянный doc-комментарий:
   ```bash
   strip() { awk '/^import \(/{i=1;next} i&&/^\)$/{i=0;next} !i && !/^(\/\/go:build|package )/ && NF' "$@" | sort; }
@@ -128,10 +128,11 @@
 **Files:**
 - нет изменений в репозитории (эталон — в `/tmp/split-tests/`)
 
-- [ ] `mkdir -p /tmp/split-tests`; скопировать `integration_test.go` и `main_test.go` в `/tmp/split-tests/` (база для `strip`-diff)
-- [ ] сохранить `decls.awk` из Testing Strategy; снять имена объявлений по обоим пакетам в `/tmp/split-tests/decls-{replicator,main}.txt`
-- [ ] снять список юнит-тестов на хосте и интеграционных в контейнере `app` (с зависимостями, с проверкой статуса) — `/tmp/split-tests/list-{unit,it}.txt`
-- [ ] `make test`, `make test-integration`, `make lint` — исходное состояние зелёное
+- [x] `mkdir -p /tmp/split-tests`; скопировать `integration_test.go` и `main_test.go` в `/tmp/split-tests/` (база для `strip`-diff)
+- [x] сохранить `decls.awk` из Testing Strategy; снять имена объявлений по обоим пакетам в `/tmp/split-tests/decls-{replicator,main}.txt`
+- [x] снять список юнит-тестов на хосте и интеграционных в контейнере `app` (с зависимостями, с проверкой статуса) — `/tmp/split-tests/list-{unit,it}.txt`
+- [x] `make test`, `make test-integration`, `make lint` — исходное состояние зелёное
+- ⚠️ эталон: юнит-тестов 128, в интеграционном списке 189 (вместе с юнит), SKIP в прогоне нет
 
 ### Task 2: Разделение интеграционных тестов
 
