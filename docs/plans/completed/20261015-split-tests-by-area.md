@@ -181,8 +181,8 @@
 - [x] `make lint` без замечаний
 
 ### Task 6: [Final] Update documentation
-- [ ] README.md — ссылок на `integration_test.go` нет (проверено в Task 4), изменений не ожидается
-- [ ] move this plan to `docs/plans/completed/`
+- [x] README.md — ссылок на `integration_test.go` нет (проверено в Task 4), изменений не ожидается
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
