@@ -141,12 +141,12 @@ var streamPipeline = mongo.Pipeline{
 - Create: `cmd/mongo-replicator/replicator/statefile.go`
 - Create: `cmd/mongo-replicator/replicator/statefile_test.go`
 
-- [ ] `clusterKey`, `stateFileName`, `readState`, `writeState`, `moveAside`, `machineTraffic` (Technical Details)
-- [ ] write unit tests `clusterKey`: `mongodb+srv` → `srv:<host>` (регистр не важен, `srvMaxHosts` и параметры не влияют); `mongodb://` — порядок и регистр хостов не важны, `h1` = `h1:27017`; разные кластеры — разные ключи; формат имени `<dst-db>.<8 hex>.json`
-- [ ] write unit tests `writeState`/`readState`: нет временных файлов после записи, содержимое заменено целиком, повторное чтение — новые значения; нет файла → нули; битый JSON → `ErrStateCorrupt`
-- [ ] write unit tests `moveAside`: файл переименован с суффиксом причины и времени, оригинала нет
-- [ ] write unit tests `machineTraffic`: сумма по файлам; `active` по свежести `updated_at` (фиксированное `now`); нечитаемый файл пропущен; пустой каталог → нули
-- [ ] `make test`, `make lint` — должно пройти
+- [x] `clusterKey`, `stateFileName`, `readState`, `writeState`, `moveAside`, `machineTraffic` (Technical Details)
+- [x] write unit tests `clusterKey`: `mongodb+srv` → `srv:<host>` (регистр не важен, `srvMaxHosts` и параметры не влияют); `mongodb://` — порядок и регистр хостов не важны, `h1` = `h1:27017`; разные кластеры — разные ключи; формат имени `<dst-db>.<8 hex>.json`
+- [x] write unit tests `writeState`/`readState`: нет временных файлов после записи, содержимое заменено целиком, повторное чтение — новые значения; нет файла → нули; битый JSON → `ErrStateCorrupt`
+- [x] write unit tests `moveAside`: файл переименован с суффиксом причины и времени, оригинала нет
+- [x] write unit tests `machineTraffic`: сумма по файлам; `active` по свежести `updated_at` (фиксированное `now`); нечитаемый файл пропущен; пустой каталог → нули
+- [x] `make test`, `make lint` — должно пройти
 
 ### Task 2: Трафик в файлы, сводка по машине
 

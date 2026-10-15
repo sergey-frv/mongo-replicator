@@ -23,7 +23,12 @@ const defaultClusterEvery = 60 * time.Second
 type Traffic struct{ SrcIn, SrcOut, DstIn, DstOut atomic.Uint64 }
 
 // TrafficInfo — снимок счётчиков Traffic.
-type TrafficInfo struct{ SrcIn, SrcOut, DstIn, DstOut uint64 }
+type TrafficInfo struct {
+	SrcIn  uint64 `json:"src_in"`
+	SrcOut uint64 `json:"src_out"`
+	DstIn  uint64 `json:"dst_in"`
+	DstOut uint64 `json:"dst_out"`
+}
 
 // SrcDialer — диалер клиента источника: options.ClientOptions.SetDialer до подключения.
 func (t *Traffic) SrcDialer() options.ContextDialer {
@@ -47,6 +52,12 @@ func (t *Traffic) Snapshot() TrafficInfo {
 func (t TrafficInfo) sub(prev TrafficInfo) TrafficInfo {
 	return TrafficInfo{SrcIn: t.SrcIn - prev.SrcIn, SrcOut: t.SrcOut - prev.SrcOut,
 		DstIn: t.DstIn - prev.DstIn, DstOut: t.DstOut - prev.DstOut}
+}
+
+// add — сумма счётчиков.
+func (t TrafficInfo) add(o TrafficInfo) TrafficInfo {
+	return TrafficInfo{SrcIn: t.SrcIn + o.SrcIn, SrcOut: t.SrcOut + o.SrcOut,
+		DstIn: t.DstIn + o.DstIn, DstOut: t.DstOut + o.DstOut}
 }
 
 // ckptFields — счётчики по полям traffic.* документа чекпойнта (long).
