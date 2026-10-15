@@ -173,12 +173,12 @@
 - [x] отдельный коммит
 
 ### Task 5: Verify acceptance criteria
-- [ ] `integration_test.go` нет; самый большой тестовый файл — заметно меньше прежних 3124 строк
-- [ ] имена объявлений, списки тестов и `strip`-diff совпадают с эталоном Task 1 (оба пакета)
-- [ ] `git diff --stat` от начала работ — только тестовые файлы, `CLAUDE.md` и этот план
-- [ ] run full test suite: `make test`
-- [ ] run integration tests: `make test-integration`
-- [ ] `make lint` без замечаний
+- [x] `integration_test.go` нет; самый большой тестовый файл — заметно меньше прежних 3124 строк (`harness_integration_test.go`, 649)
+- [x] имена объявлений, списки тестов и `strip`-diff совпадают с эталоном Task 1 (оба пакета; 226/76 объявлений, 128 юнит, 189 в интеграционном списке)
+- [x] `git diff --stat` от начала работ (`78e251e`) — только тестовые файлы, `CLAUDE.md` и этот план
+- [x] run full test suite: `make test`
+- [x] run integration tests: `make test-integration`
+- [x] `make lint` без замечаний
 
 ### Task 6: [Final] Update documentation
 - [ ] README.md — ссылок на `integration_test.go` нет (проверено в Task 4), изменений не ожидается
