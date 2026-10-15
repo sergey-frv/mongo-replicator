@@ -14,10 +14,11 @@ import (
 )
 
 // Чекпойнт хранится на цели: он двигается только после успешной записи данных.
+// Документ на базу цели (_id — её имя): процессы разных баз пишут в один кластер
+// и не мешают друг другу.
 const (
 	ckptDB   = "_replicator"
 	ckptColl = "checkpoint"
-	ckptID   = "main"
 )
 
 // ckpt читает чекпойнт только с primary, не наследуя read preference из URI цели:
@@ -41,7 +42,7 @@ func (c checkpoint) dbs() dbPair { return dbPair{src: c.DB, dst: c.DstDB} }
 
 func (r *Replicator) loadCheckpoint(ctx context.Context) (checkpoint, error) {
 	var c checkpoint
-	err := r.ckpt().FindOne(ctx, bson.M{"_id": ckptID}).Decode(&c)
+	err := r.ckpt().FindOne(ctx, bson.M{"_id": r.cfg.DstDB}).Decode(&c)
 	if errors.Is(err, mongo.ErrNoDocuments) {
 		return checkpoint{}, nil
 	}
@@ -72,9 +73,9 @@ func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
 		}
 	}
 	_, err := r.ckpt().ReplaceOne(ctx,
-		bson.M{"_id": ckptID},
+		bson.M{"_id": r.cfg.DstDB},
 		bson.M{
-			"_id":         ckptID,
+			"_id":         r.cfg.DstDB,
 			"token":       token,
 			"clusterTime": ts,
 			"updatedAt":   time.Now().UTC(),

@@ -247,9 +247,8 @@ func hint(err error) string {
 	case errors.Is(err, replicator.ErrNoStartPoint):
 		return "задайте --start-ts"
 	case errors.Is(err, replicator.ErrDBMismatch):
-		return "чекпойнт на цели записан для другой пары баз: верните прежние --db и --dst-db " +
-			"или остановите репликатор, удалите чекпойнт и залейте цель заново; " +
-			"если на эту цель пишет второй экземпляр — у каждого должна быть своя цель"
+		return "чекпойнт этой базы цели записан для другой базы источника: верните прежний --db " +
+			"или удалите чекпойнт этой базы (deleteOne({_id: \"<dst-db>\"})) и залейте заново"
 	case errors.Is(err, replicator.ErrForeignNamespace):
 		return "в потоке событие другой базы — сообщите о баге"
 	case errors.Is(err, replicator.ErrStreamInvalidated):

@@ -182,12 +182,12 @@ func (r *Replicator) SetRetry(n int, err error)   // из цикла повто�
 - Modify: `cmd/mongo-replicator/main.go`, `cmd/mongo-replicator/main_test.go` (`hint`)
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] убрать `ckptID`; `loadCheckpoint`/`saveToken` — по `_id: r.cfg.DstDB`
-- [ ] `hint` для `ErrDBMismatch`: «чекпойнт этой базы цели записан для другой базы источника: верните прежний --db или удалите чекпойнт этой базы (`deleteOne({_id: "<dst-db>"})`) и залейте заново»; обновить `TestPermanent`
-- [ ] `writeCkpt` — параметр `_id` = база цели; `ckptDB`-хелпер — по `_id`
-- [ ] переписать `TestIntegrationDBMismatch`/`DstDBMismatch`: та же база цели, другая база источника → `ErrDBMismatch`; другая база цели → `ErrNoStartPoint`
-- [ ] write integration test `TestIntegrationTwoProcessesOneTarget`: два репликатора одновременно — `db_a → db_a` и `db_b → db_b`; DML в обе; обе базы сходятся; в `_replicator.checkpoint` два документа
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] убрать `ckptID`; `loadCheckpoint`/`saveToken` — по `_id: r.cfg.DstDB`
+- [x] `hint` для `ErrDBMismatch`: «чекпойнт этой базы цели записан для другой базы источника: верните прежний --db или удалите чекпойнт этой базы (`deleteOne({_id: "<dst-db>"})`) и залейте заново»; обновить `TestPermanent`
+- [x] `writeCkpt` — параметр `_id` = база цели; `ckptDB`-хелпер — по `_id`
+- [x] переписать `TestIntegrationDBMismatch`/`DstDBMismatch`: та же база цели, другая база источника → `ErrDBMismatch`; другая база цели → `ErrNoStartPoint`
+- [x] write integration test `TestIntegrationTwoProcessesOneTarget`: два репликатора одновременно — `db_a → db_a` и `db_b → db_b`; DML в обе; обе базы сходятся; в `_replicator.checkpoint` два документа
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
 
 ### Task 3: Аренда
 

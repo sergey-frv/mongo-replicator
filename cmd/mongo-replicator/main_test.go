@@ -434,7 +434,7 @@ func TestPermanent(t *testing.T) {
 		{"history lost", fmt.Errorf("run: %w", mongo.CommandError{Code: 286}), "выпала из oplog"},
 		{"событие больше 16 МБ", fmt.Errorf("change stream: %w", mongo.CommandError{Code: 10334}), "больше 16 МБ"},
 		{"нет точки старта", fmt.Errorf("run: %w", replicator.ErrNoStartPoint), "--start-ts"},
-		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), "--dst-db"},
+		{"другая база", fmt.Errorf("run: %w", replicator.ErrDBMismatch), `deleteOne({_id: "<dst-db>"})`},
 		{"событие другой базы", fmt.Errorf("run: %w", replicator.ErrForeignNamespace), "сообщите о баге"},
 		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), "новая полная заливка"},
 		{"база в другом регистре", fmt.Errorf("bulk write: %w", mongo.CommandError{Code: 13297}), "--dst-db"},

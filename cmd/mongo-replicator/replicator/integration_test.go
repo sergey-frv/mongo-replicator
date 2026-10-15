@@ -681,8 +681,9 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 	rn.waitQuiet()
 	rn.stop()
 
-	// сброс чекпойнта: поток перечитывается с того же StartTS поверх готовой цели
-	require.NoError(t, dstClient.Database(ckptDB).Collection(ckptColl).Drop(ctx))
+	// сброс чекпойнта базы: поток перечитывается с того же StartTS поверх готовой цели
+	_, err = dstClient.Database(ckptDB).Collection(ckptColl).DeleteOne(ctx, bson.M{"_id": db})
+	require.NoError(t, err)
 	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, ApplyDrops: []string{db + ".gone"}})
 
 	// цель уже совпадает, поэтому сначала ждём, что повтор действительно прошёл:
@@ -1092,30 +1093,31 @@ func TestIntegrationSingleDBResume(t *testing.T) {
 	assert.Equal(t, dbPair{src: db, dst: db}, rn2.ckptDB())
 }
 
-// writeCkpt записывает на цель чекпойнт с токеном-заглушкой для пары баз.
+// writeCkpt записывает на цель чекпойнт базы цели pair.dst с токеном-заглушкой.
 func writeCkpt(t *testing.T, pair dbPair) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
 	_, err := dstClient.Database(ckptDB).Collection(ckptColl).ReplaceOne(ctx,
-		bson.M{"_id": ckptID},
-		bson.M{"_id": ckptID, "token": bson.M{"_data": "00"}, "db": pair.src, "dst_db": pair.dst},
+		bson.M{"_id": pair.dst},
+		bson.M{"_id": pair.dst, "token": bson.M{"_data": "00"}, "db": pair.src, "dst_db": pair.dst},
 		options.Replace().SetUpsert(true))
 	require.NoError(t, err)
 }
 
-// Чекпойнт другой базы источника: Run отказывается стартовать.
+// Чекпойнт базы цели записан для другой базы источника: Run отказывается стартовать.
 // Токен произвольный: проверка идёт до открытия потока.
 func TestIntegrationDBMismatch(t *testing.T) {
 	prepare(t)
 	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a"})
 
-	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_b"})
+	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_b", DstDB: "it_mismatch_a"})
 	require.ErrorIs(t, err, ErrDBMismatch)
+	assert.ErrorContains(t, err, `"it_mismatch_a" → "it_mismatch_a"`)
 
-	// та же база источника, но цель по умолчанию — другая
-	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a", DstDB: "it_mismatch_b"})
-	require.ErrorIs(t, err, ErrDBMismatch)
+	// у другой базы цели свой чекпойнт, а его нет
+	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_b"})
+	require.ErrorIs(t, err, ErrNoStartPoint)
 
 	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
 	require.Error(t, err)
@@ -1123,22 +1125,70 @@ func TestIntegrationDBMismatch(t *testing.T) {
 	assert.ErrorContains(t, err, "открытие change stream", "чекпойнт прочитан, сервер отверг токен-заглушку")
 }
 
-// Чекпойнт той же базы источника, но другой базы цели: Run отказывается стартовать.
+// Другая база цели — другой чекпойнт: чужой не подхватывается, стартовать не с чего.
 func TestIntegrationDstDBMismatch(t *testing.T) {
 	prepare(t)
 	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a2"})
 
 	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a", DstDB: "it_mismatch_a3"})
-	require.ErrorIs(t, err, ErrDBMismatch)
-	assert.ErrorContains(t, err, `"it_mismatch_a" → "it_mismatch_a2"`)
+	require.ErrorIs(t, err, ErrNoStartPoint)
 
 	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
-	require.ErrorIs(t, err, ErrDBMismatch, "без --dst-db цель — база источника")
+	require.ErrorIs(t, err, ErrNoStartPoint, "без --dst-db цель — база источника")
 
 	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a", DstDB: "it_mismatch_a2"})
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrDBMismatch)
 	assert.ErrorContains(t, err, "открытие change stream", "чекпойнт прочитан, сервер отверг токен-заглушку")
+}
+
+// Два процесса разных баз пишут в один целевой кластер: у каждого свой чекпойнт,
+// обе базы сходятся независимо.
+func TestIntegrationTwoProcessesOneTarget(t *testing.T) {
+	dbA := prepare(t)
+	dbB := dbA + "_b"
+	cleanDB(t, dbB)
+
+	startTS := srcNow(t)
+	rnA := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: dbA})
+	rnB := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: dbB})
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	a := srcClient.Database(dbA).Collection("items")
+	b := srcClient.Database(dbB).Collection("items")
+	for i := range 3 {
+		_, err := a.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}, {Key: "db", Value: "a"}})
+		require.NoError(t, err)
+		_, err = b.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}, {Key: "db", Value: "b"}})
+		require.NoError(t, err)
+	}
+	_, err := a.UpdateOne(ctx, bson.M{"_id": 0}, bson.M{"$set": bson.M{"x": 1}})
+	require.NoError(t, err)
+	_, err = b.DeleteOne(ctx, bson.M{"_id": 1})
+	require.NoError(t, err)
+
+	rnA.waitSame(dbA)
+	rnB.waitSame(dbB)
+	rnA.waitQuiet()
+	rnB.waitQuiet()
+	assert.EqualValues(t, 4, rnA.r.Applied(), "3 insert + update — только своей базы")
+	assert.EqualValues(t, 4, rnB.r.Applied(), "3 insert + delete — только своей базы")
+	assert.Equal(t, dbPair{src: dbA, dst: dbA}, rnA.ckptDB())
+	assert.Equal(t, dbPair{src: dbB, dst: dbB}, rnB.ckptDB())
+
+	cur, err := dstClient.Database(ckptDB).Collection(ckptColl).Find(ctx, bson.D{},
+		options.Find().SetProjection(bson.M{"_id": 1}).SetSort(bson.M{"_id": 1}))
+	require.NoError(t, err)
+	var docs []struct {
+		ID string `bson:"_id"`
+	}
+	require.NoError(t, cur.All(ctx, &docs))
+	ids := make([]string, 0, len(docs))
+	for _, d := range docs {
+		ids = append(ids, d.ID)
+	}
+	assert.Equal(t, []string{dbA, dbB}, ids, "по документу чекпойнта на базу цели")
 }
 
 // Токен не разобран: clusterTime чекпойнта — время последнего события.
