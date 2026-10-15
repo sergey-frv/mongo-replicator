@@ -141,12 +141,12 @@
 - Create: `cmd/mongo-replicator/replicator/{dml,ddl,dbs,checkpoint,lease,traffic,drops,lag,status,limitations,network}_integration_test.go`
 - Delete: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] перенести объявления по таблице «Раскладка интеграционных тестов» без изменения тел, с doc-комментариями, типы — со всеми методами; порядок внутри файла — как в исходном
-- [ ] в каждом файле — `//go:build integration`, `package replicator`, только нужные импорты
-- [ ] удалить `integration_test.go`
-- [ ] проверка: `go vet -tags integration` в контейнере; имена объявлений и список тестов (с `-tags integration`) совпадают с эталоном; `strip`-diff с `/tmp/split-tests/integration_test.go` пустой
-- [ ] `make test-integration`, `make lint` — должно пройти
-- [ ] отдельный коммит; в сообщении — `git blame -C -C` для истории перенесённых строк
+- [x] перенести объявления по таблице «Раскладка интеграционных тестов» без изменения тел, с doc-комментариями, типы — со всеми методами; порядок внутри файла — как в исходном
+- [x] в каждом файле — `//go:build integration`, `package replicator`, только нужные импорты
+- [x] удалить `integration_test.go`
+- [x] проверка: `go vet -tags integration` в контейнере; имена объявлений и список тестов (с `-tags integration`) совпадают с эталоном; `strip`-diff с `/tmp/split-tests/integration_test.go` пустой
+- [x] `make test-integration`, `make lint` — должно пройти
+- [x] отдельный коммит; в сообщении — `git blame -C -C` для истории перенесённых строк
 
 ### Task 3: Разделение `main_test.go`
 
