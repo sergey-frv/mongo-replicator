@@ -44,7 +44,7 @@ func TestStatusInitial(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), s.Started, time.Second)
 	assert.Nil(t, s.LastBatch)
 	assert.Nil(t, s.LastDDL)
-	assert.Nil(t, s.Cluster)
+	assert.Nil(t, s.Machine)
 }
 
 func TestStatusAppliedAndTraffic(t *testing.T) {
@@ -236,22 +236,22 @@ func TestStatusCopyIsStable(t *testing.T) {
 	var b batch
 	b.add(namespace{"d", "a"}, "insert", m)
 	r.st.LastBatch = batchInfo(&b, time.Now())
-	r.st.Cluster = &ClusterTraffic{Processes: 1}
+	r.st.Machine = &MachineTraffic{Processes: 1}
 	require.NoError(t, r.applyDDL(context.Background(), &event{OperationType: "modify", NS: namespace{"d", "a"}}))
 
 	old := r.Status()
-	oldBatch, oldDDL, oldCluster := *old.LastBatch, *old.LastDDL, *old.Cluster
+	oldBatch, oldDDL, oldMachine := *old.LastBatch, *old.LastDDL, *old.Machine
 
 	b = batch{}
 	b.add(namespace{"d", "b"}, "delete", m)
 	bi := batchInfo(&b, time.Now())
-	r.update(func(s *Status) { s.LastBatch = bi; s.Cluster = &ClusterTraffic{Processes: 2} })
+	r.update(func(s *Status) { s.LastBatch = bi; s.Machine = &MachineTraffic{Processes: 2} })
 	require.NoError(t, r.applyDDL(context.Background(), &event{OperationType: "shardCollection", NS: namespace{"d", "b"}}))
 	r.SetRetry(errors.New("x"))
 
 	assert.Equal(t, oldBatch, *old.LastBatch)
 	assert.Equal(t, oldDDL, *old.LastDDL)
-	assert.Equal(t, oldCluster, *old.Cluster)
+	assert.Equal(t, oldMachine, *old.Machine)
 	assert.Equal(t, StateStarting, old.State)
 	assert.Equal(t, []string{"b"}, r.Status().LastBatch.Colls)
 	assert.Equal(t, "shardCollection", r.Status().LastDDL.Op)

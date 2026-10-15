@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -36,6 +37,8 @@ const (
 	// аренда в тестах: истечение ждём секунды, а не минуту
 	itLeaseTTL   = 2 * time.Second
 	itLeaseRenew = 300 * time.Millisecond
+	// запись файла состояния: свежесть в сводке проверяется за секунды
+	itStateEvery = 200 * time.Millisecond
 )
 
 var (
@@ -178,7 +181,7 @@ func cleanDB(t *testing.T, db string) {
 // newIT — New с короткой арендой.
 func newIT(dst *mongo.Client, cfg Config) *Replicator {
 	r := New(srcClient, dst, cfg)
-	r.leaseTTL, r.leaseRenew = itLeaseTTL, itLeaseRenew
+	r.leaseTTL, r.leaseRenew, r.stateEvery = itLeaseTTL, itLeaseRenew, itStateEvery
 	return r
 }
 
@@ -1254,7 +1257,7 @@ func newTrafficIT(t *testing.T, cfg Config) *Replicator {
 
 	cfg.Traffic = tr
 	r := New(src, dst, cfg)
-	r.leaseTTL, r.leaseRenew = itLeaseTTL, itLeaseRenew
+	r.leaseTTL, r.leaseRenew, r.stateEvery = itLeaseTTL, itLeaseRenew, itStateEvery
 	return r
 }
 
@@ -1289,131 +1292,193 @@ func TestIntegrationTraffic(t *testing.T) {
 	assert.Positive(t, got.DstIn)
 }
 
-// readCkptTraffic читает поля traffic.* документа чекпойнта базы цели dstDB;
-// false — документа или полей ещё нет. Каждое поле — long.
-func readCkptTraffic(t *testing.T, dstDB string) (TrafficInfo, bool) {
+// withState — cfg с файлом состояния и сводкой по каталогу dir, как в main.
+func withState(cfg Config, dir string) Config {
+	dst := cfg.DstDB
+	if dst == "" {
+		dst = cfg.DB
+	}
+	cfg.StateDir = dir
+	cfg.StateFile, cfg.Cluster = StatePath(dir, dst, dstURI)
+	return cfg
+}
+
+// shortActive сокращает срок активности файла состояния в сводке. Вызывать до start:
+// срок восстанавливается в cleanup уже после остановки репликаторов.
+func shortActive(t *testing.T) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	raw, err := dstClient.Database(ckptDB).Collection(ckptColl).FindOne(ctx, bson.M{"_id": dstDB}).Raw()
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		return TrafficInfo{}, false
-	}
+	prev := stateActiveFor
+	stateActiveFor = time.Second
+	t.Cleanup(func() { stateActiveFor = prev })
+}
+
+func readStateFile(t *testing.T, path string) state {
+	t.Helper()
+	s, err := loadState(path)
 	require.NoError(t, err)
-	if _, err := raw.LookupErr("traffic"); err != nil {
-		return TrafficInfo{}, false
-	}
-	field := func(name string) uint64 {
-		v := raw.Lookup("traffic", name)
-		require.Equal(t, bson.TypeInt64, v.Type, "traffic.%s — long", name)
-		return uint64(v.Int64()) //nolint:gosec // накопленные дельты неотрицательны
-	}
-	return TrafficInfo{SrcIn: field("src_in"), SrcOut: field("src_out"),
-		DstIn: field("dst_in"), DstOut: field("dst_out")}, true
+	return s
 }
 
-// Трафик накапливается в документе чекпойнта: первое продление создаёт поля
-// traffic.*, Release дописывает прирост с последнего продления.
-func TestIntegrationTrafficCheckpoint(t *testing.T) {
+// Трафик процесса — в файле состояния на машине, не в документе чекпойнта.
+func TestIntegrationStateFile(t *testing.T) {
 	db := prepare(t)
-	r := newTrafficIT(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	r := newTrafficIT(t, withState(Config{StartTS: srcNow(t), BatchSize: 1000, DB: db}, t.TempDir()))
 	rn := startOn(t, r)
-
-	var first TrafficInfo
-	require.Eventually(t, func() bool {
-		var ok bool
-		first, ok = readCkptTraffic(t, db)
-		return ok
-	}, waitTimeout, pollEvery, "первое продление создаёт поля трафика")
-	assert.Positive(t, first.SrcIn)
-	assert.Positive(t, first.SrcOut)
-	assert.Positive(t, first.DstIn)
-	assert.Positive(t, first.DstOut)
-
 	size := insertPadded(t, db, 20)
 	rn.waitSame(db)
+	rn.waitQuiet()
 	rn.stop()
 
-	got, ok := readCkptTraffic(t, db)
-	require.True(t, ok)
-	assert.GreaterOrEqual(t, got.SrcIn, size, "поток отдал все документы до Release")
-	assert.GreaterOrEqual(t, got.DstOut, size, "запись отправила все документы до Release")
+	s := readStateFile(t, r.cfg.StateFile)
+	assert.Equal(t, db, s.DB)
+	assert.Equal(t, db, s.DstDB)
+	assert.Equal(t, r.cfg.Cluster, s.Cluster)
+	assert.Equal(t, r.owner, s.Owner)
+	assert.GreaterOrEqual(t, s.Traffic.SrcIn, size, "поток отдал все документы до Release")
+	assert.GreaterOrEqual(t, s.Traffic.DstOut, size, "запись отправила все документы до Release")
 	now := r.cfg.Traffic.Snapshot()
-	assert.LessOrEqual(t, got.SrcIn, now.SrcIn, "в документе — не больше насчитанного")
-	assert.LessOrEqual(t, got.DstOut, now.DstOut)
-	st, _ := readLease(t, db)
-	assert.Empty(t, st.Owner, "аренда снята")
+	assert.LessOrEqual(t, s.Traffic.SrcIn, now.SrcIn, "в файле — не больше насчитанного")
+	assert.LessOrEqual(t, s.Traffic.DstOut, now.DstOut)
+
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	raw, err := dstClient.Database(ckptDB).Collection(ckptColl).FindOne(ctx, bson.M{"_id": db}).Raw()
+	require.NoError(t, err)
+	_, err = raw.LookupErr("traffic")
+	assert.Error(t, err, "в чекпойнте трафика нет")
 }
 
-// Release дописывает трафик с последнего продления: без продлений поля traffic.*
-// появляются только им, и в них — всё насчитанное до снятия аренды.
-func TestIntegrationTrafficRelease(t *testing.T) {
+// В паузе повтора (Run вернул временную ошибку) писатель продолжает обновлять файл:
+// процесс по-прежнему владеет базой и в сводке активен.
+func TestIntegrationStateFileRetryPause(t *testing.T) {
+	shortActive(t)
 	db := prepare(t)
-	r := newTrafficIT(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
-	r.leaseTTL, r.leaseRenew = time.Hour, time.Hour // продлений нет
-	rn := startOn(t, r)
-	size := insertPadded(t, db, 20)
-	rn.waitSame(db)
-	_, ok := readCkptTraffic(t, db)
-	require.False(t, ok, "продлений не было — трафика в документе нет")
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
 
-	rn.stop()
-	got, ok := readCkptTraffic(t, db)
-	require.True(t, ok, "Release записал трафик")
-	assert.GreaterOrEqual(t, got.SrcIn, size)
-	assert.GreaterOrEqual(t, got.DstOut, size)
-	assert.Equal(t, r.ckptTraffic, got, "в документе — снимок счётчиков при Release")
+	// уникальный индекс только на цели: второй документ с тем же code она не примет
+	_, err := dstClient.Database(db).Collection("c").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "code", Value: 1}},
+		Options: options.Index().SetName("c_code_u").SetUnique(true),
+	})
+	require.NoError(t, err)
+	startTS := srcNow(t)
+	c := srcClient.Database(db).Collection("c")
+	for _, id := range []int32{1, 2} {
+		_, err = c.InsertOne(ctx, bson.D{{Key: "_id", Value: id}, {Key: "code", Value: "x"}})
+		require.NoError(t, err)
+	}
+
+	r := newIT(dstClient, withState(Config{StartTS: startTS, BatchSize: 1, DB: db}, dir))
+	runErr := r.Run(ctx)
+	require.True(t, mongo.IsDuplicateKeyError(runErr), "%v", runErr)
+	returned := time.Now()
+	defer release(t, r)
+
+	time.Sleep(2 * stateActiveFor)
+	s := readStateFile(t, r.cfg.StateFile)
+	assert.True(t, s.UpdatedAt.After(returned), "файл обновлён после возврата Run: %s", s.UpdatedAt)
+	mt, err := machineTraffic(dir, time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, 1, mt.Processes)
+	assert.Equal(t, 1, mt.Active, "процесс в паузе повтора активен")
 }
 
-// Сводка по процессам: сумма трафика документов с позицией, active — живые аренды.
-func TestIntegrationClusterTraffic(t *testing.T) {
+// Следующий процесс на ту же базу продолжает счёт с накопленного в файле.
+func TestIntegrationStateFileContinues(t *testing.T) {
+	db := prepare(t)
+	dir := t.TempDir()
+	r1 := newTrafficIT(t, withState(Config{StartTS: srcNow(t), BatchSize: 1000, DB: db}, dir))
+	rn1 := startOn(t, r1)
+	insertPadded(t, db, 5)
+	rn1.waitSame(db)
+	rn1.waitQuiet()
+	rn1.stop()
+	first := readStateFile(t, r1.cfg.StateFile).Traffic
+	require.Positive(t, first.SrcIn)
+
+	r2 := newTrafficIT(t, withState(Config{BatchSize: 1000, DB: db}, dir))
+	rn2 := startOn(t, r2)
+	rn2.waitQuiet()
+	rn2.stop()
+
+	s := readStateFile(t, r2.cfg.StateFile)
+	assert.Equal(t, r2.owner, s.Owner)
+	second := r2.cfg.Traffic.Snapshot()
+	assert.Greater(t, s.Traffic.SrcIn, first.SrcIn, "к прошлому значению прибавлен трафик второго процесса")
+	assert.LessOrEqual(t, s.Traffic.SrcIn, first.SrcIn+second.SrcIn)
+	assert.Greater(t, s.Traffic.DstOut, first.DstOut)
+	assert.LessOrEqual(t, s.Traffic.DstOut, first.DstOut+second.DstOut)
+	files, err := filepath.Glob(filepath.Join(dir, "*"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{r2.cfg.StateFile}, files, "один файл, без переносов в сторону")
+}
+
+// Неверный --db (ErrDBMismatch): файл состояния базы цели не тронут — ни записи,
+// ни переноса в сторону как файла другой пары баз.
+func TestIntegrationStateFileDBMismatch(t *testing.T) {
+	prepare(t)
+	dir := t.TempDir()
+	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a"})
+	cfg := withState(Config{BatchSize: 1000, DB: "it_mismatch_b", DstDB: "it_mismatch_a"}, dir)
+	require.NoError(t, writeState(cfg.StateFile, state{DB: "it_mismatch_a", DstDB: "it_mismatch_a",
+		Cluster: cfg.Cluster, Traffic: TrafficInfo{SrcIn: 12345}}))
+	before, err := os.ReadFile(cfg.StateFile)
+	require.NoError(t, err)
+
+	_, err = runErr(t, cfg)
+	require.ErrorIs(t, err, ErrDBMismatch)
+	after, err := os.ReadFile(cfg.StateFile)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
+	files, err := filepath.Glob(filepath.Join(dir, "*"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{cfg.StateFile}, files)
+}
+
+// Сводка по машине: сумма файлов состояния каталога, active — свежие файлы.
+func TestIntegrationMachineTraffic(t *testing.T) {
+	shortActive(t)
 	dbA := prepare(t)
 	dbB := dbA + "_b"
 	cleanDB(t, dbB)
+	dir := t.TempDir()
 	logs := captureLog(t)
 
 	startTS := srcNow(t)
-	rnA := startOn(t, newTrafficIT(t, Config{StartTS: startTS, BatchSize: 1000, DB: dbA}))
-	rnB := startOn(t, newTrafficIT(t, Config{StartTS: startTS, BatchSize: 1000, DB: dbB}))
+	rnA := startOn(t, newTrafficIT(t, withState(Config{StartTS: startTS, BatchSize: 1000, DB: dbA}, dir)))
+	rnB := startOn(t, newTrafficIT(t, withState(Config{StartTS: startTS, BatchSize: 1000, DB: dbB}, dir)))
 	insertPadded(t, dbA, 3)
 	insertPadded(t, dbB, 3)
 	rnA.waitSame(dbA)
 	rnB.waitSame(dbB)
 	rnA.waitQuiet()
 	rnB.waitQuiet()
+
+	mt, err := machineTraffic(dir, time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, 2, mt.Processes)
+	assert.Equal(t, 2, mt.Active, "оба процесса работают")
+	require.NotNil(t, rnA.r.Status().Machine, "первая сводка — сразу после старта")
+
 	rnA.stop()
 	rnB.stop()
-
-	// документ без позиции (процесс стартует) в сводку не входит
-	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
-	defer cancel()
-	_, err := dstClient.Database(ckptDB).Collection(ckptColl).InsertOne(ctx, bson.M{
-		"_id": "it_starting", "owner": "starting:1:00000000", "lease_until": time.Now().Add(time.Minute),
-		"traffic": bson.M{"src_in": int64(1 << 40)},
-	})
+	a := readStateFile(t, rnA.r.cfg.StateFile).Traffic
+	b := readStateFile(t, rnB.r.cfg.StateFile).Traffic
+	mt, err = machineTraffic(dir, time.Now())
 	require.NoError(t, err)
-
-	a, ok := readCkptTraffic(t, dbA)
-	require.True(t, ok)
-	b, ok := readCkptTraffic(t, dbB)
-	require.True(t, ok)
-	ct, err := rnA.r.clusterTraffic(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 2, ct.Processes)
-	assert.Equal(t, 0, ct.Active, "оба процесса освободили аренду")
+	assert.Equal(t, 2, mt.Processes)
 	assert.Equal(t, TrafficInfo{
 		SrcIn: a.SrcIn + b.SrcIn, SrcOut: a.SrcOut + b.SrcOut,
 		DstIn: a.DstIn + b.DstIn, DstOut: a.DstOut + b.DstOut,
-	}, ct.Traffic)
-	assert.Positive(t, ct.Traffic.SrcIn)
-	assert.Contains(t, logs.String(), "трафик всех процессов", "первая сводка — сразу после старта")
-
-	// A снова работает (с чекпойнта): активен один процесс
-	startOn(t, newIT(dstClient, Config{BatchSize: 1000, DB: dbA}))
+	}, mt.Traffic)
+	assert.Positive(t, mt.Traffic.SrcIn)
 	require.Eventually(t, func() bool {
-		ct, err := rnA.r.clusterTraffic(ctx)
-		return err == nil && ct.Processes == 2 && ct.Active == 1
-	}, waitTimeout, pollEvery)
+		mt, err := machineTraffic(dir, time.Now())
+		return err == nil && mt.Processes == 2 && mt.Active == 0
+	}, waitTimeout, pollEvery, "после Release файлы больше не обновляются")
+	assert.Contains(t, logs.String(), "трафик на машине")
 }
 
 // leaseState — аренда и позиция из документа чекпойнта.
@@ -2323,7 +2388,7 @@ func TestIntegrationStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	started := time.Now()
-	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
+	rn := start(t, withState(Config{StartTS: startTS, BatchSize: 1000, DB: db}, t.TempDir()))
 	rn.waitSame(db)
 	rn.waitQuiet()
 
@@ -2340,8 +2405,8 @@ func TestIntegrationStatus(t *testing.T) {
 	assert.Equal(t, db+".a", s.LastDDL.NS)
 	assert.Equal(t, "a_v", s.LastDDL.Details)
 	assert.False(t, s.LastDDL.At.Before(started))
-	require.NotNil(t, s.Cluster, "первая сводка — сразу после старта")
-	assert.Positive(t, s.Cluster.Processes)
+	require.NotNil(t, s.Machine, "первая сводка — сразу после старта")
+	assert.Equal(t, 1, s.Machine.Processes, "в каталоге — только файл этого процесса")
 
 	// прогресс — после остановки: lastLog принадлежит горутине Run
 	rn.stop()

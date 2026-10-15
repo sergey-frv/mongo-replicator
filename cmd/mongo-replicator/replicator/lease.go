@@ -45,10 +45,6 @@ func newOwner() string {
 	return fmt.Sprintf("%s:%d:%s", host, os.Getpid(), hex.EncodeToString(b[:]))
 }
 
-// errNotOwner — Release без своей аренды (не захватывали или забрали): снимать нечего,
-// трафик остаётся в снимке до следующей записи.
-var errNotOwner = errors.New("аренда не наша")
-
 func leaseHeldErr(dst, owner string, until time.Time) error {
 	return fmt.Errorf("%w: базу %s уже реплицирует %s, аренда до %s",
 		ErrLeaseHeld, dst, owner, until.UTC().Format(time.RFC3339))
@@ -169,61 +165,51 @@ func (r *Replicator) renewLease(ctx context.Context, cancel context.CancelCauseF
 	}
 }
 
-// renewOnce — одно продление; заодно прибавляет к трафику в документе прирост с прошлой
-// записи (поля traffic.* создаются первым продлением). Запрос ограничен интервалом
-// продления, чтобы зависшая сеть не отложила проверку срока.
+// renewOnce — одно продление. Запрос ограничен интервалом продления, чтобы зависшая
+// сеть не отложила проверку срока.
 func (r *Replicator) renewOnce(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, r.leaseRenew)
 	defer cancel()
-	return r.saveTraffic(func(d TrafficInfo) error {
-		set := bson.M{"lease_until": r.leaseUntil()}
-		for f, v := range d.ckptFields() {
-			set[f] = bson.M{"$add": bson.A{bson.M{"$ifNull": bson.A{"$" + f, int64(0)}}, v}}
-		}
-		res, err := r.ckpt().UpdateOne(ctx,
-			bson.M{"_id": r.cfg.DstDB, "owner": r.owner},
-			mongo.Pipeline{{{Key: "$set", Value: set}}})
-		if err != nil {
-			return err
-		}
-		if res.MatchedCount == 0 {
-			return r.leaseLostErr()
-		}
-		return nil
-	})
+	res, err := r.ckpt().UpdateOne(ctx,
+		bson.M{"_id": r.cfg.DstDB, "owner": r.owner},
+		mongo.Pipeline{{{Key: "$set", Value: bson.M{"lease_until": r.leaseUntil()}}}})
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return r.leaseLostErr()
+	}
+	return nil
 }
 
 func (r *Replicator) leaseLostErr() error {
 	return fmt.Errorf("%w: базу %s реплицирует другой процесс (мы — %s)", ErrLeaseLost, r.cfg.DstDB, r.owner)
 }
 
-// Release снимает аренду и дописывает в документ трафик с последнего продления.
-// Документ без позиции (старт не удался: нет --start-ts, неверный --dst-db) удаляется,
-// чтобы не висеть среди процессов. Вызывать после возврата Run; повторный вызов
-// и вызов без захвата безвредны.
+// Release снимает аренду и останавливает писателя файла состояния. Документ без позиции
+// (старт не удался: нет --start-ts, неверный --dst-db) удаляется, чтобы не оставлять
+// его на цели. Последняя запись файла — только если аренда была нашей: иначе базу
+// реплицирует другой процесс, возможно, с этой же машины и в этот же файл.
+// Вызывать после возврата Run; повторный вызов и вызов без захвата безвредны.
 func (r *Replicator) Release(ctx context.Context) error {
+	writer := r.stopState()
 	res, err := r.ckpt().DeleteOne(ctx,
 		bson.M{"_id": r.cfg.DstDB, "owner": r.owner, "token": bson.M{"$exists": false}})
 	if err != nil {
 		return fmt.Errorf("снятие аренды: %w", err)
 	}
-	if res.DeletedCount > 0 {
-		return nil
-	}
-	err = r.saveTraffic(func(d TrafficInfo) error {
-		res, upErr := r.ckpt().UpdateOne(ctx,
+	owned := res.DeletedCount > 0
+	if !owned {
+		up, err := r.ckpt().UpdateOne(ctx,
 			bson.M{"_id": r.cfg.DstDB, "owner": r.owner},
-			bson.M{"$inc": d.ckptFields(), "$unset": bson.M{"owner": "", "lease_until": ""}})
-		if upErr != nil {
-			return upErr
+			bson.M{"$unset": bson.M{"owner": "", "lease_until": ""}})
+		if err != nil {
+			return fmt.Errorf("снятие аренды: %w", err)
 		}
-		if res.MatchedCount == 0 {
-			return errNotOwner
-		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, errNotOwner) {
-		return fmt.Errorf("снятие аренды: %w", err)
+		owned = up.MatchedCount > 0
+	}
+	if writer && owned {
+		r.writeStateFile()
 	}
 	return nil
 }

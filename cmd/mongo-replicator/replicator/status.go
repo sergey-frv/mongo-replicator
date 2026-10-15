@@ -38,7 +38,7 @@ type DDLInfo struct {
 	Details string // цель rename, имена индексов, «пропущено»
 }
 
-// Status — снимок состояния для панели. LastBatch, LastDDL и Cluster при обновлении
+// Status — снимок состояния для панели. LastBatch, LastDDL и Machine при обновлении
 // заменяются новыми значениями и не изменяются: копию можно читать без блокировки.
 type Status struct {
 	DB, DstDB string
@@ -50,7 +50,7 @@ type Status struct {
 	LastBatch *BatchInfo
 	LastDDL   *DDLInfo
 	Traffic   TrafficInfo     // байты процесса
-	Cluster   *ClusterTraffic // последняя сводка всех процессов; nil — ещё не было
+	Machine   *MachineTraffic // последняя сводка по файлам состояния машины; nil — ещё не было
 	State     string
 	Retry     int    // номер повтора подряд; 0 — после открытия потока
 	LastErr   string // ошибка, из-за которой Run вернулся

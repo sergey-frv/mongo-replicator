@@ -1,6 +1,7 @@
 package replicator
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -137,4 +138,135 @@ func TestMachineTraffic(t *testing.T) {
 		assert.Equal(t, MachineTraffic{At: now, Processes: 3, Active: 2,
 			Traffic: TrafficInfo{SrcIn: 111, SrcOut: 222, DstIn: 333, DstOut: 444}}, mt)
 	})
+}
+
+func TestStatePath(t *testing.T) {
+	dir := t.TempDir()
+	path, cluster := StatePath(dir, "app", "mongodb://u:p@H2,h1:27017/app?replicaSet=rs0")
+	assert.Equal(t, "h1:27017,h2:27017", cluster)
+	assert.Equal(t, filepath.Join(dir, stateFileName("app", cluster)), path)
+}
+
+// newState — репликатор с файлом состояния в dir (без кластеров: startState их не трогает).
+func newState(t *testing.T, dir string, tr *Traffic) *Replicator {
+	t.Helper()
+	quietLog(t)
+	path, cluster := StatePath(dir, "app", "mongodb://h1")
+	r := New(nil, nil, Config{DB: "src", DstDB: "app", Traffic: tr, StateFile: path, StateDir: dir, Cluster: cluster})
+	t.Cleanup(func() { r.stopState() })
+	return r
+}
+
+func TestStartStateNoFile(t *testing.T) {
+	dir := t.TempDir()
+	tr := &Traffic{}
+	tr.SrcIn.Store(5)
+	r := newState(t, dir, tr)
+
+	r.startState()
+	s, err := loadState(r.cfg.StateFile)
+	require.NoError(t, err, "первая запись — сразу после загрузки")
+	assert.Equal(t, state{DB: "src", DstDB: "app", Cluster: "h1:27017", Owner: r.owner,
+		StartedAt: r.Status().Started.UTC(), UpdatedAt: s.UpdatedAt, Traffic: TrafficInfo{SrcIn: 5}},
+		s)
+	assert.WithinDuration(t, time.Now(), s.UpdatedAt, 5*time.Second)
+	assert.True(t, r.stopState(), "писатель запущен")
+	assert.False(t, r.stopState(), "повторная остановка безвредна")
+}
+
+func TestStartStateContinues(t *testing.T) {
+	dir := t.TempDir()
+	tr := &Traffic{}
+	r := newState(t, dir, tr)
+	require.NoError(t, writeState(r.cfg.StateFile, state{DB: "src", DstDB: "app", Cluster: "h1:27017",
+		Owner: "old:1:00000000", Traffic: TrafficInfo{SrcIn: 100, SrcOut: 200, DstIn: 300, DstOut: 400}}))
+
+	r.startState()
+	tr.DstOut.Store(7)
+	r.stopState()
+	r.writeStateFile()
+	s, err := loadState(r.cfg.StateFile)
+	require.NoError(t, err)
+	assert.Equal(t, TrafficInfo{SrcIn: 100, SrcOut: 200, DstIn: 300, DstOut: 407}, s.Traffic, "счёт — от прошлого значения")
+	assert.Equal(t, r.owner, s.Owner)
+}
+
+// Писатель обновляет файл сам, без Run.
+func TestStartStateWriter(t *testing.T) {
+	tr := &Traffic{}
+	r := newState(t, t.TempDir(), tr)
+	r.stateEvery = 10 * time.Millisecond
+	r.startState()
+	tr.SrcIn.Store(42)
+	require.Eventually(t, func() bool {
+		s, err := loadState(r.cfg.StateFile)
+		return err == nil && s.Traffic.SrcIn == 42
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+// База загружается один раз за процесс: повторный Run файл не перечитывает.
+func TestStartStateOnce(t *testing.T) {
+	tr := &Traffic{}
+	r := newState(t, t.TempDir(), tr)
+	r.startState()
+	r.stopState()
+	require.NoError(t, writeState(r.cfg.StateFile, state{DB: "src", DstDB: "app", Cluster: "h1:27017",
+		Traffic: TrafficInfo{SrcIn: 1000}}))
+	r.startState()
+	assert.Nil(t, r.stateStop, "писатель не перезапущен")
+	assert.Equal(t, TrafficInfo{}, r.stateBase)
+}
+
+func TestStartStateMovesAside(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, reason string
+	}{
+		{"битый", `{"traffic": `, "corrupt"},
+		{"другая база источника", `{"db":"other","dst_db":"app","cluster":"h1:27017","traffic":{"src_in":9}}`, "mismatch"},
+		{"другой кластер", `{"db":"src","dst_db":"app","cluster":"h9:27017","traffic":{"src_in":9}}`, "mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			r := newState(t, dir, &Traffic{})
+			require.NoError(t, os.WriteFile(r.cfg.StateFile, []byte(tc.content), 0o600))
+
+			r.startState()
+			s, err := loadState(r.cfg.StateFile)
+			require.NoError(t, err)
+			assert.Equal(t, TrafficInfo{}, s.Traffic, "счёт с нуля")
+			aside, err := filepath.Glob(r.cfg.StateFile + "." + tc.reason + "-*")
+			require.NoError(t, err)
+			require.Len(t, aside, 1, "старый файл перенесён в сторону")
+			b, err := os.ReadFile(aside[0])
+			require.NoError(t, err)
+			assert.Equal(t, tc.content, string(b), "история не стёрта")
+		})
+	}
+}
+
+// Файл не прочитан (не файл, а каталог): писать в него нельзя — писатель не запускается.
+func TestStartStateUnreadable(t *testing.T) {
+	r := newState(t, t.TempDir(), &Traffic{})
+	require.NoError(t, os.Mkdir(r.cfg.StateFile, 0o750))
+	r.startState()
+	assert.Nil(t, r.stateStop)
+	assert.DirExists(t, r.cfg.StateFile)
+}
+
+func TestLogMachine(t *testing.T) {
+	dir := t.TempDir()
+	r := newState(t, dir, &Traffic{})
+	r.startState()
+	r.stopState()
+	r.logMachine(context.Background())
+	m := r.Status().Machine
+	require.NotNil(t, m, "первая сводка — сразу")
+	assert.Equal(t, 1, m.Processes)
+	assert.Equal(t, 1, m.Active)
+
+	r.cfg.StateDir = ""
+	r.lastMachine = time.Time{}
+	r.update(func(s *Status) { s.Machine = nil })
+	r.logMachine(context.Background())
+	assert.Nil(t, r.Status().Machine, "без каталога сводки нет")
 }

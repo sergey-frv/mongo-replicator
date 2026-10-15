@@ -134,13 +134,13 @@ func renderPanel(st replicator.Status, at time.Time, prev replicator.TrafficInfo
 		label(" · цель ↓ ")+fmtBytes(t.DstIn)+
 		label(" ↑ ")+fmtBytes(t.DstOut)+speed(t.DstOut, prev.DstOut))
 
-	if c := st.Cluster; c != nil {
-		ct := c.Traffic
-		lines = append(lines, label(fmt.Sprintf("все процессы (%d, активно %d, на %s): источник ↓ ",
-			c.Processes, c.Active, c.At.Local().Format("15:04")))+fmtBytes(ct.SrcIn)+
-			label(" ↑ ")+fmtBytes(ct.SrcOut)+
-			label(" · цель ↓ ")+fmtBytes(ct.DstIn)+
-			label(" ↑ ")+fmtBytes(ct.DstOut))
+	if m := st.Machine; m != nil {
+		mt := m.Traffic
+		lines = append(lines, label(fmt.Sprintf("на машине (%d, активно %d, на %s): источник ↓ ",
+			m.Processes, m.Active, m.At.Local().Format("15:04")))+fmtBytes(mt.SrcIn)+
+			label(" ↑ ")+fmtBytes(mt.SrcOut)+
+			label(" · цель ↓ ")+fmtBytes(mt.DstIn)+
+			label(" ↑ ")+fmtBytes(mt.DstOut))
 	}
 
 	state := st.State

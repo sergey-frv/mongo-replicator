@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -46,6 +47,7 @@ type options struct {
 	LogFile      string `long:"log-file" env:"LOG_FILE" description:"путь к файлу лога (JSON, дозапись; каталог должен существовать); ротация — снаружи, logrotate copytruncate"`
 	LogFileLevel string `long:"log-file-level" env:"LOG_FILE_LEVEL" choice:"debug" choice:"info" choice:"warn" choice:"error" description:"уровень лога в файле; по умолчанию info, только вместе с --log-file"`
 	Progress     string `long:"progress" env:"PROGRESS" default:"auto" choice:"auto" choice:"tty" choice:"plain" description:"панель статуса в терминале (tty; в консоли — только WARN и выше) или построчный лог (plain); auto — панель, если stdout — терминал и TERM не dumb"`
+	StateDir     string `long:"state-dir" env:"STATE_DIR" description:"каталог файлов состояния на машине (накопленный трафик процессов, сводка по ним); по умолчанию $XDG_STATE_HOME/mongo-replicator или ~/.local/state/mongo-replicator"`
 }
 
 var revision = "unknown"
@@ -76,6 +78,10 @@ func main() {
 	}
 
 	log.Info().Str("revision", revision).Send()
+	if opts.StateDir, err = stateDir(opts.StateDir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 	if len(opts.ApplyDrops) > 0 {
 		log.Warn().Strs("apply_drop", opts.ApplyDrops).
 			Msgf("разрешены drop: %s (уберите из APPLY_DROP после применения)", strings.Join(opts.ApplyDrops, ", "))
@@ -143,6 +149,27 @@ func parseOpts(args []string) (options, error) {
 		opts.LogFileLevel = "info"
 	}
 	return opts, nil
+}
+
+// stateDir возвращает каталог файлов состояния и создаёт его: dir из --state-dir, а пустой —
+// $XDG_STATE_HOME/mongo-replicator, иначе ~/.local/state/mongo-replicator. Относительный
+// XDG_STATE_HOME игнорируется, как требует спецификация XDG Base Directory.
+func stateDir(dir string) (string, error) {
+	if dir == "" {
+		if x := os.Getenv("XDG_STATE_HOME"); filepath.IsAbs(x) {
+			dir = filepath.Join(x, "mongo-replicator")
+		} else {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("--state-dir: каталог по умолчанию: %w", err)
+			}
+			dir = filepath.Join(home, ".local", "state", "mongo-replicator")
+		}
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return "", fmt.Errorf("--state-dir: %w", err)
+	}
+	return dir, nil
 }
 
 // checkApplyDrops чистит список --apply-drop (пробелы вокруг, пустые элементы — APPLY_DROP=)
@@ -214,9 +241,12 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions, logFile *os.Fi
 	}
 	defer dst.Disconnect(context.Background()) //nolint:errcheck // выходим, ошибка не важна
 
+	stateFile, cluster := replicator.StatePath(opts.StateDir, opts.DstDB, opts.Dst)
+	log.Info().Str("file", stateFile).Msg("файл состояния")
 	r := replicator.New(src, dst, replicator.Config{
 		StartTS: opts.StartTS, BatchSize: opts.BatchSize, DB: opts.DB, DstDB: opts.DstDB,
 		ApplyDrops: opts.ApplyDrops, Traffic: tr,
+		StateFile: stateFile, StateDir: opts.StateDir, Cluster: cluster,
 	})
 	// на любом выходе, включая return 1 и панику: иначе база цели занята до истечения аренды
 	defer func() {

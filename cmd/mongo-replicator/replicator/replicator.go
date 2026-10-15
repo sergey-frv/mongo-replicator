@@ -54,6 +54,9 @@ type Config struct {
 	DstDB      string   // база цели; New: пусто — как DB
 	ApplyDrops []string // namespace источника (<DB>.<коллекция>), drop которых разрешён
 	Traffic    *Traffic // счётчики байт клиентов (их диалеры); nil — трафик не учитывается
+	StateFile  string   // файл состояния процесса на машине (StatePath); пусто — не пишется
+	StateDir   string   // каталог файлов состояния для сводки по машине; пусто — сводки нет
+	Cluster    string   // ключ кластера цели (StatePath): сверяется с файлом состояния
 }
 
 // Replicator переносит изменения из src в dst.
@@ -85,9 +88,17 @@ type Replicator struct {
 	// time.Time с монотонными показаниями: перевод часов хоста не сдвигает проверку срока
 	leaseOK atomic.Pointer[time.Time]
 
-	ckptTraffic  TrafficInfo   // счётчики на момент последней успешной записи трафика в чекпойнт
-	clusterEvery time.Duration // интервал сводки трафика всех процессов
-	lastCluster  time.Time     // время последней сводки
+	// файл состояния (Config.StateFile): читается один раз за процесс, пишет его
+	// горутина-писатель от загрузки до Release
+	stateLoaded  bool          // загрузка была; повторный Run её не повторяет
+	stateBase    TrafficInfo   // накопленное прошлыми процессами
+	stateStarted time.Time     // started_at файла: старт процесса
+	stateEvery   time.Duration // интервал записи
+	stateStop    chan struct{} // остановка писателя; nil — писатель не запущен
+	stateDone    chan struct{} // закрывается, когда писатель вышел
+
+	machineEvery time.Duration // интервал сводки трафика на машине
+	lastMachine  time.Time     // время последней сводки
 
 	mu sync.Mutex // st: читает Status из другой горутины
 	st Status     // без Applied и Traffic: их Status берёт из счётчиков
@@ -109,8 +120,8 @@ func New(src, dst *mongo.Client, cfg Config) *Replicator {
 		src: src, dst: dst, cfg: cfg, applyDrops: applyDrops,
 		lastLog: time.Now(), lastTraffic: cfg.Traffic.Snapshot(),
 		owner: newOwner(), leaseTTL: defaultLeaseTTL, leaseRenew: defaultLeaseRenew,
-		clusterEvery: defaultClusterEvery,
-		st:           Status{DB: cfg.DB, DstDB: cfg.DstDB, Started: time.Now(), Lag: -1, State: StateStarting},
+		stateEvery: defaultStateEvery, machineEvery: defaultMachineEvery,
+		st: Status{DB: cfg.DB, DstDB: cfg.DstDB, Started: time.Now(), Lag: -1, State: StateStarting},
 	}
 }
 
@@ -244,6 +255,8 @@ func (r *Replicator) stream(ctx context.Context) error {
 	default:
 		return ErrNoStartPoint
 	}
+	// после проверки пары баз: с неверным --db файл состояния не трогается
+	r.startState()
 
 	// Поток уровня базы требует прав только на неё.
 	log.Info().Str("db", r.cfg.DB).Msg("открываю поток уровня базы")
@@ -338,7 +351,7 @@ func (r *Replicator) stream(ctx context.Context) error {
 		}
 
 		r.logProgress(ctx)
-		r.logCluster(ctx)
+		r.logMachine(ctx)
 	}
 }
 

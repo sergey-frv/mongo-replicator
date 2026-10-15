@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -98,7 +99,7 @@ func TestMaskOptions(t *testing.T) {
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DB", "DST_DB", "APPLY_DROP",
-		"LOG_LEVEL", "LOG_FILE", "LOG_FILE_LEVEL", "PROGRESS"} {
+		"LOG_LEVEL", "LOG_FILE", "LOG_FILE_LEVEL", "PROGRESS", "STATE_DIR"} {
 		t.Setenv(k, "") // восстановит исходное значение после теста
 		require.NoError(t, os.Unsetenv(k))
 	}
@@ -115,11 +116,49 @@ func TestParseOptsEnv(t *testing.T) {
 	t.Setenv("LOG_FILE", "/var/log/repl.log")
 	t.Setenv("LOG_FILE_LEVEL", "warn")
 	t.Setenv("PROGRESS", "plain")
+	t.Setenv("STATE_DIR", "/var/lib/repl")
 
 	opts, err := parseOpts(nil)
 	require.NoError(t, err)
 	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", StartTS: 1791900000, BatchSize: 50, DB: "urlshrinker", DstDB: "urlshrinker",
-		LogLevel: "debug", LogFile: "/var/log/repl.log", LogFileLevel: "warn", Progress: "plain"}, opts)
+		LogLevel: "debug", LogFile: "/var/log/repl.log", LogFileLevel: "warn", Progress: "plain", StateDir: "/var/lib/repl"}, opts)
+}
+
+func TestStateDir(t *testing.T) {
+	home, xdg := t.TempDir(), t.TempDir()
+	for _, tc := range []struct {
+		name, opt, xdg, want string
+	}{
+		{"задан", filepath.Join(xdg, "a", "b"), "", filepath.Join(xdg, "a", "b")},
+		{"XDG_STATE_HOME абсолютный", "", xdg, filepath.Join(xdg, "mongo-replicator")},
+		{"XDG_STATE_HOME относительный — игнорируется", "", "rel/state", filepath.Join(home, ".local", "state", "mongo-replicator")},
+		{"XDG_STATE_HOME не задан", "", "", filepath.Join(home, ".local", "state", "mongo-replicator")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_STATE_HOME", tc.xdg)
+			if tc.xdg == "" {
+				require.NoError(t, os.Unsetenv("XDG_STATE_HOME"))
+			}
+			got, err := stateDir(tc.opt)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+			assert.DirExists(t, got, "каталог создан")
+		})
+	}
+	_, err := os.Stat("rel")
+	assert.ErrorIs(t, err, os.ErrNotExist, "относительный XDG_STATE_HOME не создан")
+}
+
+// Путь занят файлом: каталог не создать — main выходит с кодом 2 до подключения.
+func TestStateDirIsFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "state")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	_, err := stateDir(file)
+	require.ErrorContains(t, err, "--state-dir")
+
+	_, err = stateDir(filepath.Join(file, "sub"))
+	require.ErrorContains(t, err, "--state-dir")
 }
 
 func TestParseOptsDefaults(t *testing.T) {

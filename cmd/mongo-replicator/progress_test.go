@@ -40,7 +40,7 @@ func TestRenderPanel(t *testing.T) {
 			Colls: []string{"links", "clicks"}},
 		LastDDL: &replicator.DDLInfo{At: clock(11, 40, 2), Op: "createIndexes", NS: "urlshrinker.links", Details: "slug_1"},
 		Traffic: replicator.TrafficInfo{SrcIn: 3*GiB + 100*MiB, SrcOut: 12 * MiB, DstIn: 40 * MiB, DstOut: 2*GiB + 900*MiB},
-		Cluster: &replicator.ClusterTraffic{At: clock(12, 1, 0), Processes: 3, Active: 2,
+		Machine: &replicator.MachineTraffic{At: clock(12, 1, 0), Processes: 3, Active: 2,
 			Traffic: replicator.TrafficInfo{SrcIn: 12*GiB + 400*MiB, SrcOut: 300 * MiB, DstIn: 200 * MiB, DstOut: 11*GiB + 900*MiB}},
 		State: replicator.StateRunning,
 	}
@@ -53,7 +53,7 @@ func TestRenderPanel(t *testing.T) {
 		"операции: 1 284 551 всего · 312/с · пачка 12:01:34: 48 (ins 30 · upd 15 · del 3) в links, clicks",
 		"DDL: 11:40:02 createIndexes urlshrinker.links (slug_1)",
 		"трафик процесса: источник ↓ 3.1 GiB 420 KiB/с ↑ 12 MiB · цель ↓ 40 MiB ↑ 2.9 GiB 390 KiB/с",
-		"все процессы (3, активно 2, на 12:01): источник ↓ 12.4 GiB ↑ 300 MiB · цель ↓ 200 MiB ↑ 11.9 GiB",
+		"на машине (3, активно 2, на 12:01): источник ↓ 12.4 GiB ↑ 300 MiB · цель ↓ 200 MiB ↑ 11.9 GiB",
 		"состояние: работает",
 	}, panelLines(st, at, prev, at.Add(-time.Second)))
 }

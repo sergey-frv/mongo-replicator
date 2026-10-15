@@ -159,14 +159,15 @@ var streamPipeline = mongo.Pipeline{
 - Modify: `cmd/mongo-replicator/main.go`, `cmd/mongo-replicator/main_test.go`
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] опция `--state-dir`/`STATE_DIR`, значение по умолчанию (относительный `XDG_STATE_HOME` игнорируется), `MkdirAll` при старте (ошибка → exit 2); ключ кластера по `--dst`/`DST_URI` и путь файла → `Config.StateFile`, `Config.StateDir`; `clearEnv` + `STATE_DIR`
-- [ ] жизненный цикл файла (Technical Details): загрузка базы один раз после первой успешной `checkDBs`, `moveAside` при битом/чужом файле, первая запись сразу, запись отдельной горутиной процесса раз в 10 с (в т.ч. в паузах повторов), остановка горутины и финальная запись в `Release` только при совпадении `owner`
-- [ ] удалить дельты `traffic.*` из `renewOnce`/`Release`, `ckptFields`, `saveTraffic`, `ckptTraffic`, `clusterTraffic` и их тесты (`TestSaveTraffic`, `TestSaveTrafficNil`, `TestTrafficCkptFields`, `TestIntegrationClusterTraffic`, `TestIntegrationTrafficCheckpoint`, `TestIntegrationTrafficRelease`, `readCkptTraffic`)
-- [ ] сводка `machineTraffic` раз в `clusterEvery`, INFO `трафик на машине`; `Status.Machine` вместо `Status.Cluster`; строка панели «на машине»
-- [ ] write unit tests `main`: значение `--state-dir` по умолчанию (`XDG_STATE_HOME` абсолютный, относительный, не задан; `HOME` через `t.Setenv`); путь — существующий файл → exit 2
-- [ ] update unit tests `renderPanel` под «на машине»; `status_test` — `Machine`
-- [ ] write integration tests (`StateDir: t.TempDir()`): после работы файл есть, `traffic` > 0, документ чекпойнта **без** `traffic`; после временной ошибки `Run` (пауза повтора) файл продолжает обновляться (`updated_at` растёт), процесс в сводке активен; второй `Replicator` на ту же базу после `Release` первого продолжает счёт от прошлого значения; запуск с неверным `--db` (`ErrDBMismatch`) — файл не изменён; два процесса с общим `StateDir` → сводка = сумма двух файлов, `processes = 2`, `active` = 2 во время работы и 0 после `Release` (`Eventually`); `TestIntegrationStatus` — `StateDir` и `s.Machine`
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] опция `--state-dir`/`STATE_DIR`, значение по умолчанию (относительный `XDG_STATE_HOME` игнорируется), `MkdirAll` при старте (ошибка → exit 2); ключ кластера по `--dst`/`DST_URI` и путь файла → `Config.StateFile`, `Config.StateDir`; `clearEnv` + `STATE_DIR`
+- [x] жизненный цикл файла (Technical Details): загрузка базы один раз после первой успешной `checkDBs`, `moveAside` при битом/чужом файле, первая запись сразу, запись отдельной горутиной процесса раз в 10 с (в т.ч. в паузах повторов), остановка горутины и финальная запись в `Release` только при совпадении `owner`
+- [x] удалить дельты `traffic.*` из `renewOnce`/`Release`, `ckptFields`, `saveTraffic`, `ckptTraffic`, `clusterTraffic` и их тесты (`TestSaveTraffic`, `TestSaveTrafficNil`, `TestTrafficCkptFields`, `TestIntegrationClusterTraffic`, `TestIntegrationTrafficCheckpoint`, `TestIntegrationTrafficRelease`, `readCkptTraffic`)
+- [x] сводка `machineTraffic` раз в `clusterEvery`, INFO `трафик на машине`; `Status.Machine` вместо `Status.Cluster`; строка панели «на машине»
+- [x] write unit tests `main`: значение `--state-dir` по умолчанию (`XDG_STATE_HOME` абсолютный, относительный, не задан; `HOME` через `t.Setenv`); путь — существующий файл → exit 2
+- [x] update unit tests `renderPanel` под «на машине»; `status_test` — `Machine`
+- [x] write integration tests (`StateDir: t.TempDir()`): после работы файл есть, `traffic` > 0, документ чекпойнта **без** `traffic`; после временной ошибки `Run` (пауза повтора) файл продолжает обновляться (`updated_at` растёт), процесс в сводке активен; второй `Replicator` на ту же базу после `Release` первого продолжает счёт от прошлого значения; запуск с неверным `--db` (`ErrDBMismatch`) — файл не изменён; два процесса с общим `StateDir` → сводка = сумма двух файлов, `processes = 2`, `active` = 2 во время работы и 0 после `Release` (`Eventually`); `TestIntegrationStatus` — `StateDir` и `s.Machine`
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
+- ➕ отклонение: путь и ключ кластера считает экспортированная `StatePath(dir, dstDB, dstURI)`; ключ передаётся в `Config.Cluster` (сверка с полем `cluster` файла); `stateActiveFor` — переменная (интеграционные тесты сокращают до 1 с), интервал писателя — поле `stateEvery`
 
 ### Task 3: Чекпойнт в коллекции базы цели
 

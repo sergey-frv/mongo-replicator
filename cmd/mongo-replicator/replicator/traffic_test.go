@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net"
 	"sync/atomic"
@@ -152,50 +151,4 @@ func TestTrafficFields(t *testing.T) {
 		"src_in": 21000.0, "src_out": 200.0, "dst_in": 30.0, "dst_out": 10500.0,
 		"src_in_bps": 2000.0, "src_out_bps": 10.0, "dst_in_bps": 2.0, "dst_out_bps": 1000.0,
 	}, got)
-}
-
-// Дельта трафика в чекпойнт: снимок сдвигается только после успешной записи,
-// поэтому неудачная дельта входит в следующую.
-func TestSaveTraffic(t *testing.T) {
-	tr := &Traffic{}
-	r := New(nil, nil, Config{DB: "shop", Traffic: tr})
-	var got TrafficInfo
-	write := func(err error) func(TrafficInfo) error {
-		return func(d TrafficInfo) error {
-			got = d
-			return err
-		}
-	}
-
-	tr.SrcIn.Add(100)
-	tr.DstOut.Add(40)
-	failed := errors.New("сеть")
-	require.ErrorIs(t, r.saveTraffic(write(failed)), failed)
-	assert.Equal(t, TrafficInfo{SrcIn: 100, DstOut: 40}, got)
-
-	tr.SrcIn.Add(5)
-	tr.SrcOut.Add(7)
-	require.NoError(t, r.saveTraffic(write(nil)))
-	assert.Equal(t, TrafficInfo{SrcIn: 105, SrcOut: 7, DstOut: 40}, got, "с пропущенной дельтой")
-
-	tr.DstIn.Add(3)
-	require.NoError(t, r.saveTraffic(write(nil)))
-	assert.Equal(t, TrafficInfo{DstIn: 3}, got, "только прирост с успешной записи")
-}
-
-// Без счётчиков дельта нулевая: продление и Release пишут нули.
-func TestSaveTrafficNil(t *testing.T) {
-	r := New(nil, nil, Config{DB: "shop"})
-	var got TrafficInfo
-	require.NoError(t, r.saveTraffic(func(d TrafficInfo) error {
-		got = d
-		return nil
-	}))
-	assert.Equal(t, TrafficInfo{}, got)
-}
-
-func TestTrafficCkptFields(t *testing.T) {
-	assert.Equal(t, map[string]int64{
-		"traffic.src_in": 1, "traffic.src_out": 2, "traffic.dst_in": 3, "traffic.dst_out": 4,
-	}, TrafficInfo{SrcIn: 1, SrcOut: 2, DstIn: 3, DstOut: 4}.ckptFields())
 }
