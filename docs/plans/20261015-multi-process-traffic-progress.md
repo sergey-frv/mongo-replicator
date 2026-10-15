@@ -286,12 +286,12 @@ func (r *Replicator) SetRetry(err error)   // из цикла повторов m
 - [x] «Панель статуса»: `--progress auto|tty|plain` (`TERM=dumb` → `plain`), строки панели, WARN/ERROR над панелью, INFO — только в файл, рекомендация `--log-file`, эхо нажатых клавиш
 
 ### Task 9: Verify acceptance criteria
-- [ ] несколько процессов на один целевой кластер работают независимо; второй процесс на ту же базу не стартует; аренда не истекает при долгом DDL
-- [ ] трафик виден в логе процесса, накапливается в чекпойнте, сводка раз в минуту
-- [ ] панель в терминале, `plain` при перенаправлении stdout; WARN/ERROR над панелью; выход по ошибке и по Ctrl+C не зависает
-- [ ] run full test suite: `make test`
-- [ ] run integration tests: `make test-integration`
-- [ ] `make lint` без замечаний
+- [x] несколько процессов на один целевой кластер работают независимо; второй процесс на ту же базу не стартует; аренда не истекает при долгом DDL (`TestIntegrationTwoProcessesOneTarget`, `TestIntegrationLeaseHeld`, `TestIntegrationLeaseRenewDuringLongDDL`)
+- [x] трафик виден в логе процесса, накапливается в чекпойнте, сводка раз в минуту (`TestIntegrationTraffic`, `TestIntegrationTrafficCheckpoint`, `TestIntegrationClusterTraffic`; `defaultClusterEvery = 60s`)
+- [x] панель в терминале, `plain` при перенаправлении stdout; WARN/ERROR над панелью; выход по ошибке и по Ctrl+C не зависает (`TestProgressMode`, `TestPanelUpdate`, `TestTeaWriterAfterExit`, `TestStartPanel`; выход по SIGINT и по занятой аренде проверен вручную в tmux в Task 7)
+- [x] run full test suite: `make test`
+- [x] run integration tests: `make test-integration`
+- [x] `make lint` без замечаний
 
 ### Task 10: [Final] Update documentation
 - [ ] обновить CLAUDE.md, если появились неочевидные договорённости (ключ чекпойнта, аренда в горутине, `$$NOW`, `p.Send` вместо `p.Println`)
