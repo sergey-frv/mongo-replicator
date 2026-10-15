@@ -262,13 +262,17 @@ func (r *Replicator) SetRetry(err error)   // из цикла повторов m
 - Modify: `cmd/mongo-replicator/main_test.go`
 - Modify: `go.mod`, `go.sum`, `vendor/`
 
-- [ ] опция `--progress`/`PROGRESS` (`choice`, `default:"auto"`, `TERM=dumb` → `plain`); `clearEnv` + `PROGRESS`
-- [ ] сначала код с импортами `charm.land/bubbletea/v2` и `charm.land/lipgloss/v2`, затем `go get … && go mod tidy && go mod vendor`
-- [ ] модель (`tick`, `logLineMsg` → `tea.Println`, `finalMsg` → `tea.Quit`), `renderPanel`, `teaWriter` (форвардер через `p.Send`), жизненный цикл в `run()` по Technical Details (сохранение файла лога из `setupLog`, восстановление логгера после `p.Wait()`, `recover` с `p.Kill()`/`p.Wait()`)
-- [ ] write unit tests `renderPanel`: обычная работа (форматирование байт и длительностей), без DDL и без сводки, «повтор» с ошибкой, лаг неизвестен; форматтеры байт (`B`, `KiB`, `MiB`, `GiB`) и длительностей
-- [ ] write unit tests `parseOpts`: `auto|tty|plain`, неверное и пустое → ошибка
-- [ ] write unit test: запись в `teaWriter` после завершения программы (запущенная и сразу остановленная программа с `WithInput(nil)` и выводом в буфер) не блокирует (тест с таймаутом)
-- [ ] `make test`, `make lint`, `make build`; ручной запуск `make run` — панель видна; Ctrl+C оставляет финальную панель и итог `трафик`
+- [x] опция `--progress`/`PROGRESS` (`choice`, `default:"auto"`, `TERM=dumb` → `plain`); `clearEnv` + `PROGRESS`
+- [x] сначала код с импортами `charm.land/bubbletea/v2` и `charm.land/lipgloss/v2`, затем `go get … && go mod tidy && go mod vendor`
+- [x] модель (`tick`, `logLineMsg` → `tea.Println`, `finalMsg` → `tea.Quit`), `renderPanel`, `teaWriter` (форвардер через `p.Send`), жизненный цикл в `run()` по Technical Details (сохранение файла лога из `setupLog`, восстановление логгера после `p.Wait()`, `recover` с `p.Kill()`/`p.Wait()`)
+  - ⚠️ вместо `p.Wait()` — свой канал `done` вокруг `go p.Run()`: канал `Wait` создаёт `Run`, до его старта `Wait` висит; после `done` `teaWriter` пишет в stdout напрямую (если `Run` упал на старте, WARN/ERROR не теряются)
+  - ⚠️ `View` заканчивается `\n`: при выходе рендерер стирает экран от последней строки кадра — без перевода строки пропадала строка состояния
+  - ➕ финальный снимок — без скоростей (доли секунды с последнего тика давали шум); цикл повторов вынесен в `replicate`, итоги (ERROR с подсказкой, «остановлен по сигналу») — после остановки панели; `startPanel` принимает доп. опции программы (в тесте — `WithWindowSize`, вывод не терминал)
+- [x] write unit tests `renderPanel`: обычная работа (форматирование байт и длительностей), без DDL и без сводки, «повтор» с ошибкой, лаг неизвестен; форматтеры байт (`B`, `KiB`, `MiB`, `GiB`) и длительностей
+- [x] write unit tests `parseOpts`: `auto|tty|plain`, неверное и пустое → ошибка
+- [x] write unit test: запись в `teaWriter` после завершения программы (запущенная и сразу остановленная программа с `WithInput(nil)` и выводом в буфер) не блокирует (тест с таймаутом)
+- [x] `make test`, `make lint`, `make build`; ручной запуск `make run` — панель видна; Ctrl+C оставляет финальную панель и итог `трафик` (проверено в tmux 170×30: панель, пачка, DDL, сводка; выход по SIGINT и по занятой аренде)
+  - ⚠️ эхо `^C` от терминала портит одну-две ячейки финальной панели (рендерер о нём не знает) — упомянуть в README вместе с эхом клавиш
 
 ### Task 8: README
 

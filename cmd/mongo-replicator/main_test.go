@@ -94,7 +94,7 @@ func TestMaskOptions(t *testing.T) {
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DB", "DST_DB", "APPLY_DROP",
-		"LOG_LEVEL", "LOG_FILE", "LOG_FILE_LEVEL"} {
+		"LOG_LEVEL", "LOG_FILE", "LOG_FILE_LEVEL", "PROGRESS"} {
 		t.Setenv(k, "") // восстановит исходное значение после теста
 		require.NoError(t, os.Unsetenv(k))
 	}
@@ -110,11 +110,12 @@ func TestParseOptsEnv(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "debug")
 	t.Setenv("LOG_FILE", "/var/log/repl.log")
 	t.Setenv("LOG_FILE_LEVEL", "warn")
+	t.Setenv("PROGRESS", "plain")
 
 	opts, err := parseOpts(nil)
 	require.NoError(t, err)
 	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", StartTS: 1791900000, BatchSize: 50, DB: "urlshrinker", DstDB: "urlshrinker",
-		LogLevel: "debug", LogFile: "/var/log/repl.log", LogFileLevel: "warn"}, opts)
+		LogLevel: "debug", LogFile: "/var/log/repl.log", LogFileLevel: "warn", Progress: "plain"}, opts)
 }
 
 func TestParseOptsDefaults(t *testing.T) {
@@ -122,7 +123,7 @@ func TestParseOptsDefaults(t *testing.T) {
 	opts, err := parseOpts([]string{"--src", "mongodb://src", "--dst", "mongodb://dst", "--db", "urlshrinker"})
 	require.NoError(t, err)
 	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", BatchSize: 1000, DB: "urlshrinker", DstDB: "urlshrinker",
-		LogLevel: "info", LogFileLevel: "info"}, opts)
+		LogLevel: "info", LogFileLevel: "info", Progress: "auto"}, opts)
 }
 
 func TestParseOptsFlagsOverrideEnv(t *testing.T) {
@@ -135,12 +136,69 @@ func TestParseOptsFlagsOverrideEnv(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "warn")
 	t.Setenv("LOG_FILE", "env.log")
 	t.Setenv("LOG_FILE_LEVEL", "error")
+	t.Setenv("PROGRESS", "plain")
 
 	opts, err := parseOpts([]string{"--src", "mongodb://src-flag", "--start-ts=2", "--batch", "7", "--db", "flag",
-		"--log-level", "debug", "--log-file", "flag.log", "--log-file-level", "info"})
+		"--log-level", "debug", "--log-file", "flag.log", "--log-file-level", "info", "--progress", "tty"})
 	require.NoError(t, err)
 	assert.Equal(t, options{Src: "mongodb://src-flag", Dst: "mongodb://dst-env", StartTS: 2, BatchSize: 7, DB: "flag", DstDB: "flag",
-		LogLevel: "debug", LogFile: "flag.log", LogFileLevel: "info"}, opts)
+		LogLevel: "debug", LogFile: "flag.log", LogFileLevel: "info", Progress: "tty"}, opts)
+}
+
+func TestParseOptsProgress(t *testing.T) {
+	base := []string{"--src", "s", "--dst", "d", "--db", "db"}
+	for _, v := range []string{"auto", "tty", "plain"} {
+		t.Run(v, func(t *testing.T) {
+			clearEnv(t)
+			opts, err := parseOpts(append(base, "--progress", v))
+			require.NoError(t, err)
+			assert.Equal(t, v, opts.Progress)
+
+			t.Setenv("PROGRESS", v)
+			opts, err = parseOpts(base)
+			require.NoError(t, err)
+			assert.Equal(t, v, opts.Progress)
+		})
+	}
+	for name, src := range map[string]struct {
+		env  map[string]string
+		args []string
+	}{
+		"неверный флаг":   {args: []string{"--progress", "fancy"}},
+		"неверный env":    {env: map[string]string{"PROGRESS": "TTY"}},
+		"пустой флаг":     {args: []string{"--progress="}},
+		"пустой PROGRESS": {env: map[string]string{"PROGRESS": ""}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			clearEnv(t)
+			for k, v := range src.env {
+				t.Setenv(k, v)
+			}
+			_, err := parseOpts(append(base, src.args...))
+			require.Error(t, err)
+			assert.False(t, isHelp(err))
+			assert.Contains(t, err.Error(), "progress")
+		})
+	}
+}
+
+func TestProgressMode(t *testing.T) {
+	cases := []struct {
+		opt  string
+		tty  bool
+		term string
+		want string
+	}{
+		{"auto", true, "xterm-256color", progressTTY},
+		{"auto", true, "dumb", progressPlain},
+		{"auto", false, "xterm-256color", progressPlain},
+		{"auto", true, "", progressTTY},
+		{"tty", false, "dumb", progressTTY},
+		{"plain", true, "xterm", progressPlain},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, progressMode(c.opt, c.tty, c.term), "%+v", c)
+	}
 }
 
 func TestParseOptsLog(t *testing.T) {

@@ -45,6 +45,7 @@ type options struct {
 	LogLevel     string `long:"log-level" env:"LOG_LEVEL" default:"info" choice:"debug" choice:"info" choice:"warn" choice:"error" description:"уровень лога в консоли (stdout): текст в терминале, JSON при перенаправлении"`
 	LogFile      string `long:"log-file" env:"LOG_FILE" description:"путь к файлу лога (JSON, дозапись; каталог должен существовать); ротация — снаружи, logrotate copytruncate"`
 	LogFileLevel string `long:"log-file-level" env:"LOG_FILE_LEVEL" choice:"debug" choice:"info" choice:"warn" choice:"error" description:"уровень лога в файле; по умолчанию info, только вместе с --log-file"`
+	Progress     string `long:"progress" env:"PROGRESS" default:"auto" choice:"auto" choice:"tty" choice:"plain" description:"панель статуса в терминале (tty; в консоли — только WARN и выше) или построчный лог (plain); auto — панель, если stdout — терминал и TERM не dumb"`
 }
 
 var revision = "unknown"
@@ -68,7 +69,8 @@ func main() {
 		os.Exit(2)
 	}
 
-	if _, err = setupLog(opts); err != nil {
+	logFile, err := setupLog(opts)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
@@ -97,7 +99,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	os.Exit(run(opts, srcOpts, dstOpts))
+	os.Exit(run(opts, srcOpts, dstOpts, logFile))
 }
 
 // parseOpts разбирает аргументы и env. Любая ошибка означает выход с кодом 2
@@ -185,8 +187,9 @@ func isHelp(err error) bool {
 }
 
 // run подключается к кластерам и крутит репликацию с ретраями. Возвращает код выхода.
-// srcOpts/dstOpts — разобранные URI с найденными паролями (prepareClients).
-func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
+// srcOpts/dstOpts — разобранные URI с найденными паролями (prepareClients);
+// logFile — файл лога из setupLog (nil без --log-file): с ним логгер пересобирается под панель.
+func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions, logFile *os.File) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -219,18 +222,45 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 	defer func() {
 		relCtx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
 		defer cancel()
-		if err := r.Release(relCtx); err != nil {
-			log.Warn().Err(err).Msg("аренда не снята: база цели освободится по её истечении")
+		if relErr := r.Release(relCtx); relErr != nil {
+			log.Warn().Err(relErr).Msg("аренда не снята: база цели освободится по её истечении")
 		}
 	}()
+	stopPanel := func() {}
+	if progressMode(opts.Progress, stdoutTTY(), os.Getenv("TERM")) == progressTTY {
+		var kill func()
+		stopPanel, kill = withPanel(opts, r.Status, logFile)
+		// после Release в порядке объявления, значит раньше него: паника в основной
+		// горутине не оставит терминал под панелью
+		defer func() {
+			if rec := recover(); rec != nil {
+				kill()
+				panic(rec)
+			}
+		}()
+	}
+	err = replicate(ctx, r)
+	// итоги — обычной печатью под финальной панелью
+	stopPanel()
+	if err != nil {
+		log.Error().Err(err).Msg(hint(err))
+		return 1
+	}
+	log.Info().Int64("applied", r.Applied()).
+		Msg("остановлен по сигналу; незаписанный хвост будет перечитан при следующем запуске")
+	return 0
+}
+
+// replicate крутит Run с повторами временных ошибок. Возвращает перманентную ошибку
+// или nil — остановку по сигналу.
+func replicate(ctx context.Context, r *replicator.Replicator) error {
 	for ctx.Err() == nil {
 		err := r.Run(ctx)
 		if ctx.Err() != nil {
 			break
 		}
 		if permanent(err) {
-			log.Error().Err(err).Msg(hint(err))
-			return 1
+			return err
 		}
 		log.Warn().Err(err).Str("retry", retryTimeout.String()).Msg("ошибка репликации, повтор")
 		r.SetRetry(err)
@@ -239,9 +269,24 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 		case <-time.After(retryTimeout):
 		}
 	}
-	log.Info().Int64("applied", r.Applied()).
-		Msg("остановлен по сигналу; незаписанный хвост будет перечитан при следующем запуске")
-	return 0
+	return nil
+}
+
+// withPanel показывает панель статуса и переключает на неё консольный лог: над панелью —
+// WARN и выше, файл лога — без изменений. stop выводит финальную панель, дожидается
+// её выхода и возвращает обычный консольный лог (иначе итог INFO отфильтруется);
+// kill — то же без финальной панели.
+func withPanel(opts options, status func() replicator.Status, logFile *os.File) (stop, kill func()) {
+	if logFile == nil {
+		log.Warn().Msg("полный лог не пишется: добавьте --log-file")
+	}
+	file, fileLevel := fileWriter(logFile), logLevels[opts.LogFileLevel]
+	console, stopP, killP := startPanel(status, os.Stdout)
+	log.Logger = newLogger(console, true, max(zerolog.WarnLevel, logLevels[opts.LogLevel]), file, fileLevel)
+	restore := func() {
+		log.Logger = newLogger(os.Stdout, stdoutTTY(), logLevels[opts.LogLevel], file, fileLevel)
+	}
+	return func() { stopP(); restore() }, func() { killP(); restore() }
 }
 
 // logTraffic пишет итог трафика процесса (байты с начала) при выходе.
@@ -475,21 +520,17 @@ func newLogger(console io.Writer, consoleTTY bool, consoleLevel zerolog.Level,
 // и пишет строку «лог». Возвращает открытый файл (nil без --log-file).
 // Запись без буфера: os.Exit и сигналы ничего не теряют, Sync не нужен.
 func setupLog(opts options) (*os.File, error) {
-	var (
-		f    *os.File
-		file io.Writer // только после успешного открытия: typed-nil *os.File не равен nil
-	)
+	var f *os.File
 	if opts.LogFile != "" {
 		var err error
 		f, err = os.OpenFile(opts.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640) //nolint:gosec // путь и права задаёт оператор (--log-file), группе — чтение
 		if err != nil {
 			return nil, fmt.Errorf("открыть файл лога: %w", err)
 		}
-		file = f
 	}
 
-	tty := term.IsTerminal(int(os.Stdout.Fd())) //nolint:gosec // дескриптор stdout помещается в int
-	log.Logger = newLogger(os.Stdout, tty, logLevels[opts.LogLevel], file, logLevels[opts.LogFileLevel])
+	tty := stdoutTTY()
+	log.Logger = newLogger(os.Stdout, tty, logLevels[opts.LogLevel], fileWriter(f), logLevels[opts.LogFileLevel])
 
 	format := "json"
 	if tty {
@@ -501,4 +542,16 @@ func setupLog(opts options) (*os.File, error) {
 	}
 	ev.Msg("лог")
 	return f, nil
+}
+
+// fileWriter — файл лога как приёмник; nil-файл — nil-интерфейс: typed-nil *os.File не равен nil.
+func fileWriter(f *os.File) io.Writer {
+	if f == nil {
+		return nil
+	}
+	return f
+}
+
+func stdoutTTY() bool {
+	return term.IsTerminal(int(os.Stdout.Fd())) //nolint:gosec // дескриптор stdout помещается в int
 }
