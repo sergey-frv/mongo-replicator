@@ -96,6 +96,10 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 	if r.ddlHook != nil {
 		r.ddlHook()
 	}
+	// до проверки аренды: ошибка перманентная, на цель такой rename не уходит
+	if ev.OperationType == "rename" && (ev.NS.Coll == ckptColl || ev.To != nil && ev.To.Coll == ckptColl) {
+		return fmt.Errorf("rename %s → %v: %w", ev.NS, ev.To, ErrReservedCollection)
+	}
 	// drop и rename с dropTarget необратимы: после простоя между commit и DDL
 	// аренда могла перейти к другому процессу. drop и dropIndexes ходят на цель
 	// несколько раз и проверяют аренду ещё и перед каждой мутацией

@@ -203,9 +203,41 @@ func TestIsEventTooLarge(t *testing.T) {
 }
 
 // Поток не тащит updateDescription: с ним событие большого документа превышает 16 МБ.
-func TestStreamPipelineUnsetsUpdateDescription(t *testing.T) {
-	require.Len(t, streamPipeline, 1)
-	assert.Equal(t, bson.D{{Key: "$unset", Value: "updateDescription"}}, streamPipeline[0])
+func TestStreamPipeline(t *testing.T) {
+	require.Len(t, streamPipeline, 2)
+	assert.Equal(t, bson.D{{Key: "$match", Value: bson.D{{Key: "$or", Value: bson.A{
+		bson.D{{Key: "ns.coll", Value: bson.D{{Key: "$ne", Value: "_replicator_checkpoint"}}}},
+		bson.D{{Key: "operationType", Value: "rename"}},
+	}}}}}, streamPipeline[0], "сначала фильтр служебной коллекции, rename проходит")
+	assert.Equal(t, bson.D{{Key: "$unset", Value: "updateDescription"}}, streamPipeline[1])
+}
+
+// rename в служебное имя и из него — перманентная ошибка ещё до проверки аренды
+// (аренды здесь нет вовсе) и без похода на цель.
+func TestApplyDDLRenameReserved(t *testing.T) {
+	cases := []struct {
+		name     string
+		from, to namespace
+	}{
+		{"в служебное имя", namespace{"d", "foo"}, namespace{"d", ckptColl}},
+		{"из служебного имени", namespace{"d", ckptColl}, namespace{"d", "foo"}},
+		{"из другой базы в служебное", namespace{"other", "foo"}, namespace{"d", ckptColl}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := New(nil, nil, Config{DB: "d"})
+			to := c.to
+			ev := event{OperationType: "rename", NS: c.from, To: &to}
+			err := r.applyDDL(context.Background(), &ev)
+			require.ErrorIs(t, err, ErrReservedCollection)
+			assert.NotErrorIs(t, err, errLeaseExpiring)
+			assert.Nil(t, r.Status().LastDDL)
+		})
+	}
+
+	r := New(nil, nil, Config{DB: "d"})
+	ev := event{OperationType: "rename", NS: namespace{"d", "a"}, To: &namespace{"d", "b"}}
+	require.ErrorIs(t, r.applyDDL(context.Background(), &ev), errLeaseExpiring, "обычный rename доходит до проверки аренды")
 }
 
 func TestIsDBCaseConflict(t *testing.T) {

@@ -541,6 +541,7 @@ func TestPermanent(t *testing.T) {
 		{"аренда потеряна", fmt.Errorf("сохранение чекпойнта: %w", replicator.ErrLeaseLost), "два репликатора на одну базу"},
 		{"событие другой базы", fmt.Errorf("run: %w", replicator.ErrForeignNamespace), "сообщите о баге"},
 		{"поток инвалидирован", fmt.Errorf("run: %w", replicator.ErrStreamInvalidated), "<dst-db>._replicator_checkpoint"},
+		{"rename в служебное имя", fmt.Errorf("run: %w", replicator.ErrReservedCollection), "переименуйте её на источнике"},
 		{"база в другом регистре", fmt.Errorf("bulk write: %w", mongo.CommandError{Code: 13297}), "--dst-db"},
 		{"drop коллекции", fmt.Errorf("run: %w", &replicator.DropError{NS: "db.c"}), "--apply-drop db.c"},
 		{"dropDatabase", fmt.Errorf("run: %w", &replicator.DropError{NS: "db", Database: true}), "<dst-db>._replicator_checkpoint"},

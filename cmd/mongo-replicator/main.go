@@ -360,6 +360,9 @@ func hint(err error) string {
 	case errors.Is(err, replicator.ErrStreamInvalidated):
 		return "поток закрыт сервером; на цели данные остались — нужна новая полная заливка: " +
 			"удалите <dst-db>._replicator_checkpoint (или всю базу цели) и залейте заново с --start-ts"
+	case errors.Is(err, replicator.ErrReservedCollection):
+		return "на источнике коллекция переименована в служебное имя _replicator_checkpoint или из него: " +
+			"переименуйте её на источнике в другое имя и сделайте новую полную заливку"
 	case replicator.IsDBCaseConflict(err):
 		return "на цели есть база с тем же именем в другом регистре — проверьте --dst-db"
 	}

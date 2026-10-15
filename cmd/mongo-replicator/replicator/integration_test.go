@@ -1307,6 +1307,94 @@ func TestIntegrationCheckpointCollDropped(t *testing.T) {
 	assert.False(t, found, "документ без позиции удалён при снятии аренды")
 }
 
+// Служебная коллекция на источнике (источник был целью при обратной репликации):
+// её insert/update/delete/drop не уходят в поток вперемешку с записями обычной
+// коллекции — обычная доезжает, а на цели в служебной только документ чекпойнта.
+func TestIntegrationCheckpointCollFiltered(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	src := srcClient.Database(db)
+	items, svc := src.Collection("items"), src.Collection(ckptColl)
+	for i := range 20 {
+		_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
+		require.NoError(t, err)
+		// _id как у чекпойнта: дошедшее до цели событие затёрло бы позицию
+		_, err = svc.UpdateOne(ctx, bson.M{"_id": ckptID},
+			bson.M{"$set": bson.M{"token": "foreign", "i": i}}, options.UpdateOne().SetUpsert(true))
+		require.NoError(t, err)
+		_, err = svc.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
+		require.NoError(t, err)
+		if i%2 == 0 {
+			_, err = svc.DeleteOne(ctx, bson.M{"_id": int32(i)})
+			require.NoError(t, err)
+		}
+	}
+	require.NoError(t, svc.Drop(ctx)) // drop служебной тоже не доходит: иначе *DropError
+	_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: "last"}})
+	require.NoError(t, err)
+	rn.waitSame(db)
+	rn.waitQuiet()
+
+	var docs []bson.M
+	cur, err := ckptOf(db).Find(ctx, bson.D{})
+	require.NoError(t, err)
+	require.NoError(t, cur.All(ctx, &docs))
+	require.Len(t, docs, 1, "%v", docs)
+	assert.Equal(t, ckptID, docs[0]["_id"])
+	assert.Equal(t, db, docs[0]["db"])
+	assert.NotContains(t, docs[0], "i")
+	assert.EqualValues(t, 21, rn.r.Applied())
+}
+
+// rename на источнике в служебное имя и из него — перманентная ErrReservedCollection:
+// на цель не уходит, чекпойнт остаётся перед событием, рестарт упирается в него снова.
+func TestIntegrationRenameReserved(t *testing.T) {
+	cases := []struct {
+		name, from, to string
+		dst            []string // коллекции цели после ошибки
+	}{
+		{"to", "foo", ckptColl, []string{"foo", "keep"}}, // имя теста → имя базы: ≤ 63 символов
+		{"from", ckptColl, "foo", []string{"keep"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			db := prepare(t)
+			ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+			defer cancel()
+
+			startTS := srcNow(t)
+			src := srcClient.Database(db)
+			_, err := src.Collection("keep").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+			require.NoError(t, err)
+			_, err = src.Collection(c.from).InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
+			require.NoError(t, err)
+			renameColl(ctx, t, db, c.from, c.to)
+
+			r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
+			require.ErrorIs(t, err, ErrReservedCollection)
+			if d := r.Status().LastDDL; d != nil {
+				assert.NotEqual(t, "rename", d.Op)
+			}
+			names, err := collNames(ctx, dstClient, db)
+			require.NoError(t, err)
+			assert.Equal(t, c.dst, names, "rename на цель не ушёл")
+			n, err := ckptOf(db).CountDocuments(ctx, bson.D{})
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, n, "в служебной коллекции цели только чекпойнт")
+			ck, found := readLease(t, db)
+			require.True(t, found)
+			assert.NotNil(t, ck.Token, "DML перед rename закоммичен")
+
+			r, err = runErr(t, Config{BatchSize: 1000, DB: db})
+			require.ErrorIs(t, err, ErrReservedCollection)
+			assert.EqualValues(t, 0, r.Applied())
+		})
+	}
+}
+
 // Трафик считается через диалеры клиентов: поток источника отдаёт fullDocument
 // каждой вставки, а запись на цель отправляет его же — оба счётчика не меньше
 // суммарного размера документов. Оценка верна без compressors в URI: со сжатием

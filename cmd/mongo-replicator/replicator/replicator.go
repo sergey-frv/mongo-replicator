@@ -39,9 +39,22 @@ var ErrStreamInvalidated = errors.New("поток инвалидирован (dr
 // но применять его на цели значило бы писать не в ту базу.
 var ErrForeignNamespace = errors.New("событие другой базы в потоке")
 
-// streamPipeline убирает из событий updateDescription: репликатору нужен только
-// fullDocument, а с обоими событие большого документа превышает 16 МБ (BSONObjectTooLarge).
-var streamPipeline = mongo.Pipeline{{{Key: "$unset", Value: "updateDescription"}}}
+// ErrReservedCollection — на источнике коллекция переименована в служебное имя ckptColl
+// или из него: на цели под этим именем лежит чекпойнт, применять такой rename нельзя.
+var ErrReservedCollection = errors.New("rename в служебную коллекцию " + ckptColl + " или из неё")
+
+// streamPipeline отсекает события служебной коллекции ckptColl (у источника она есть,
+// если источник был целью при обратной репликации) и убирает из событий updateDescription:
+// репликатору нужен только fullDocument, а с обоими событие большого документа превышает
+// 16 МБ (BSONObjectTooLarge). rename проходит всегда: rename в служебное имя и из него
+// останавливает applyDDL. События без ns.coll (dropDatabase, invalidate) $ne пропускает.
+var streamPipeline = mongo.Pipeline{
+	{{Key: "$match", Value: bson.D{{Key: "$or", Value: bson.A{
+		bson.D{{Key: "ns.coll", Value: bson.D{{Key: "$ne", Value: ckptColl}}}},
+		bson.D{{Key: "operationType", Value: "rename"}},
+	}}}}},
+	{{Key: "$unset", Value: "updateDescription"}},
+}
 
 // SystemDBs — служебные базы, которые не реплицируются.
 var SystemDBs = []string{"admin", "config", "local"}

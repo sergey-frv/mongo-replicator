@@ -196,12 +196,13 @@ var streamPipeline = mongo.Pipeline{
 - Modify: `cmd/mongo-replicator/main.go`, `cmd/mongo-replicator/main_test.go`
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`
 
-- [ ] `streamPipeline`: `$match` (`$or`: `ns.coll` ≠ служебной, либо `rename`), затем `$unset`
-- [ ] `ErrReservedCollection` в ветке `rename` `applyDDL` **до** `checkLease()` (в обе стороны); `permanent`/`hint`
-- [ ] update unit test `TestStreamPipelineUnsetsUpdateDescription` → обе стадии и их порядок
-- [ ] write unit tests: rename в служебное имя и из него → `ErrReservedCollection` (собранное вручную событие, без аренды); `permanent`/`hint`
-- [ ] write integration tests: insert/update/delete в `<src-db>._replicator_checkpoint` на источнике при параллельных записях в обычную коллекцию — обычная доезжает, служебная на цели содержит только документ чекпойнта; rename на источнике `foo → _replicator_checkpoint` → `ErrReservedCollection`
-- [ ] `make test`, `make test-integration`, `make lint` — должно пройти
+- [x] `streamPipeline`: `$match` (`$or`: `ns.coll` ≠ служебной, либо `rename`), затем `$unset`
+- [x] `ErrReservedCollection` в ветке `rename` `applyDDL` **до** `checkLease()` (в обе стороны); `permanent`/`hint`
+- [x] update unit test `TestStreamPipelineUnsetsUpdateDescription` → обе стадии и их порядок
+- [x] write unit tests: rename в служебное имя и из него → `ErrReservedCollection` (собранное вручную событие, без аренды); `permanent`/`hint`
+- [x] write integration tests: insert/update/delete в `<src-db>._replicator_checkpoint` на источнике при параллельных записях в обычную коллекцию — обычная доезжает, служебная на цели содержит только документ чекпойнта; rename на источнике `foo → _replicator_checkpoint` → `ErrReservedCollection`
+- [x] `make test`, `make test-integration`, `make lint` — должно пройти
+- ➕ unit-тест переименован в `TestStreamPipeline`; интеграционный фильтр — `TestIntegrationCheckpointCollFiltered` (в т.ч. `_id: ckptID` и `drop` служебной на источнике), rename — `TestIntegrationRenameReserved` (подтесты `to`/`from`: имя базы ≤ 63 символов)
 
 ### Task 5: Toxiproxy в docker-compose и обвязка тестов
 
