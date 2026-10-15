@@ -411,7 +411,7 @@ func diffIndexes(ctx context.Context, srcDB, dstDB, coll string) string {
 }
 
 // indexSig — значимые для сравнения поля спецификации индекса. Версия (v)
-// и прочие служебные поля между 8.0 и 5.0 могут отличаться и не сравниваются.
+// и прочие служебные поля между версиями источника и цели могут отличаться и не сравниваются.
 func indexSig(spec bson.Raw) string {
 	unique, _ := spec.Lookup("unique").BooleanOK()
 	ttl := "-"
@@ -920,7 +920,7 @@ func TestIntegrationDDL(t *testing.T) {
 	// с пустым fullDocument (известное ограничение updateLookup)
 	rn.waitSame(db)
 	assert.Equal(t, []string{"_id_", "a_code_u", "a_k_n", "a_status_p", "a_ttl"}, indexNames(ctx, t, dstClient, db, "a"),
-		"индексы 8.0 приняты целью 5.0")
+		"индексы источника приняты целью 8.0")
 
 	renameColl(ctx, t, db, "a", "b")
 

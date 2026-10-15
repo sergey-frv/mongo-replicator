@@ -15,15 +15,15 @@ services:
       retries: 30
 
   mongo-dst:
-    image: mongo:5.0
-    command: --replSet rs5 --bind_ip_all
+    image: mongo:8.0
+    command: --replSet rsdst --bind_ip_all
     healthcheck:
       test:
         - CMD
         - mongosh
         - --quiet
         - --eval
-        - "try{rs.status()}catch(e){rs.initiate({_id:'rs5',members:[{_id:0,host:'mongo-dst:27017'}]})}; quit(db.hello().isWritablePrimary ? 0 : 1)"
+        - "try{rs.status()}catch(e){rs.initiate({_id:'rsdst',members:[{_id:0,host:'mongo-dst:27017'}]})}; quit(db.hello().isWritablePrimary ? 0 : 1)"
       interval: 2s
       start_period: 30s
       retries: 30
@@ -38,9 +38,9 @@ services:
     working_dir: /src
     environment:
       SRC_URI: mongodb://mongo-src:27017/?replicaSet=rs8
-      DST_URI: mongodb://mongo-dst:27017/?replicaSet=rs5
+      DST_URI: mongodb://mongo-dst:27017/?replicaSet=rsdst
       IT_SRC_URI: mongodb://mongo-src:27017/?replicaSet=rs8
-      IT_DST_URI: mongodb://mongo-dst:27017/?replicaSet=rs5
+      IT_DST_URI: mongodb://mongo-dst:27017/?replicaSet=rsdst
     depends_on:
       mongo-src:
         condition: service_healthy

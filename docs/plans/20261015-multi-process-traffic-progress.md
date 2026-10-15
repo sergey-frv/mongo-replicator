@@ -170,10 +170,10 @@ func (r *Replicator) SetRetry(n int, err error)   // из цикла повто�
 - Modify: `docker-compose.yml`
 - Modify: `cmd/mongo-replicator/replicator/integration_test.go`, `cmd/mongo-replicator/replicator/replicator.go` (комментарии про 5.0)
 
-- [ ] `mongo-dst`: `mongo:8.0`, `--replSet rsdst`, healthcheck как у `mongo-src` (`mongosh`, `db.hello().isWritablePrimary`); env `app`: `DST_URI`/`IT_DST_URI` — `replicaSet=rsdst`
-- [ ] комментарии «цель 5.0» (`integration_test.go:414,923`, `replicator.go:3`) → «цель 8.0»
-- [ ] `docker compose down -v`, `make test-integration` — должно пройти без изменений кода
-- [ ] `make test`, `make lint` — должно пройти
+- [x] `mongo-dst`: `mongo:8.0`, `--replSet rsdst`, healthcheck как у `mongo-src` (`mongosh`, `db.hello().isWritablePrimary`); env `app`: `DST_URI`/`IT_DST_URI` — `replicaSet=rsdst`
+- [x] комментарии «цель 5.0» (`integration_test.go:414,923`, `replicator.go:3`) → «цель 8.0»
+- [x] `docker compose down -v`, `make test-integration` — должно пройти без изменений кода
+- [x] `make test`, `make lint` — должно пройти
 
 ### Task 2: Чекпойнт по базе цели
 
