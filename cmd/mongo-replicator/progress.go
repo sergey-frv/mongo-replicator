@@ -32,9 +32,8 @@ func progressMode(opt string, stdoutTTY bool, termEnv string) string {
 }
 
 type (
-	tickMsg    time.Time
-	logLineMsg string   // строка лога для печати над панелью
-	finalMsg   struct{} // репликация закончилась: последний снимок и выход
+	tickMsg  time.Time
+	finalMsg struct{} // репликация закончилась: последний снимок и выход
 )
 
 // panel — модель панели статуса. Снимок берётся раз в секунду, скорости трафика —
@@ -63,12 +62,10 @@ func (m *panel) snapshot() {
 }
 
 func (m *panel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
+	switch msg.(type) {
 	case tickMsg:
 		m.snapshot()
 		return m, tick()
-	case logLineMsg:
-		return m, tea.Println(string(msg))
 	case finalMsg:
 		// репликация закончилась: скорость за доли секунды с последнего тика — шум
 		m.snapshot()
@@ -96,7 +93,7 @@ func renderPanel(st replicator.Status, at time.Time, prev replicator.TrafficInfo
 	label := func(s string) string { return labelStyle.Render(s) }
 	var lines []string
 
-	head := fmt.Sprintf("%s → %s %s %s", st.DB, st.DstDB, label("· работает"), fmtDuration(at.Sub(st.Started)))
+	head := fmt.Sprintf("%s → %s %s %s", st.DB, st.DstDB, label("· с запуска"), fmtDuration(at.Sub(st.Started)))
 	if st.Lag < 0 {
 		head += label(" · лаг неизвестен")
 	} else {
@@ -126,7 +123,7 @@ func renderPanel(st replicator.Status, at time.Time, prev replicator.TrafficInfo
 		elapsed = at.Sub(prevAt)
 	}
 	speed := func(cur, prev uint64) string {
-		if elapsed <= 0 || cur < prev {
+		if elapsed <= 0 {
 			return ""
 		}
 		return " " + fmtBytes(uint64(float64(cur-prev)/elapsed.Seconds())) + label("/с")
@@ -205,12 +202,7 @@ func fmtFloat(v float64) string {
 // fmtCount — целое с группами разрядов через пробел: 1 284 551.
 func fmtCount(n int64) string {
 	s := strconv.FormatInt(n, 10)
-	neg := strings.HasPrefix(s, "-")
-	s = strings.TrimPrefix(s, "-")
 	var b strings.Builder
-	if neg {
-		b.WriteByte('-')
-	}
 	for i, c := range s {
 		if i > 0 && (len(s)-i)%3 == 0 {
 			b.WriteByte(' ')
@@ -236,10 +228,12 @@ func fmtDuration(d time.Duration) string {
 }
 
 // teaWriter — консольный приёмник лога при панели: каждая запись (ConsoleWriter пишет
-// событие одним Write) печатается над панелью. Send после выхода программы — no-op,
-// поэтому запись не блокируется; после закрытия done строки идут в fallback.
-// Program.Println не годится: он пишет в небуферизованный канал без выхода по ctx
-// и после завершения программы блокирует навсегда.
+// событие одним Write) печатается над панелью. Сообщение печати отдаётся в цикл
+// программы прямо через Send: команда tea.Println из Update выполнялась бы в своей
+// горутине, строки перемешивались бы и терялись бы при выходе, обогнанные tea.Quit.
+// Send после выхода программы — no-op, поэтому запись не блокируется; после закрытия
+// done строки идут в fallback. Program.Println не годится: он пишет в небуферизованный
+// канал без выхода по ctx и после завершения программы блокирует навсегда.
 type teaWriter struct {
 	p        *tea.Program
 	done     <-chan struct{} // закрывается, когда Run программы вернулся
@@ -252,13 +246,14 @@ func (w teaWriter) Write(b []byte) (int, error) {
 		return w.fallback.Write(b)
 	default:
 	}
-	w.p.Send(logLineMsg(strings.TrimRight(string(b), "\n")))
+	w.p.Send(tea.Println(strings.TrimRight(string(b), "\n"))())
 	return len(b), nil
 }
 
 // startPanel запускает панель статуса над терминалом. Возвращает приёмник консольного
-// лога, stop — показать финальный снимок и дождаться выхода, и kill — немедленный
-// выход с восстановлением терминала (для паники). extra — дополнительные опции программы.
+// лога, stop — показать финальный снимок и дождаться выхода, и kill — выход без
+// финального снимка с восстановлением терминала (для паники). extra — дополнительные
+// опции программы.
 func startPanel(status func() replicator.Status, out io.Writer, extra ...tea.ProgramOption,
 ) (console io.Writer, stop, kill func()) {
 	opts := append([]tea.ProgramOption{tea.WithInput(nil), tea.WithoutSignalHandler(), tea.WithOutput(out)}, extra...)
@@ -273,8 +268,10 @@ func startPanel(status func() replicator.Status, out io.Writer, extra ...tea.Pro
 		p.Send(finalMsg{})
 		<-done
 	}
+	// Quit, а не Kill: Kill восстанавливает терминал из чужой горутины, параллельно
+	// с Run (гонка), а до старта Run съедает shutdownOnce — терминал не восстановится
 	kill = func() {
-		p.Kill()
+		p.Quit()
 		<-done
 	}
 	return teaWriter{p: p, done: done, fallback: out}, stop, kill

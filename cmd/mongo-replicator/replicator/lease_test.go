@@ -1,6 +1,7 @@
 package replicator
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"regexp"
@@ -60,4 +61,43 @@ func TestLeaseExpiring(t *testing.T) {
 	for _, c := range cases {
 		assert.Equal(t, c.want, leaseExpiring(ok, ok.Add(c.since), ttl), "%s", c.since)
 	}
+}
+
+// Перед записью: без успешного продления дольше 2/3 TTL писать нельзя.
+func TestCheckLease(t *testing.T) {
+	r := New(nil, nil, Config{DB: "a"})
+	require.ErrorIs(t, r.checkLease(), errLeaseExpiring, "аренда не захвачена")
+	r.leaseOK.Store(time.Now().UnixNano())
+	require.NoError(t, r.checkLease())
+	r.leaseOK.Store(time.Now().Add(-r.leaseTTL).UnixNano())
+	err := r.checkLease()
+	require.ErrorIs(t, err, errLeaseExpiring)
+	assert.NotErrorIs(t, err, ErrLeaseLost, "временная: повтор Run захватит аренду снова")
+}
+
+// Продление не удаётся (цели нет) дольше 2/3 TTL: Run отменяется с errLeaseExpiring,
+// но не раньше.
+func TestRenewLeaseExpiring(t *testing.T) {
+	quietLog(t)
+	r := New(nil, lazyClient(t), Config{DB: "a"})
+	r.leaseRenew, r.leaseTTL = 20*time.Millisecond, 300*time.Millisecond
+	started := time.Now()
+	r.leaseOK.Store(started.UnixNano())
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.renewLease(ctx, cancel)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("продление не остановилось")
+	}
+	cause := context.Cause(ctx)
+	require.ErrorIs(t, cause, errLeaseExpiring)
+	assert.NotErrorIs(t, cause, ErrLeaseLost)
+	assert.GreaterOrEqual(t, time.Since(started), r.leaseTTL*2/3, "не раньше 2/3 TTL")
 }

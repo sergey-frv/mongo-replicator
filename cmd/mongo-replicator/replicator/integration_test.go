@@ -1345,6 +1345,26 @@ func TestIntegrationTrafficCheckpoint(t *testing.T) {
 	assert.Empty(t, st.Owner, "аренда снята")
 }
 
+// Release дописывает трафик с последнего продления: без продлений поля traffic.*
+// появляются только им, и в них — всё насчитанное до снятия аренды.
+func TestIntegrationTrafficRelease(t *testing.T) {
+	db := prepare(t)
+	r := newTrafficIT(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	r.leaseTTL, r.leaseRenew = time.Hour, time.Hour // продлений нет
+	rn := startOn(t, r)
+	size := insertPadded(t, db, 20)
+	rn.waitSame(db)
+	_, ok := readCkptTraffic(t, db)
+	require.False(t, ok, "продлений не было — трафика в документе нет")
+
+	rn.stop()
+	got, ok := readCkptTraffic(t, db)
+	require.True(t, ok, "Release записал трафик")
+	assert.GreaterOrEqual(t, got.SrcIn, size)
+	assert.GreaterOrEqual(t, got.DstOut, size)
+	assert.Equal(t, r.ckptTraffic, got, "в документе — снимок счётчиков при Release")
+}
+
 // Сводка по процессам: сумма трафика документов с позицией, active — живые аренды.
 func TestIntegrationClusterTraffic(t *testing.T) {
 	dbA := prepare(t)
@@ -1469,6 +1489,63 @@ func TestIntegrationLeaseExpired(t *testing.T) {
 	rn.waitSame(db)
 	st, _ := readLease(t, db)
 	assert.Equal(t, rn.r.owner, st.Owner)
+}
+
+// Release процесса, не получившего аренду, не удаляет документ владельца, который
+// ещё не сохранил позицию.
+func TestIntegrationLeaseHeldNoToken(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	const holder = "starting:1:00000000"
+	_, err := dstClient.Database(ckptDB).Collection(ckptColl).InsertOne(ctx, bson.M{
+		"_id": db, "owner": holder, "lease_until": time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	_, err = runErr(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	require.ErrorIs(t, err, ErrLeaseHeld)
+	st, found := readLease(t, db)
+	require.True(t, found, "документ владельца не удалён")
+	assert.Equal(t, holder, st.Owner)
+}
+
+// Без аренды saveToken не создаёт и не двигает чекпойнт: ErrLeaseLost, позиция в
+// репликаторе не меняется.
+func TestIntegrationSaveTokenNotOwner(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	token, err := bson.Marshal(bson.M{"_data": "00"})
+	require.NoError(t, err)
+
+	r := newIT(dstClient, Config{BatchSize: 1000, DB: db})
+	require.ErrorIs(t, r.saveToken(ctx, token), ErrLeaseLost)
+	_, found := readLease(t, db)
+	assert.False(t, found, "без захвата документ не создаётся")
+
+	require.NoError(t, r.acquireLease(ctx))
+	const intruder = "intruder:1:00000000"
+	_, err = dstClient.Database(ckptDB).Collection(ckptColl).UpdateOne(ctx,
+		bson.M{"_id": db}, bson.M{"$set": bson.M{"owner": intruder}})
+	require.NoError(t, err)
+	require.ErrorIs(t, r.saveToken(ctx, token), ErrLeaseLost)
+	st, _ := readLease(t, db)
+	assert.Equal(t, intruder, st.Owner)
+	assert.Nil(t, st.Token, "чужой документ не сдвинут")
+	assert.Nil(t, r.saved)
+	assert.True(t, r.appliedTS.IsZero())
+}
+
+// Продления давно не было (процесс стоял дольше аренды): запись на цель не идёт,
+// Run завершается временной errLeaseExpiring, даже если горутина продления
+// ещё не сработала.
+func TestIntegrationLeaseExpiringStopsWrites(t *testing.T) {
+	db := prepare(t)
+	r := newIT(dstClient, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+	r.leaseRenew = time.Hour // продление не придёт: срабатывает проверка перед записью
+	rn := startOn(t, r)
+	require.ErrorIs(t, rn.waitExit(), errLeaseExpiring)
 }
 
 // Аренду забрали во время работы: Run завершается с ErrLeaseLost, а Release
@@ -1716,6 +1793,31 @@ func TestIntegrationDropAbsentOnTarget(t *testing.T) {
 	rn.waitSame(db)
 	rn.waitQuiet()
 	assert.EqualValues(t, 2, rn.r.Applied())
+	d := rn.r.Status().LastDDL
+	require.NotNil(t, d)
+	assert.Equal(t, "drop", d.Op)
+	assert.Equal(t, db+".ts", d.NS)
+	assert.Equal(t, "на цели нет, пропущено", d.Details)
+}
+
+// rename коллекции, которой на цели нет (создана до старта, заливка её не перенесла):
+// NamespaceNotFound пропускается, а DDL виден в статусе.
+func TestIntegrationRenameAbsentOnTargetStatus(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	require.NoError(t, srcClient.Database(db).CreateCollection(ctx, "a"))
+	lastSrcSec = srcOpTime(t).T // create — до StartTS
+	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+
+	renameColl(ctx, t, db, "a", "b")
+	require.Eventually(t, func() bool {
+		d := rn.r.Status().LastDDL
+		return d != nil && d.Op == "rename"
+	}, waitTimeout, pollEvery)
+	s := rn.r.Status()
+	assert.Equal(t, db+".a", s.LastDDL.NS)
+	assert.Equal(t, StateRunning, s.State, "ошибка цели проигнорирована")
 }
 
 // view из заливки есть на цели: его drop применяется без остановки — данных во view нет.
@@ -1841,7 +1943,7 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
 	prev := zlog.Logger
-	zlog.Logger = zerolog.New(&buf)
+	zlog.Logger = zerolog.New(zerolog.SyncWriter(&buf)) // пишут Run и горутины продления
 	t.Cleanup(func() { zlog.Logger = prev })
 	return &buf
 }
@@ -2240,6 +2342,14 @@ func TestIntegrationStatus(t *testing.T) {
 	assert.False(t, s.LastDDL.At.Before(started))
 	require.NotNil(t, s.Cluster, "первая сводка — сразу после старта")
 	assert.Positive(t, s.Cluster.Processes)
+
+	// прогресс — после остановки: lastLog принадлежит горутине Run
+	rn.stop()
+	rn.r.lastLog = time.Now().Add(-20 * time.Second)
+	rn.r.logProgress(ctx)
+	s = rn.r.Status()
+	assert.GreaterOrEqual(t, s.Lag, time.Duration(0), "позиция сохранена, источник доступен")
+	assert.False(t, s.AppliedAt.IsZero())
 }
 
 // Временная ошибка, повтор в main и успешный повторный Run: состояние снова «работает».

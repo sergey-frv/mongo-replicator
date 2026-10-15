@@ -154,13 +154,6 @@ func TestTrafficFields(t *testing.T) {
 	}, got)
 }
 
-func TestTrafficFieldsZeroElapsed(t *testing.T) {
-	var buf bytes.Buffer
-	l := zerolog.New(&buf)
-	trafficFields(l.Info(), TrafficInfo{SrcIn: 5}, TrafficInfo{}, 0).Send()
-	assert.Contains(t, buf.String(), `"src_in_bps":0`)
-}
-
 // Дельта трафика в чекпойнт: снимок сдвигается только после успешной записи,
 // поэтому неудачная дельта входит в следующую.
 func TestSaveTraffic(t *testing.T) {

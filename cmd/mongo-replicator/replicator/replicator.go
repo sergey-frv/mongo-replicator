@@ -81,6 +81,7 @@ type Replicator struct {
 	owner      string        // владелец аренды базы цели (newOwner): один на экземпляр, и для повторных Run
 	leaseTTL   time.Duration // срок аренды
 	leaseRenew time.Duration // интервал продления
+	leaseOK    atomic.Int64  // UnixNano отправки последнего успешного захвата или продления
 
 	ckptTraffic  TrafficInfo   // счётчики на момент последней успешной записи трафика в чекпойнт
 	clusterEvery time.Duration // интервал сводки трафика всех процессов
@@ -107,7 +108,7 @@ func New(src, dst *mongo.Client, cfg Config) *Replicator {
 		lastLog: time.Now(), lastTraffic: cfg.Traffic.Snapshot(),
 		owner: newOwner(), leaseTTL: defaultLeaseTTL, leaseRenew: defaultLeaseRenew,
 		clusterEvery: defaultClusterEvery,
-		st: Status{DB: cfg.DB, DstDB: cfg.DstDB, Started: time.Now(), Lag: -1, State: StateStarting},
+		st:           Status{DB: cfg.DB, DstDB: cfg.DstDB, Started: time.Now(), Lag: -1, State: StateStarting},
 	}
 }
 
@@ -188,11 +189,12 @@ func (r *Replicator) Run(ctx context.Context) (retErr error) {
 	if err := r.acquireLease(ctx); err != nil {
 		return err
 	}
+	r.leaseOK.Store(acquired.UnixNano())
 	runCtx, cancel := context.WithCancelCause(ctx)
 	renewed := make(chan struct{})
 	go func() {
 		defer close(renewed)
-		r.renewLease(runCtx, cancel, acquired)
+		r.renewLease(runCtx, cancel)
 	}()
 	// и при панике: горутина продления не переживает Run
 	defer func() {
@@ -248,6 +250,9 @@ func (r *Replicator) stream(ctx context.Context) error {
 
 	var lastToken bson.Raw
 	commit := func() error {
+		if err := r.checkLease(); err != nil {
+			return err
+		}
 		if err := r.flush(ctx); err != nil {
 			return err
 		}

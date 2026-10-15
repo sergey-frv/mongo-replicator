@@ -86,9 +86,10 @@ func (r *Replicator) clusterTraffic(ctx context.Context) (ClusterTraffic, error)
 		"_id":       nil,
 		"processes": bson.M{"$sum": 1},
 		"active":    bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$gt": bson.A{"$lease_until", "$$NOW"}}, 1, 0}}},
-	}
-	for f := range (TrafficInfo{}).ckptFields() {
-		group[f[len("traffic."):]] = bson.M{"$sum": "$" + f}
+		"src_in":    bson.M{"$sum": "$traffic.src_in"},
+		"src_out":   bson.M{"$sum": "$traffic.src_out"},
+		"dst_in":    bson.M{"$sum": "$traffic.dst_in"},
+		"dst_out":   bson.M{"$sum": "$traffic.dst_out"},
 	}
 	cur, err := r.ckpt().Aggregate(ctx, mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{"token": bson.M{"$exists": true}}}},
@@ -141,14 +142,9 @@ func (r *Replicator) logCluster(ctx context.Context) {
 }
 
 // trafficFields добавляет в запись лога счётчики с начала процесса и среднюю
-// скорость (байт/с) за интервал с прошлого снимка.
+// скорость (байт/с) за интервал elapsed (не нулевой) с прошлого снимка.
 func trafficFields(e *zerolog.Event, cur, prev TrafficInfo, elapsed time.Duration) *zerolog.Event {
-	bps := func(cur, prev uint64) uint64 {
-		if elapsed <= 0 {
-			return 0
-		}
-		return uint64(float64(cur-prev) / elapsed.Seconds())
-	}
+	bps := func(cur, prev uint64) uint64 { return uint64(float64(cur-prev) / elapsed.Seconds()) }
 	return e.Uint64("src_in", cur.SrcIn).Uint64("src_out", cur.SrcOut).
 		Uint64("dst_in", cur.DstIn).Uint64("dst_out", cur.DstOut).
 		Uint64("src_in_bps", bps(cur.SrcIn, prev.SrcIn)).Uint64("src_out_bps", bps(cur.SrcOut, prev.SrcOut)).

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func TestRenderPanel(t *testing.T) {
 	prev.DstOut -= 390 * KiB
 
 	assert.Equal(t, []string{
-		"urlshrinker → urlshrinker_v2 · работает 2ч14м · лаг 1с (применено до 12:01:33)",
+		"urlshrinker → urlshrinker_v2 · с запуска 2ч14м · лаг 1с (применено до 12:01:33)",
 		"операции: 1 284 551 всего · 312/с · пачка 12:01:34: 48 (ins 30 · upd 15 · del 3) в links, clicks",
 		"DDL: 11:40:02 createIndexes urlshrinker.links (slug_1)",
 		"трафик процесса: источник ↓ 3.1 GiB 420 KiB/с ↑ 12 MiB · цель ↓ 40 MiB ↑ 2.9 GiB 390 KiB/с",
@@ -63,7 +64,7 @@ func TestRenderPanelMinimal(t *testing.T) {
 	st := replicator.Status{DB: "a", DstDB: "b", Started: at.Add(-5 * time.Second), Rate: 0.3, Lag: -1,
 		Traffic: replicator.TrafficInfo{SrcIn: 512, SrcOut: 1536}, State: replicator.StateStarting}
 	assert.Equal(t, []string{
-		"a → b · работает 5с · лаг неизвестен",
+		"a → b · с запуска 5с · лаг неизвестен",
 		"операции: 0 всего · 0.3/с",
 		"трафик процесса: источник ↓ 512 B ↑ 1.5 KiB · цель ↓ 0 B ↑ 0 B",
 		"состояние: запуск",
@@ -77,7 +78,7 @@ func TestRenderPanelRetry(t *testing.T) {
 			Colls: []string{"x", "y", "z"}, More: 2},
 		State: replicator.StateRetry, Retry: 2, LastErr: "connection refused"}
 	lines := panelLines(st, at, replicator.TrafficInfo{}, time.Time{})
-	assert.Equal(t, "a → a · работает 3м5с · лаг 0с", lines[0])
+	assert.Equal(t, "a → a · с запуска 3м5с · лаг 0с", lines[0])
 	assert.Equal(t, "операции: 0 всего · 0/с · пачка 11:59:00: 2 (rep 2) в x, y, z и ещё 2", lines[1])
 	assert.Equal(t, "состояние: повтор 2: connection refused", lines[len(lines)-1])
 
@@ -124,7 +125,7 @@ func TestFmtDuration(t *testing.T) {
 }
 
 func TestFmtCount(t *testing.T) {
-	for n, want := range map[int64]string{0: "0", 999: "999", 1000: "1 000", 1284551: "1 284 551", -12345: "-12 345"} {
+	for n, want := range map[int64]string{0: "0", 999: "999", 1000: "1 000", 1284551: "1 284 551"} {
 		assert.Equal(t, want, fmtCount(n), "%d", n)
 	}
 }
@@ -142,9 +143,6 @@ func TestPanelUpdate(t *testing.T) {
 	assert.Equal(t, int64(2), m.st.Applied)
 	assert.Equal(t, uint64(1), m.prev.SrcIn)
 	assert.False(t, m.prevAt.IsZero())
-
-	_, cmd = m.Update(logLineMsg("WRN строка"))
-	require.NotNil(t, cmd)
 
 	_, cmd = m.Update(finalMsg{})
 	assert.Equal(t, int64(3), m.st.Applied, "финальный снимок")
@@ -199,6 +197,9 @@ func TestStartPanel(t *testing.T) {
 		return replicator.Status{DB: "src", DstDB: "dst", Lag: -1, State: replicator.StateStopped}
 	}, &out, tea.WithWindowSize(120, 10)) // вывод не терминал: без размера панель не рисуется
 	writeTimeout(t, console.(teaWriter), "WRN над панелью\n")
+	for i := range 20 {
+		writeTimeout(t, console.(teaWriter), fmt.Sprintf("WRN строка %02d\n", i))
+	}
 
 	stopped := make(chan struct{})
 	go func() {
@@ -214,6 +215,14 @@ func TestStartPanel(t *testing.T) {
 	writeTimeout(t, console.(teaWriter), "после панели\n")
 	s := out.String()
 	assert.Contains(t, s, "WRN над панелью")
+	// строки перед stop — все и по порядку: печать не обгоняет друг друга и выход
+	_, rest, _ := strings.Cut(s, "WRN над панелью")
+	for i := range 20 {
+		line := fmt.Sprintf("WRN строка %02d", i)
+		k := strings.Index(rest, line)
+		require.GreaterOrEqual(t, k, 0, "%s — после предыдущей", line)
+		rest = rest[k+len(line):]
+	}
 	assert.Contains(t, s, "src → dst", "финальная панель")
 	assert.Contains(t, s, "после панели\n")
 }

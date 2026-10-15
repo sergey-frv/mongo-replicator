@@ -109,11 +109,24 @@ func (r *Replicator) acquireLease(ctx context.Context) error {
 	}
 }
 
+// checkLease возвращает errLeaseExpiring, если с последнего успешного продления прошло
+// больше 2/3 TTL. Вызывается и перед записью на цель: процесс, простоявший дольше
+// срока аренды (SIGSTOP, миграция ВМ), не должен успеть записать пачку поверх
+// забравшего аренду, пока горутина продления ещё не заметила потерю.
+func (r *Replicator) checkLease() error {
+	lastOK := time.Unix(0, r.leaseOK.Load())
+	if leaseExpiring(lastOK, time.Now(), r.leaseTTL) {
+		return fmt.Errorf("%w: последнее продление %s назад", errLeaseExpiring,
+			time.Since(lastOK).Round(time.Second))
+	}
+	return nil
+}
+
 // renewLease продлевает аренду раз в leaseRenew, пока ctx жив. Работает в своей
 // горутине: продление не ждёт долгих операций Run (createIndexes на большой коллекции).
 // Аренду забрали — отменяет Run с ErrLeaseLost; продление не удаётся дольше
-// 2/3 TTL — с errLeaseExpiring. lastOK — время отправки последнего успешного захвата.
-func (r *Replicator) renewLease(ctx context.Context, cancel context.CancelCauseFunc, lastOK time.Time) {
+// 2/3 TTL — с errLeaseExpiring. Успешные продления отмечаются в leaseOK.
+func (r *Replicator) renewLease(ctx context.Context, cancel context.CancelCauseFunc) {
 	t := time.NewTicker(r.leaseRenew)
 	defer t.Stop()
 	for {
@@ -126,7 +139,7 @@ func (r *Replicator) renewLease(ctx context.Context, cancel context.CancelCauseF
 		err := r.renewOnce(ctx)
 		switch {
 		case err == nil:
-			lastOK = sent
+			r.leaseOK.Store(sent.UnixNano())
 		case ctx.Err() != nil:
 			return
 		case errors.Is(err, ErrLeaseLost):
@@ -134,9 +147,8 @@ func (r *Replicator) renewLease(ctx context.Context, cancel context.CancelCauseF
 			return
 		default:
 			log.Warn().Err(err).Msg("продление аренды не удалось, повтор")
-			if leaseExpiring(lastOK, time.Now(), r.leaseTTL) {
-				cancel(fmt.Errorf("%w: последнее продление %s назад", errLeaseExpiring,
-					time.Since(lastOK).Round(time.Second)))
+			if expErr := r.checkLease(); expErr != nil {
+				cancel(expErr)
 				return
 			}
 		}

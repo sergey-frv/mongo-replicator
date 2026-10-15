@@ -212,6 +212,18 @@ func TestLogProgressStatus(t *testing.T) {
 	assert.True(t, s.AppliedAt.IsZero())
 }
 
+// Позиция сохранена, но ping источника не удался: время позиции есть, лаг неизвестен.
+func TestLogProgressSrcUnavailable(t *testing.T) {
+	quietLog(t)
+	r := New(lazyClient(t), nil, Config{DB: "d"})
+	r.appliedTS = bson.Timestamp{T: 1760529693}
+	r.lastLog = time.Now().Add(-20 * time.Second)
+	r.logProgress(context.Background())
+	s := r.Status()
+	assert.Equal(t, time.Unix(1760529693, 0).UTC(), s.AppliedAt)
+	assert.Equal(t, time.Duration(-1), s.Lag)
+}
+
 // Копия из Status не меняется при последующих обновлениях.
 func TestStatusCopyIsStable(t *testing.T) {
 	quietLog(t)
