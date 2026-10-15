@@ -56,7 +56,15 @@ func leaseHeldErr(dst, owner string, until time.Time) error {
 
 // leaseExpiring сообщает, что с последнего успешного продления прошло больше 2/3 TTL.
 func leaseExpiring(lastOK, now time.Time, ttl time.Duration) bool {
-	return now.Sub(lastOK) > ttl*2/3
+	return leaseElapsed(lastOK, now) > ttl*2/3
+}
+
+// leaseElapsed — время с последнего успешного продления: большее из монотонного
+// и настенного. Монотонные часы Linux стоят во время сна хоста и паузы ВМ, а аренда
+// на цели в это время истекает; настенные отстают при переводе часов назад.
+// Перевод вперёд даёт лишнюю самоостановку — временную ошибку, не запись вдвоём.
+func leaseElapsed(lastOK, now time.Time) time.Duration {
+	return max(now.Sub(lastOK), now.Round(0).Sub(lastOK.Round(0)))
 }
 
 // leaseUntil — выражение срока аренды: серверное время + TTL. Часы процессов на разных
@@ -109,15 +117,21 @@ func (r *Replicator) acquireLease(ctx context.Context) error {
 	}
 }
 
-// checkLease возвращает errLeaseExpiring, если с последнего успешного продления прошло
-// больше 2/3 TTL. Вызывается и перед записью на цель: процесс, простоявший дольше
-// срока аренды (SIGSTOP, миграция ВМ), не должен успеть записать пачку поверх
-// забравшего аренду, пока горутина продления ещё не заметила потерю.
+// checkLease возвращает errLeaseExpiring, если аренда не захвачена или с последнего
+// успешного продления прошло больше 2/3 TTL. Вызывается и перед каждой записью на цель
+// (BulkWrite коллекции, DDL): процесс, простоявший дольше срока аренды (SIGSTOP,
+// миграция ВМ), не должен успеть записать поверх забравшего аренду, пока горутина
+// продления ещё не заметила потерю. Проверка клиентская: остановка между ней и отправкой
+// операции — остаточный риск (README), закрыть его может только проверка на сервере.
 func (r *Replicator) checkLease() error {
-	lastOK := time.Unix(0, r.leaseOK.Load())
-	if leaseExpiring(lastOK, time.Now(), r.leaseTTL) {
+	p := r.leaseOK.Load()
+	if p == nil {
+		return fmt.Errorf("%w: аренда не захвачена", errLeaseExpiring)
+	}
+	lastOK, now := *p, time.Now()
+	if leaseExpiring(lastOK, now, r.leaseTTL) {
 		return fmt.Errorf("%w: последнее продление %s назад", errLeaseExpiring,
-			time.Since(lastOK).Round(time.Second))
+			leaseElapsed(lastOK, now).Round(time.Second))
 	}
 	return nil
 }
@@ -139,7 +153,7 @@ func (r *Replicator) renewLease(ctx context.Context, cancel context.CancelCauseF
 		err := r.renewOnce(ctx)
 		switch {
 		case err == nil:
-			r.leaseOK.Store(sent.UnixNano())
+			r.leaseOK.Store(&sent)
 		case ctx.Err() != nil:
 			return
 		case errors.Is(err, ErrLeaseLost):

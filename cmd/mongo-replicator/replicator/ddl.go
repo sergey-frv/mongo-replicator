@@ -96,6 +96,12 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 	if r.ddlHook != nil {
 		r.ddlHook()
 	}
+	// drop и rename с dropTarget необратимы: после простоя между commit и DDL
+	// аренда могла перейти к другому процессу. drop и dropIndexes ходят на цель
+	// несколько раз и проверяют аренду ещё и перед каждой мутацией
+	if err := r.checkLease(); err != nil {
+		return err
+	}
 	db := r.dst.Database(r.cfg.DstDB)
 	var err error
 
@@ -108,6 +114,10 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 		if !apply {
 			r.noteDDL(ev, "на цели нет, пропущено")
 			return nil
+		}
+		// dropAllowed ходил на цель: повторно перед необратимым drop
+		if leaseErr := r.checkLease(); leaseErr != nil {
+			return leaseErr
 		}
 		err = db.Collection(ev.NS.Coll).Drop(ctx)
 
@@ -153,6 +163,9 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 			return fmt.Errorf("dropIndexes %s: %w", r.nsName(ev.NS), valuesErr)
 		}
 		for _, spec := range specs {
+			if leaseErr := r.checkLease(); leaseErr != nil {
+				return leaseErr
+			}
 			name := spec.Document().Lookup("name").StringValue()
 			err = runCommand(ctx, db, bson.D{
 				{Key: "dropIndexes", Value: ev.NS.Coll},

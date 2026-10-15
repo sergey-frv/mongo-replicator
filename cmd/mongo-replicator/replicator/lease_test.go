@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 func TestLeaseHeldErr(t *testing.T) {
@@ -63,16 +65,45 @@ func TestLeaseExpiring(t *testing.T) {
 	}
 }
 
+// Монотонное показание с настенным время сна не разделить (time не даёт их рассогласовать),
+// поэтому проверяется путь без монотонного показания у одной из сторон.
+func TestLeaseElapsed(t *testing.T) {
+	ok := time.Now()
+	assert.Equal(t, time.Second, leaseElapsed(ok, ok.Add(time.Second)))
+	assert.Equal(t, time.Minute, leaseElapsed(ok, ok.Round(0).Add(time.Minute)), "без монотонного показания")
+	assert.Equal(t, time.Minute, leaseElapsed(ok.Round(0).Add(-time.Minute), ok))
+}
+
 // Перед записью: без успешного продления дольше 2/3 TTL писать нельзя.
 func TestCheckLease(t *testing.T) {
 	r := New(nil, nil, Config{DB: "a"})
 	require.ErrorIs(t, r.checkLease(), errLeaseExpiring, "аренда не захвачена")
-	r.leaseOK.Store(time.Now().UnixNano())
+	now := time.Now()
+	r.leaseOK.Store(&now)
 	require.NoError(t, r.checkLease())
-	r.leaseOK.Store(time.Now().Add(-r.leaseTTL).UnixNano())
+	stale := now.Add(-r.leaseTTL)
+	r.leaseOK.Store(&stale)
 	err := r.checkLease()
 	require.ErrorIs(t, err, errLeaseExpiring)
 	assert.NotErrorIs(t, err, ErrLeaseLost, "временная: повтор Run захватит аренду снова")
+}
+
+// holdLease отмечает аренду захваченной только что — для тестов записи без Run.
+func holdLease(r *Replicator) {
+	now := time.Now()
+	r.leaseOK.Store(&now)
+}
+
+// Без живой аренды ни пачка, ни DDL на цель не уходят: ошибка аренды, а не сети.
+func TestWritesRequireLease(t *testing.T) {
+	r := New(nil, lazyClient(t), Config{DB: "d"})
+	stale := time.Now().Add(-r.leaseTTL)
+	r.leaseOK.Store(&stale)
+	r.pending.add(namespace{"d", "c"}, "delete", mongo.NewDeleteOneModel().SetFilter(bson.D{{Key: "_id", Value: 1}}))
+	require.ErrorIs(t, r.flush(context.Background()), errLeaseExpiring)
+	ev := event{OperationType: "rename", NS: namespace{"d", "a"}, To: &namespace{"d", "b"}}
+	require.ErrorIs(t, r.applyDDL(context.Background(), &ev), errLeaseExpiring)
+	assert.Nil(t, r.Status().LastDDL)
 }
 
 // Продление не удаётся (цели нет) дольше 2/3 TTL: Run отменяется с errLeaseExpiring,
@@ -82,7 +113,7 @@ func TestRenewLeaseExpiring(t *testing.T) {
 	r := New(nil, lazyClient(t), Config{DB: "a"})
 	r.leaseRenew, r.leaseTTL = 20*time.Millisecond, 300*time.Millisecond
 	started := time.Now()
-	r.leaseOK.Store(started.UnixNano())
+	r.leaseOK.Store(&started)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 

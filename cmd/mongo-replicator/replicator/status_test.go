@@ -96,6 +96,7 @@ func TestBatchInfo(t *testing.T) {
 // Неудачная запись пачки не попадает в LastBatch.
 func TestFlushErrorKeepsLastBatch(t *testing.T) {
 	r := New(nil, lazyClient(t), Config{DB: "d"})
+	holdLease(r)
 	r.pending.add(namespace{"d", "c"}, "delete", mongo.NewDeleteOneModel().SetFilter(bson.D{{Key: "_id", Value: 1}}))
 	require.Error(t, r.flush(context.Background()))
 	assert.Nil(t, r.Status().LastBatch)
@@ -112,6 +113,7 @@ func TestFlushEmptyKeepsLastBatch(t *testing.T) {
 func TestApplyDDLSkippedStatus(t *testing.T) {
 	quietLog(t)
 	r := New(nil, lazyClient(t), Config{DB: "d"})
+	holdLease(r)
 
 	ev := event{OperationType: "modify", NS: namespace{"d", "c"}}
 	require.NoError(t, r.applyDDL(context.Background(), &ev))
@@ -132,6 +134,7 @@ func TestApplyDDLSkippedStatus(t *testing.T) {
 // Ошибка DDL не обновляет LastDDL.
 func TestApplyDDLErrorKeepsLastDDL(t *testing.T) {
 	r := New(nil, lazyClient(t), Config{DB: "d"})
+	holdLease(r)
 	ev := event{OperationType: "dropDatabase", NS: namespace{DB: "d"}}
 	require.Error(t, r.applyDDL(context.Background(), &ev))
 	assert.Nil(t, r.Status().LastDDL)
@@ -228,6 +231,7 @@ func TestLogProgressSrcUnavailable(t *testing.T) {
 func TestStatusCopyIsStable(t *testing.T) {
 	quietLog(t)
 	r := New(nil, lazyClient(t), Config{DB: "d"})
+	holdLease(r)
 	m := mongo.NewDeleteOneModel()
 	var b batch
 	b.add(namespace{"d", "a"}, "insert", m)

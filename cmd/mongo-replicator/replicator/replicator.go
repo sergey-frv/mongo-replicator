@@ -81,7 +81,9 @@ type Replicator struct {
 	owner      string        // владелец аренды базы цели (newOwner): один на экземпляр, и для повторных Run
 	leaseTTL   time.Duration // срок аренды
 	leaseRenew time.Duration // интервал продления
-	leaseOK    atomic.Int64  // UnixNano отправки последнего успешного захвата или продления
+	// отправка последнего успешного захвата или продления; nil — аренда не захвачена.
+	// time.Time с монотонными показаниями: перевод часов хоста не сдвигает проверку срока
+	leaseOK atomic.Pointer[time.Time]
 
 	ckptTraffic  TrafficInfo   // счётчики на момент последней успешной записи трафика в чекпойнт
 	clusterEvery time.Duration // интервал сводки трафика всех процессов
@@ -118,6 +120,10 @@ func (r *Replicator) Applied() int64 { return r.applied.Load() }
 // flush применяет накопленные операции на цели.
 func (r *Replicator) flush(ctx context.Context) error {
 	for _, ns := range r.pending.order {
+		// перед каждой коллекцией: пачка по многим коллекциям пишется долго
+		if err := r.checkLease(); err != nil {
+			return err
+		}
 		_, err := r.dst.Database(r.cfg.DstDB).Collection(ns.Coll).
 			BulkWrite(ctx, r.pending.ops[ns], options.BulkWrite().SetOrdered(true))
 		if err != nil {
@@ -189,7 +195,7 @@ func (r *Replicator) Run(ctx context.Context) (retErr error) {
 	if err := r.acquireLease(ctx); err != nil {
 		return err
 	}
-	r.leaseOK.Store(acquired.UnixNano())
+	r.leaseOK.Store(&acquired)
 	runCtx, cancel := context.WithCancelCause(ctx)
 	renewed := make(chan struct{})
 	go func() {
@@ -250,6 +256,7 @@ func (r *Replicator) stream(ctx context.Context) error {
 
 	var lastToken bson.Raw
 	commit := func() error {
+		// и на простое: пустой flush аренду не проверяет, а чекпойнт сдвигается
 		if err := r.checkLease(); err != nil {
 			return err
 		}
