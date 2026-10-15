@@ -294,8 +294,8 @@ func (r *Replicator) SetRetry(err error)   // из цикла повторов m
 - [x] `make lint` без замечаний
 
 ### Task 10: [Final] Update documentation
-- [ ] обновить CLAUDE.md, если появились неочевидные договорённости (ключ чекпойнта, аренда в горутине, `$$NOW`, `p.Send` вместо `p.Println`)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] обновить CLAUDE.md, если появились неочевидные договорённости (не создан, как и в прошлых планах: ключ чекпойнта — комментарий в `checkpoint.go`, аренда в горутине — `lease.go`/`replicator.go`, `$$NOW` и `p.Send` вместо `p.Println` — дописаны комментарии к `leaseUntil` и `teaWriter`)
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*

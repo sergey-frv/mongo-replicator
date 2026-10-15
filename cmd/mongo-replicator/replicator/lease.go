@@ -59,7 +59,8 @@ func leaseExpiring(lastOK, now time.Time, ttl time.Duration) bool {
 	return now.Sub(lastOK) > ttl*2/3
 }
 
-// leaseUntil — выражение срока аренды: серверное время + TTL.
+// leaseUntil — выражение срока аренды: серверное время + TTL. Часы процессов на разных
+// хостах могут расходиться, поэтому срок и его проверка — только по $$NOW.
 func (r *Replicator) leaseUntil() bson.M {
 	return bson.M{"$add": bson.A{"$$NOW", r.leaseTTL.Milliseconds()}}
 }

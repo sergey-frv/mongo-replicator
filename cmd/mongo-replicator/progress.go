@@ -238,6 +238,8 @@ func fmtDuration(d time.Duration) string {
 // teaWriter — консольный приёмник лога при панели: каждая запись (ConsoleWriter пишет
 // событие одним Write) печатается над панелью. Send после выхода программы — no-op,
 // поэтому запись не блокируется; после закрытия done строки идут в fallback.
+// Program.Println не годится: он пишет в небуферизованный канал без выхода по ctx
+// и после завершения программы блокирует навсегда.
 type teaWriter struct {
 	p        *tea.Program
 	done     <-chan struct{} // закрывается, когда Run программы вернулся
