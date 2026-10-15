@@ -255,8 +255,8 @@ var streamPipeline = mongo.Pipeline{
 - [x] `make lint` без замечаний
 
 ### Task 9: [Final] Update documentation
-- [ ] создать CLAUDE.md, если появились неочевидные договорённости (служебная коллекция в базе цели и фильтр потока, файлы состояния и ключ кластера, Toxiproxy v2.12.0 из-за go 1.26, `directConnection=true`)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] создать CLAUDE.md, если появились неочевидные договорённости (служебная коллекция в базе цели и фильтр потока, файлы состояния и ключ кластера, Toxiproxy v2.12.0 из-за go 1.26, `directConnection=true`)
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
