@@ -1,4 +1,6 @@
-package main
+// Package panel — панель статуса репликации в терминале (bubbletea): лаг, операции,
+// DDL и трафик; консольный лог выводится над ней.
+package panel
 
 import (
 	"fmt"
@@ -13,24 +15,6 @@ import (
 	"github.com/sergey-frv/mongo-replicator/cmd/mongo-replicator/replicator"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
-
-// Режимы --progress после разрешения auto.
-const (
-	progressTTY   = "tty"   // панель статуса, в консоли — только WARN и выше
-	progressPlain = "plain" // построчный лог
-)
-
-// progressMode разрешает --progress: auto — панель, только если stdout — терминал,
-// умеющий управляющие последовательности.
-func progressMode(opt string, stdoutTTY bool, termEnv string) string {
-	if opt != "auto" {
-		return opt
-	}
-	if stdoutTTY && termEnv != "dumb" {
-		return progressTTY
-	}
-	return progressPlain
-}
 
 type (
 	tickMsg  time.Time
@@ -251,11 +235,11 @@ func (w teaWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// startPanel запускает панель статуса над терминалом. Возвращает приёмник консольного
+// Start запускает панель статуса над терминалом. Возвращает приёмник консольного
 // лога, stop — показать финальный снимок и дождаться выхода, и kill — выход без
 // финального снимка с восстановлением терминала (для паники). extra — дополнительные
 // опции программы.
-func startPanel(status func() replicator.Status, out io.Writer, extra ...tea.ProgramOption,
+func Start(status func() replicator.Status, out io.Writer, extra ...tea.ProgramOption,
 ) (console io.Writer, stop, kill func()) {
 	opts := append([]tea.ProgramOption{tea.WithInput(nil), tea.WithoutSignalHandler(), tea.WithOutput(out)}, extra...)
 	p := tea.NewProgram(newPanel(status), opts...)

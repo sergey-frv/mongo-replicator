@@ -1,8 +1,9 @@
-package main
+package panel
 
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,9 @@ import (
 	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
+
+// ansi — цветовые escape-последовательности ConsoleWriter
+var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 const (
 	KiB = 1 << 10
@@ -229,7 +233,7 @@ func TestStartPanel(t *testing.T) {
 	for i := range 20 {
 		lines = append(lines, fmt.Sprintf("WRN строка %02d", i))
 	}
-	console, stop, kill := startPanel(func() replicator.Status {
+	console, stop, kill := Start(func() replicator.Status {
 		return replicator.Status{DB: "src", DstDB: "dst", Lag: -1, State: replicator.StateStopped}
 	}, &out, tea.WithWindowSize(120, 10)) // вывод не терминал: без размера панель не рисуется
 

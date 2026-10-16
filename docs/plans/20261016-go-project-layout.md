@@ -267,11 +267,11 @@ github.com/sergey-frv/mongo-replicator
 - Move: `cmd/mongo-replicator/progress.go` → `internal/panel/panel.go`, `cmd/mongo-replicator/progress_test.go` → `internal/panel/panel_test.go`
 - Modify: `cmd/mongo-replicator/main.go`
 
-- [ ] `git mv` обоих файлов; `package panel`; `startPanel` → `Start` (с doc-комментарием)
-- [ ] `progressMode`, `progressTTY`, `progressPlain` — в `cmd/mongo-replicator/main.go` (переедут в `options.go` в Task 7)
-- [ ] скопировать `ansi` с комментарием в `panel_test.go`; поправить `withPanel`
-- [ ] проверки из Testing Strategy; `make test`, `make test-integration`, `make lint`
-- [ ] коммит
+- [x] `git mv` обоих файлов; `package panel`; `startPanel` → `Start` (с doc-комментарием; + `// Package panel`)
+- [x] `progressMode`, `progressTTY`, `progressPlain` — в `cmd/mongo-replicator/main.go` (переедут в `options.go` в Task 7; встали после `isHelp`)
+- [x] скопировать `ansi` с комментарием в `panel_test.go`; поправить `withPanel`
+- [x] проверки из Testing Strategy; `make test`, `make test-integration`, `make lint` (имена: юнит — 143, интеграционные — 204, совпадают; в сверке строк — `startPanel` → `Start`/`panel.Start`, копия `ansi`, doc-комментарии)
+- [x] коммит
 
 ### Task 6: Ядро в `internal/replicator`, файлы по темам
 

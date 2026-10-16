@@ -32,6 +32,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/sergey-frv/mongo-replicator/cmd/mongo-replicator/replicator"
+	"github.com/sergey-frv/mongo-replicator/internal/panel"
 	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
@@ -216,6 +217,24 @@ func isHelp(err error) bool {
 	return errors.As(err, &flagsErr) && errors.Is(flagsErr.Type, flags.ErrHelp)
 }
 
+// Режимы --progress после разрешения auto.
+const (
+	progressTTY   = "tty"   // панель статуса, в консоли — только WARN и выше
+	progressPlain = "plain" // построчный лог
+)
+
+// progressMode разрешает --progress: auto — панель, только если stdout — терминал,
+// умеющий управляющие последовательности.
+func progressMode(opt string, stdoutTTY bool, termEnv string) string {
+	if opt != "auto" {
+		return opt
+	}
+	if stdoutTTY && termEnv != "dumb" {
+		return progressTTY
+	}
+	return progressPlain
+}
+
 // run подключается к кластерам и крутит репликацию с ретраями. Возвращает код выхода.
 // srcOpts/dstOpts — разобранные URI с найденными паролями (prepareClients);
 // logFile — файл лога из setupLog (nil без --log-file): с ним логгер пересобирается под панель.
@@ -314,7 +333,7 @@ func withPanel(opts options, status func() replicator.Status, logFile *os.File) 
 		log.Warn().Msg("полный лог не пишется: добавьте --log-file")
 	}
 	file, fileLevel := fileWriter(logFile), logLevels[opts.LogFileLevel]
-	console, stopP, killP := startPanel(status, os.Stdout)
+	console, stopP, killP := panel.Start(status, os.Stdout)
 	log.Logger = newLogger(console, true, max(zerolog.WarnLevel, logLevels[opts.LogLevel]), file, fileLevel)
 	restore := func() {
 		log.Logger = newLogger(os.Stdout, stdoutTTY(), logLevels[opts.LogLevel], file, fileLevel)
