@@ -123,12 +123,13 @@
 **Files:**
 - Modify: `cmd/mongo-replicator/main.go`
 - Modify: `cmd/mongo-replicator/main_test.go`
+- ➕ Create: `cmd/mongo-replicator/tty_unix.go`, `tty_other.go` (`foreground` через `golang.org/x/sys/unix`; вынесено, чтобы не ломать сборку под Windows)
 
-- [ ] `panelInput(stdin, openTTY)` по Solution Overview, с проверкой группы переднего плана через подставляемую функцию
-- [ ] `run`: выбор ввода перед `withPanel`; `withPanel(opts, status, logFile, in)`; `sendSignal` — своему процессу; закрыть `/dev/tty` после `stopP`/`killP`
-- [ ] тесты `panelInput`: stdin-терминал (мастер `/dev/ptmx`) на переднем плане → он, `openTTY` не вызывается; stdin не терминал и `openTTY` успешен → его файл, закрывается функцией закрытия; `openTTY` с ошибкой → `nil`, закрытие безвредно; не на переднем плане → `nil`
-- [ ] `TestWithPanelRestoresConsoleLog` передаёт `in = nil`, смысл не меняется
-- [ ] `make test`, `make lint` — должно пройти
+- [x] `panelInput(stdin, openTTY)` по Solution Overview, с проверкой группы переднего плана через подставляемую функцию
+- [x] `run`: выбор ввода перед `withPanel`; `withPanel(opts, status, logFile, in)`; `sendSignal` — своему процессу; закрыть `/dev/tty` после `stopP`/`killP`
+- [x] тесты `panelInput`: stdin-терминал (мастер `/dev/ptmx`) на переднем плане → он, `openTTY` не вызывается; stdin не терминал и `openTTY` успешен → его файл, закрывается функцией закрытия; `openTTY` с ошибкой → `nil`, закрытие безвредно; не на переднем плане → `nil`
+- [x] `TestWithPanelRestoresConsoleLog` передаёт `in = nil`, смысл не меняется
+- [x] `make test`, `make lint` — должно пройти
 
 ### Task 3: Verify acceptance criteria
 - [ ] набор текста и Enter не отображаются и не сбивают панель — автоматически: raw-режим во время панели (тест Task 1); вручную — Post-Completion
