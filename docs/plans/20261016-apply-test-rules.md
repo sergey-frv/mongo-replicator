@@ -242,9 +242,9 @@
 **Files:**
 - нет изменений в репозитории (эталон — в `/tmp/apply-test-rules/`)
 
-- [ ] снять списки юнит- и интеграционных тестов (команды из Testing Strategy, с проверкой статуса), отсортировать
-- [ ] `make test`, `make test-integration`, `make lint` — исходное состояние зелёное
-- [ ] пробная мутация: `permanent` всегда возвращает `false` → `TestPermanent` падает. Откатить через `git checkout -- cmd/mongo-replicator/main.go`, охранная проверка проходит
+- [x] снять списки юнит- и интеграционных тестов (команды из Testing Strategy, с проверкой статуса), отсортировать
+- [x] `make test`, `make test-integration`, `make lint` — исходное состояние зелёное
+- [x] пробная мутация: `permanent` всегда возвращает `false` → `TestPermanent` падает. Откатить через `git checkout -- cmd/mongo-replicator/main.go`, охранная проверка проходит
 
 ### Task 2: Обвязка интеграционных тестов
 
