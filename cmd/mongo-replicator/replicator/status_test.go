@@ -15,6 +15,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
@@ -277,7 +278,7 @@ func TestStatusCopyIsStable(t *testing.T) {
 	var b batch
 	b.add(namespace{"d", "a"}, "insert", m)
 	r.st.LastBatch = batchInfo(&b, time.Now())
-	r.st.Machine = &MachineTraffic{Processes: 1}
+	r.st.Machine = &statefile.Machine{Processes: 1}
 	require.NoError(t, r.applyDDL(context.Background(), &event{OperationType: "modify", NS: namespace{"d", "a"}}))
 
 	old := r.Status()
@@ -286,7 +287,7 @@ func TestStatusCopyIsStable(t *testing.T) {
 	b = batch{}
 	b.add(namespace{"d", "b"}, "delete", m)
 	bi := batchInfo(&b, time.Now())
-	r.update(func(s *Status) { s.LastBatch = bi; s.Machine = &MachineTraffic{Processes: 2} })
+	r.update(func(s *Status) { s.LastBatch = bi; s.Machine = &statefile.Machine{Processes: 2} })
 	require.NoError(t, r.applyDDL(context.Background(), &event{OperationType: "shardCollection", NS: namespace{"d", "b"}}))
 	r.SetRetry(errors.New("x"))
 

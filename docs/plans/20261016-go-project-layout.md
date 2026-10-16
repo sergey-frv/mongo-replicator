@@ -255,11 +255,11 @@ github.com/sergey-frv/mongo-replicator
 - Modify: `cmd/mongo-replicator/replicator/{statefile,statefile_test,traffic,status,status_test,replicator}.go`, `{traffic,network,harness}_integration_test.go`
 - Modify: `cmd/mongo-replicator/{main,progress,progress_test}.go`
 
-- [ ] перенести чистые функции и типы с переименованиями; писатель остаётся в `replicator`
-- [ ] `stateActiveFor` → `DefaultActiveFor` и параметр `Summary`; `logMachine`, `itActiveFor`, удаление `shortActive` — по Technical Details
-- [ ] перенести чистые тесты в `internal/statefile/statefile_test.go`
-- [ ] проверки из Testing Strategy; `make test`, `make test-integration`, `make lint`
-- [ ] коммит
+- [x] перенести чистые функции и типы с переименованиями; писатель остаётся в `replicator` (`defaultStateEvery` остался у писателя в `replicator/statefile.go`)
+- [x] `stateActiveFor` → `DefaultActiveFor` и параметр `Summary`; `logMachine`, `itActiveFor`, удаление `shortActive` — по Technical Details
+- [x] перенести чистые тесты в `internal/statefile/statefile_test.go`
+- [x] проверки из Testing Strategy; `make test`, `make test-integration`, `make lint` (имена: юнит — 143, интеграционные — 204, совпадают; в сверке строк — doc-комментарии, аргумент `DefaultActiveFor`/`itActiveFor`, удалённый `shortActive`, имена без префикса внутри `internal/statefile`)
+- [x] коммит
 
 ### Task 5: Пакет `internal/panel`
 

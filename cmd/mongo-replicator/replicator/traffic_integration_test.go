@@ -16,6 +16,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 
+	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
@@ -57,18 +58,13 @@ func TestIntegrationTraffic(t *testing.T) {
 	assert.Positive(t, got.DstIn)
 }
 
-// shortActive сокращает срок активности файла состояния в сводке. Вызывать до start:
-// срок восстанавливается в cleanup уже после остановки репликаторов.
-func shortActive(t *testing.T) {
-	t.Helper()
-	prev := stateActiveFor
-	stateActiveFor = time.Second
-	t.Cleanup(func() { stateActiveFor = prev })
-}
+// itActiveFor — срок активности файла состояния в сводках тестов: короче
+// statefile.DefaultActiveFor, чтобы остановленный процесс быстро стал неактивным.
+const itActiveFor = time.Second
 
-func readStateFile(t *testing.T, path string) state {
+func readStateFile(t *testing.T, path string) statefile.State {
 	t.Helper()
-	s, err := loadState(path)
+	s, err := statefile.Load(path)
 	require.NoError(t, err)
 	return s
 }
@@ -108,7 +104,6 @@ func TestIntegrationStateFile(t *testing.T) {
 // В паузе повтора (Run вернул временную ошибку) писатель продолжает обновлять файл:
 // процесс по-прежнему владеет базой и в сводке активен.
 func TestIntegrationStateFileRetryPause(t *testing.T) {
-	shortActive(t)
 	db := prepare(t)
 	dir := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
@@ -138,9 +133,9 @@ func TestIntegrationStateFileRetryPause(t *testing.T) {
 	defer release(t, r)
 	// длительность паузы повтора: дольше окна активности, чтобы свежесть файла
 	// доказывала запись писателя уже после возврата Run, а не запись до него
-	time.Sleep(2 * stateActiveFor)
+	time.Sleep(2 * itActiveFor)
 	s := readStateFile(t, r.cfg.StateFile)
-	mt, err := machineTraffic(dir, time.Now())
+	mt, err := statefile.Summary(dir, time.Now(), itActiveFor)
 
 	require.NoError(t, err)
 	assert.True(t, s.UpdatedAt.After(returned), "файл обновлён после возврата Run: %s", s.UpdatedAt)
@@ -185,7 +180,7 @@ func TestIntegrationStateFileDBMismatch(t *testing.T) {
 	dir := t.TempDir()
 	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a"})
 	cfg := withState(Config{BatchSize: 1000, DB: "it_mismatch_b", DstDB: "it_mismatch_a"}, dir)
-	require.NoError(t, writeState(cfg.StateFile, state{DB: "it_mismatch_a", DstDB: "it_mismatch_a",
+	require.NoError(t, statefile.Write(cfg.StateFile, statefile.State{DB: "it_mismatch_a", DstDB: "it_mismatch_a",
 		Cluster: cfg.Cluster, Traffic: traffic.Info{SrcIn: 12345}}))
 	before, err := os.ReadFile(cfg.StateFile)
 	require.NoError(t, err)
@@ -203,7 +198,6 @@ func TestIntegrationStateFileDBMismatch(t *testing.T) {
 
 // Сводка по машине: сумма файлов состояния каталога, active — свежие файлы.
 func TestIntegrationMachineTraffic(t *testing.T) {
-	shortActive(t)
 	dbA := prepare(t)
 	dbB := dbA + "_b"
 	cleanDB(t, dbB)
@@ -219,7 +213,7 @@ func TestIntegrationMachineTraffic(t *testing.T) {
 	rnB.waitSame(dbB)
 	rnA.waitQuiet()
 	rnB.waitQuiet()
-	mt, err := machineTraffic(dir, time.Now())
+	mt, err := statefile.Summary(dir, time.Now(), itActiveFor)
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, mt.Processes)
@@ -230,7 +224,7 @@ func TestIntegrationMachineTraffic(t *testing.T) {
 	rnB.stop()
 	a := readStateFile(t, rnA.r.cfg.StateFile).Traffic
 	b := readStateFile(t, rnB.r.cfg.StateFile).Traffic
-	mt, err = machineTraffic(dir, time.Now())
+	mt, err = statefile.Summary(dir, time.Now(), itActiveFor)
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, mt.Processes)
@@ -240,7 +234,7 @@ func TestIntegrationMachineTraffic(t *testing.T) {
 	}, mt.Traffic)
 	assert.Positive(t, mt.Traffic.SrcIn)
 	require.Eventually(t, func() bool {
-		mt, err := machineTraffic(dir, time.Now())
+		mt, err := statefile.Summary(dir, time.Now(), itActiveFor)
 		return err == nil && mt.Processes == 2 && mt.Active == 0
 	}, waitTimeout, pollEvery, "после Release файлы больше не обновляются")
 	assert.Contains(t, logs.String(), "трафик на машине")

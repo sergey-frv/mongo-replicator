@@ -25,6 +25,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
+
+	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 )
 
 const (
@@ -644,7 +646,7 @@ func withState(cfg Config, dir string) Config {
 		dst = cfg.DB
 	}
 	cfg.StateDir = dir
-	cfg.StateFile, cfg.Cluster = StatePath(dir, dst, dstURI)
+	cfg.StateFile, cfg.Cluster = statefile.Path(dir, dst, dstURI)
 	return cfg
 }
 

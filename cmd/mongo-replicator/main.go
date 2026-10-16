@@ -32,6 +32,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/sergey-frv/mongo-replicator/cmd/mongo-replicator/replicator"
+	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
@@ -243,7 +244,7 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions, logFile *os.Fi
 	}
 	defer dst.Disconnect(context.Background()) //nolint:errcheck // выходим, ошибка не важна
 
-	stateFile, cluster := replicator.StatePath(opts.StateDir, opts.DstDB, opts.Dst)
+	stateFile, cluster := statefile.Path(opts.StateDir, opts.DstDB, opts.Dst)
 	log.Info().Str("file", stateFile).Msg("файл состояния")
 	r := replicator.New(src, dst, replicator.Config{
 		StartTS: opts.StartTS, BatchSize: opts.BatchSize, DB: opts.DB, DstDB: opts.DstDB,

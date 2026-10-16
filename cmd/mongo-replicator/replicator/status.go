@@ -7,6 +7,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
+	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
@@ -51,8 +52,8 @@ type Status struct {
 	Lag       time.Duration // -1 — неизвестен
 	LastBatch *BatchInfo
 	LastDDL   *DDLInfo
-	Traffic   traffic.Info    // байты процесса
-	Machine   *MachineTraffic // последняя сводка по файлам состояния машины; nil — ещё не было
+	Traffic   traffic.Info       // байты процесса
+	Machine   *statefile.Machine // последняя сводка по файлам состояния машины; nil — ещё не было
 	State     string
 	Retry     int    // номер повтора подряд; 0 — после открытия потока
 	LastErr   string // ошибка, из-за которой Run вернулся

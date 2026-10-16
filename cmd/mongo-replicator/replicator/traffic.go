@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
@@ -20,7 +21,7 @@ func (r *Replicator) logMachine(ctx context.Context) {
 		return
 	}
 	r.lastMachine = time.Now()
-	mt, err := machineTraffic(r.cfg.StateDir, r.lastMachine)
+	mt, err := statefile.Summary(r.cfg.StateDir, r.lastMachine, statefile.DefaultActiveFor)
 	if err != nil {
 		log.Warn().Err(err).Msg("сводка трафика на машине не получена")
 		return

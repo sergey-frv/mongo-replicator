@@ -69,9 +69,9 @@ type Config struct {
 	DstDB      string            // база цели; New: пусто — как DB
 	ApplyDrops []string          // namespace источника (<DB>.<коллекция>), drop которых разрешён
 	Traffic    *traffic.Counters // счётчики байт клиентов (их диалеры); nil — трафик не учитывается
-	StateFile  string            // файл состояния процесса на машине (StatePath); пусто — не пишется
+	StateFile  string            // файл состояния процесса на машине (statefile.Path); пусто — не пишется
 	StateDir   string            // каталог файлов состояния для сводки по машине; пусто — сводки нет
-	Cluster    string            // ключ кластера цели (StatePath): сверяется с файлом состояния
+	Cluster    string            // ключ кластера цели (statefile.Path): сверяется с файлом состояния
 }
 
 // Replicator переносит изменения из src в dst.

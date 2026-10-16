@@ -18,6 +18,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 
+	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
@@ -468,7 +469,7 @@ func TestIntegrationNetTraffic(t *testing.T) {
 	assert.Greater(t, after.DstIn, before.DstIn, "приём с цели после восстановления")
 	assert.Greater(t, after.DstOut, before.DstOut, "отправка на цель после восстановления")
 	require.Eventually(t, func() bool {
-		s, err := loadState(cfg.StateFile)
+		s, err := statefile.Load(cfg.StateFile)
 		return err == nil && s.UpdatedAt.After(restored) && s.Traffic.DstOut > before.DstOut
 	}, waitTimeout, pollEvery, "файл состояния обновляется после восстановления")
 	t.Logf("ошибки Run: %v", rt.runErrs())

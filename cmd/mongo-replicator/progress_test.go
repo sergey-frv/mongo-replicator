@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sergey-frv/mongo-replicator/cmd/mongo-replicator/replicator"
+	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
@@ -41,7 +42,7 @@ func TestRenderPanel(t *testing.T) {
 			Colls: []string{"links", "clicks"}},
 		LastDDL: &replicator.DDLInfo{At: clock(11, 40, 2), Op: "createIndexes", NS: "urlshrinker.links", Details: "slug_1"},
 		Traffic: traffic.Info{SrcIn: 3*GiB + 100*MiB, SrcOut: 12 * MiB, DstIn: 40 * MiB, DstOut: 2*GiB + 900*MiB},
-		Machine: &replicator.MachineTraffic{At: clock(12, 1, 0), Processes: 3, Active: 2,
+		Machine: &statefile.Machine{At: clock(12, 1, 0), Processes: 3, Active: 2,
 			Traffic: traffic.Info{SrcIn: 12*GiB + 400*MiB, SrcOut: 300 * MiB, DstIn: 200 * MiB, DstOut: 11*GiB + 900*MiB}},
 		State: replicator.StateRunning,
 	}
