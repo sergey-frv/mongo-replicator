@@ -430,9 +430,10 @@
 **Files:**
 - Modify: `CLAUDE.md`
 
-- [ ] раздел «Тесты» — по Technical Details: правила для всех тестов, виды снов, условия `Eventually`/`Never`, таймаут `select`, колбэки, префиксы хелперов-проверок, длина имени интеграционного теста
-- [ ] `grep` по `CLAUDE.md` и `README.md` — нет ссылок на переименованные хелперы
-- [ ] коммит
+- [x] раздел «Тесты» — по Technical Details: правила для всех тестов, виды снов, условия `Eventually`/`Never`, таймаут `select`, колбэки, префиксы хелперов-проверок, длина имени интеграционного теста
+- [x] `grep` по `CLAUDE.md` и `README.md` — нет ссылок на переименованные хелперы
+  - ➕ `ckptBehind` не упоминался; все `Test…` из README и `CLAUDE.md` существуют (`TestIntegration`, `TestIntegrationNet*`, `TestLimitation` — префиксы)
+- [x] коммит
 
 ### Task 14: Verify acceptance criteria
 - [ ] в тестах нет `t.Fatal*`/`t.Error*`, кроме обоснованных и отмеченных в плане: `grep -nE '(\bt|\.t)\.(Fatal|Fatalf|Error|Errorf)\(' -r cmd --include='*_test.go'`
