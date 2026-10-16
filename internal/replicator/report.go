@@ -2,6 +2,7 @@ package replicator
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -41,4 +42,36 @@ func trafficFields(e *zerolog.Event, cur, prev traffic.Info, elapsed time.Durati
 		Uint64("dst_in", cur.DstIn).Uint64("dst_out", cur.DstOut).
 		Uint64("src_in_bps", bps(cur.SrcIn, prev.SrcIn)).Uint64("src_out_bps", bps(cur.SrcOut, prev.SrcOut)).
 		Uint64("dst_in_bps", bps(cur.DstIn, prev.DstIn)).Uint64("dst_out_bps", bps(cur.DstOut, prev.DstOut))
+}
+
+// logProgress раз в 10 с пишет прогресс и лаг: применённая позиция против текущего
+// времени источника. Обе величины — время кластера источника, часы репликатора не участвуют.
+func (r *Replicator) logProgress(ctx context.Context) {
+	elapsed := time.Since(r.lastLog)
+	if elapsed < 10*time.Second || ctx.Err() != nil {
+		return
+	}
+	n, prevN := r.applied.Load(), r.lastN
+	tr, prevTr := r.cfg.Traffic.Snapshot(), r.lastTraffic
+	r.lastLog, r.lastN, r.lastTraffic = time.Now(), n, tr
+	rate := math.Round(float64(n-prevN)/elapsed.Seconds()*10) / 10
+	e := log.Info().Int64("applied", n).Float64("rate", rate)
+	if r.cfg.Traffic != nil {
+		e = trafficFields(e, tr, prevTr, elapsed)
+	}
+	var appliedAt time.Time
+	lag := time.Duration(-1)
+	// ещё ничего не сохранено — лаг неизвестен, ping не нужен
+	if !r.appliedTS.IsZero() {
+		appliedAt = time.Unix(int64(r.appliedTS.T), 0).UTC()
+		e = e.Time("applied_at", appliedAt)
+		if now, err := r.srcTime(ctx); err != nil {
+			log.Debug().Err(err).Msg("ping источника: лаг неизвестен")
+		} else {
+			lag = lagOf(now, r.appliedTS)
+			e = e.Str("lag", lag.String()).Int64("lag_sec", int64(lag/time.Second))
+		}
+	}
+	r.update(func(s *Status) { s.Rate, s.AppliedAt, s.Lag = rate, appliedAt, lag })
+	e.Msg("прогресс")
 }

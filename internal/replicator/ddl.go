@@ -2,7 +2,6 @@ package replicator
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 
@@ -10,49 +9,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
-
-// Коды ошибок сервера.
-const (
-	codeNamespaceNotFound       = 26
-	codeIndexNotFound           = 27
-	codeNamespaceExists         = 48
-	codeDatabaseDifferCase      = 13297
-	codeChangeStreamFatal       = 280
-	codeChangeStreamHistoryLost = 286
-	codeBSONObjectTooLarge      = 10334
-)
-
-// IsEventTooLarge сообщает, что событие потока больше 16 МБ: сервер не может его отдать,
-// и повтор с того же токена упрётся в него снова.
-func IsEventTooLarge(err error) bool {
-	return hasCode(err, codeBSONObjectTooLarge)
-}
-
-// IsHistoryLost сообщает, что точка возобновления выпала из oplog источника:
-// продолжать поток нельзя, нужна новая полная заливка цели.
-func IsHistoryLost(err error) bool {
-	return hasCode(err, codeChangeStreamHistoryLost, codeChangeStreamFatal)
-}
-
-// IsDBCaseConflict сообщает, что на цели уже есть база с тем же именем в другом регистре:
-// сервер отвергает любую запись в --dst-db, ретраи не помогут.
-func IsDBCaseConflict(err error) bool {
-	return hasCode(err, codeDatabaseDifferCase)
-}
-
-// DropError — на источнике удалена коллекция или база, на цели удаление не применено:
-// такие операции не предусмотрены, решает оператор.
-type DropError struct {
-	NS       string // namespace коллекции источника; для dropDatabase — имя базы
-	Database bool   // dropDatabase
-}
-
-func (e *DropError) Error() string {
-	if e.Database {
-		return fmt.Sprintf("на источнике удалена база %s, на цели не применено", e.NS)
-	}
-	return fmt.Sprintf("на источнике удалена коллекция %s, на цели не применено", e.NS)
-}
 
 // tempCollRe — имена, которые генерирует сама MongoDB: tmp.agg_out.<UUID> ($out, mapReduce),
 // tmpXXXXX.renameCollection (перенос между базами), tmpXXXXX.convertToCapped.<coll>.
@@ -217,17 +173,4 @@ func (r *Replicator) applyDDL(ctx context.Context, ev *event) error {
 func runCommand(ctx context.Context, db *mongo.Database, cmd bson.D) error {
 	cmd = append(cmd, bson.E{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}})
 	return db.RunCommand(ctx, cmd).Err()
-}
-
-func hasCode(err error, codes ...int) bool {
-	var se mongo.ServerError
-	if !errors.As(err, &se) {
-		return false
-	}
-	for _, c := range codes {
-		if se.HasErrorCode(c) {
-			return true
-		}
-	}
-	return false
 }

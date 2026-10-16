@@ -281,11 +281,13 @@ github.com/sergey-frv/mongo-replicator
 - Create: `internal/replicator/{stream,errors}.go`, `internal/replicator/{event,apply,ddl,errors,stream,checkpoint}_test.go`
 - Modify: импорты в `cmd/mongo-replicator/*.go` и `internal/panel/*.go` (`grep -rl 'cmd/mongo-replicator/replicator' --include='*.go' cmd internal`)
 
-- [ ] `git mv cmd/mongo-replicator/replicator internal/replicator`; поправить импорты; `make test`, `make lint`; отдельный коммит «перенос без правок»
-- [ ] переименовать файлы через `git mv` (список выше), затем разложить код по таблице `internal/replicator`
-- [ ] разложить юнит-тесты по таблице; интеграционные не трогать
-- [ ] проверки из Testing Strategy; `make test`, `make test-integration`, `make lint`
-- [ ] коммит
+- [x] `git mv cmd/mongo-replicator/replicator internal/replicator`; поправить импорты; `make test`, `make lint`; отдельный коммит «перенос без правок» (41547c0)
+- [x] переименовать файлы через `git mv` (список выше), затем разложить код по таблице `internal/replicator`
+  - ➕ переименования — отдельным коммитом без правок: после раскладки `apply.go` и `report_test.go` выросли больше чем вдвое, и `git diff -M` перестал видеть в них `batch.go`/`traffic_test.go`
+  - объявлений вне таблицы не нашлось; `hasCode` — в `errors.go` после `DropError`
+- [x] разложить юнит-тесты по таблице; интеграционные не трогать
+- [x] проверки из Testing Strategy; `make test`, `make test-integration`, `make lint` (имена: юнит — 143, интеграционные — 204, совпадают; сверка строк с деревом до задачи — без отличий)
+- [x] коммит
 
 ### Task 7: Разрезание `main.go`
 

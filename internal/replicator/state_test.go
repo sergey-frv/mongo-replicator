@@ -1,7 +1,6 @@
 package replicator
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -201,31 +200,4 @@ func TestStartStateUnreadable(t *testing.T) {
 
 	assert.Nil(t, r.stateStop)
 	assert.DirExists(t, r.cfg.StateFile)
-}
-
-func TestLogMachine(t *testing.T) {
-	dir := t.TempDir()
-	r := newState(t, dir, &traffic.Counters{})
-	r.startState()
-	r.stopState()
-
-	r.logMachine(context.Background())
-	m := r.Status().Machine
-
-	require.NotNil(t, m, "первая сводка — сразу")
-	assert.Equal(t, 1, m.Processes)
-	assert.Equal(t, 1, m.Active)
-
-	r.logMachine(context.Background())
-
-	assert.Same(t, m, r.Status().Machine, "до machineEvery сводка не пересчитывается")
-}
-
-func TestLogMachineNoDir(t *testing.T) {
-	quietLog(t)
-	r := New(nil, nil, Config{DB: "src", DstDB: "app"})
-
-	r.logMachine(context.Background())
-
-	assert.Nil(t, r.Status().Machine, "без каталога сводки нет")
 }

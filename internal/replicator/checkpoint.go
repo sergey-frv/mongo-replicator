@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -91,5 +92,17 @@ func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
 	}
 	r.saved = token
 	r.appliedTS = ts
+	return nil
+}
+
+// dbPair — база источника и база цели.
+type dbPair struct{ src, dst string }
+
+// checkDBs сверяет пару баз чекпойнта с заданной.
+func checkDBs(saved, want dbPair) error {
+	if saved != want {
+		return fmt.Errorf("%w: в чекпойнте %q → %q, задано %q → %q",
+			ErrDBMismatch, saved.src, saved.dst, want.src, want.dst)
+	}
 	return nil
 }
