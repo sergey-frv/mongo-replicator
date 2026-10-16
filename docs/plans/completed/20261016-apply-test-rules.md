@@ -450,8 +450,9 @@
 - [x] `make test`, `make test-integration`, `make lint`
 
 ### Task 15: [Final] Update documentation
-- [ ] README.md — только если ссылается на переименованные хелперы или тесты
-- [ ] move this plan to `docs/plans/completed/`
+- [x] README.md — только если ссылается на переименованные хелперы или тесты
+  - ➕ не менялся: README ссылается на `TestIntegrationCrossDBRenameIn`/`Out`, `TestLimitationRenameInCatchUpWindow`, `TestLimitationUpdateLookupAfterRename`, префикс `TestIntegrationNet` — все существуют; переименованных хелперов не упоминает
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
