@@ -93,11 +93,11 @@
 - Modify: `cmd/mongo-replicator/main.go`, `cmd/mongo-replicator/main_test.go`
 - Delete: `cmd/mongo-replicator/tty_unix.go`, `cmd/mongo-replicator/tty_other.go`, `cmd/mongo-replicator/tty_unix_test.go`
 
-- [ ] перенести в `internal/panel` по раскладке из Solution Overview: `panelInput` → `pickInput`, `openTTY`, `signalSelf` → `SignalSelf` — в `input.go`; `foreground` — в `tty_unix.go`/`tty_other.go`; логика без изменений; `Input(stdin)` и `SignalSelf` — с doc-комментариями (в комментарии `Input` — не вызывать из тестов)
-- [ ] `main`: `panel.Input(os.Stdin)` и `panel.SignalSelf` вместо локальных функций; убрать ставшие лишними импорты (`golang.org/x/term` в `main.go`, если больше не нужен; `errors`, `os/signal`, `syscall` в `main_test.go`); обновить комментарии (`withPanel` → `panel.Input`)
-- [ ] перенести тесты в `internal/panel` с прежними именами (`input_test.go`, `tty_unix_test.go`), хелперы `openPTMX`/`openDevNull` — в `input_test.go`, из `main_test.go` убрать; комментарии тестов — `SignalSelf`/`pickInput`; **`panel.Input` в тестах не вызывать**
-- [ ] `make test`, `make lint` — должно пройти; по `-v` — перенесённые тесты на псевдотерминале выполнились
-- [ ] сборка вне Unix не сломана: `docker compose run --rm --no-deps app sh -c 'GOOS=windows go build -o /dev/null ./...'`
+- [x] перенести в `internal/panel` по раскладке из Solution Overview: `panelInput` → `pickInput`, `openTTY`, `signalSelf` → `SignalSelf` — в `input.go`; `foreground` — в `tty_unix.go`/`tty_other.go`; логика без изменений; `Input(stdin)` и `SignalSelf` — с doc-комментариями (в комментарии `Input` — не вызывать из тестов)
+- [x] `main`: `panel.Input(os.Stdin)` и `panel.SignalSelf` вместо локальных функций; убрать ставшие лишними импорты (`golang.org/x/term` в `main.go`, если больше не нужен; `errors`, `os/signal`, `syscall` в `main_test.go`); обновить комментарии (`withPanel` → `panel.Input`)
+- [x] перенести тесты в `internal/panel` с прежними именами (`input_test.go`, `tty_unix_test.go`), хелперы `openPTMX`/`openDevNull` — в `input_test.go`, из `main_test.go` убрать; комментарии тестов — `SignalSelf`/`pickInput`; **`panel.Input` в тестах не вызывать**
+- [x] `make test`, `make lint` — должно пройти; по `-v` — перенесённые тесты на псевдотерминале выполнились
+- [x] сборка вне Unix не сломана: `docker compose run --rm --no-deps app sh -c 'GOOS=windows go build -o /dev/null ./...'`
 
 ### Task 2: Демо `cmd/panel-demo`
 

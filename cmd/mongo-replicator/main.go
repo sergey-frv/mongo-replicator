@@ -22,7 +22,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	mongoopts "go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
-	"golang.org/x/term"
 
 	"github.com/sergey-frv/mongo-replicator/internal/panel"
 	"github.com/sergey-frv/mongo-replicator/internal/replicator"
@@ -132,7 +131,7 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions, logFile *os.Fi
 	}()
 	stopPanel := func() {}
 	if progressMode(opts.Progress, stdoutTTY(), os.Getenv("TERM")) == progressTTY {
-		in, closeIn := panelInput(os.Stdin, openTTY, foreground)
+		in, closeIn := panel.Input(os.Stdin)
 		stopP, killP := withPanel(opts, r.Status, logFile, in)
 		stopPanel = func() { stopP(); closeIn() }
 		// после Release в порядке объявления, значит раньше него: паника в основной
@@ -181,56 +180,19 @@ func replicate(ctx context.Context, r *replicator.Replicator) error {
 // withPanel показывает панель статуса и переключает на неё консольный лог: над панелью —
 // WARN и выше, файл лога — без изменений. stop выводит финальную панель, дожидается
 // её выхода и возвращает обычный консольный лог (иначе итог INFO отфильтруется);
-// kill — то же без финальной панели. in — терминал для клавиш панели (panelInput)
+// kill — то же без финальной панели. in — терминал для клавиш панели (panel.Input)
 // или nil: тогда панель клавиатуру не читает.
 func withPanel(opts options, status func() replicator.Status, logFile, in *os.File) (stop, kill func()) {
 	if logFile == nil {
 		log.Warn().Msg("полный лог не пишется: добавьте --log-file")
 	}
 	file, fileLevel := fileWriter(logFile), logLevels[opts.LogFileLevel]
-	console, stopP, killP := panel.Start(status, os.Stdout, in, signalSelf)
+	console, stopP, killP := panel.Start(status, os.Stdout, in, panel.SignalSelf)
 	log.Logger = newLogger(console, true, max(zerolog.WarnLevel, logLevels[opts.LogLevel]), file, fileLevel)
 	restore := func() {
 		log.Logger = newLogger(os.Stdout, stdoutTTY(), logLevels[opts.LogLevel], file, fileLevel)
 	}
 	return func() { stopP(); restore() }, func() { killP(); restore() }
-}
-
-// panelInput выбирает терминал, с которого панель читает клавиши: stdin, если он
-// терминал, иначе /dev/tty (запуск с < /dev/null в терминале). Терминала нет или
-// процесс не на переднем плане (isForeground; запуск с &) — nil, панель без клавиш.
-// closeIn закрывает открытый здесь /dev/tty, stdin не трогает; вызывать после выхода панели.
-func panelInput(stdin *os.File, openTTY func() (*os.File, error),
-	isForeground func(*os.File) bool,
-) (in *os.File, closeIn func()) {
-	noop := func() {}
-	in, closeIn = stdin, noop
-	if !term.IsTerminal(int(stdin.Fd())) { //nolint:gosec // дескриптор stdin помещается в int
-		tty, err := openTTY()
-		if err != nil {
-			return nil, noop
-		}
-		in, closeIn = tty, func() { _ = tty.Close() }
-	}
-	if !isForeground(in) {
-		closeIn()
-		return nil, noop
-	}
-	return in, closeIn
-}
-
-// openTTY открывает управляющий терминал процесса. Не tea.OpenTTY: тот возвращает
-// один файл и как ввод, и как вывод.
-func openTTY() (*os.File, error) {
-	return os.OpenFile("/dev/tty", os.O_RDWR, 0)
-}
-
-// signalSelf отправляет сигнал своему процессу: в raw-режиме панели терминал не
-// превращает Ctrl+C и Ctrl+\ в сигналы, их шлёт панель.
-func signalSelf(sig os.Signal) {
-	if p, err := os.FindProcess(os.Getpid()); err == nil {
-		_ = p.Signal(sig)
-	}
 }
 
 // logTraffic пишет итог трафика процесса (байты с начала) при выходе.
