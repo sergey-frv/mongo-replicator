@@ -32,6 +32,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/sergey-frv/mongo-replicator/cmd/mongo-replicator/replicator"
+	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
 type options struct {
@@ -222,7 +223,7 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions, logFile *os.Fi
 	defer stop()
 
 	// диалеры — до подключения: иначе пул и мониторинг пойдут мимо счётчиков
-	tr := &replicator.Traffic{}
+	tr := &traffic.Counters{}
 	srcOpts.SetDialer(tr.SrcDialer())
 	dstOpts.SetDialer(tr.DstDialer())
 	// первым, чтобы сработать последним: после снятия аренды и отключения клиентов
@@ -321,7 +322,7 @@ func withPanel(opts options, status func() replicator.Status, logFile *os.File) 
 }
 
 // logTraffic пишет итог трафика процесса (байты с начала) при выходе.
-func logTraffic(tr *replicator.Traffic, started time.Time) {
+func logTraffic(tr *traffic.Counters, started time.Time) {
 	t := tr.Snapshot()
 	log.Info().Uint64("src_in", t.SrcIn).Uint64("src_out", t.SrcOut).
 		Uint64("dst_in", t.DstIn).Uint64("dst_out", t.DstOut).

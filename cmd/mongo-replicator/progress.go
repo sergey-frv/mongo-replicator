@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/sergey-frv/mongo-replicator/cmd/mongo-replicator/replicator"
+	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
 // Режимы --progress после разрешения auto.
@@ -42,7 +43,7 @@ type panel struct {
 	status func() replicator.Status
 	st     replicator.Status
 	at     time.Time // когда снят st
-	prev   replicator.TrafficInfo
+	prev   traffic.Info
 	prevAt time.Time // нулевое — предыдущего снимка нет
 }
 
@@ -89,7 +90,7 @@ var (
 
 // renderPanel — текст панели по снимку st, снятому в at; prev, prevAt — трафик
 // предыдущего снимка для скоростей (нулевое prevAt — скорости не показываются).
-func renderPanel(st replicator.Status, at time.Time, prev replicator.TrafficInfo, prevAt time.Time) string {
+func renderPanel(st replicator.Status, at time.Time, prev traffic.Info, prevAt time.Time) string {
 	label := func(s string) string { return labelStyle.Render(s) }
 	var lines []string
 

@@ -14,6 +14,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
 // lazyClient — клиент без сервера: mongo.Connect не подключается сразу, операции
@@ -50,7 +52,7 @@ func TestStatusInitial(t *testing.T) {
 }
 
 func TestStatusAppliedAndTraffic(t *testing.T) {
-	tr := &Traffic{}
+	tr := &traffic.Counters{}
 	r := New(nil, nil, Config{DB: "shop", Traffic: tr})
 	r.applied.Store(7)
 	tr.SrcIn.Store(100)
@@ -59,7 +61,7 @@ func TestStatusAppliedAndTraffic(t *testing.T) {
 	s := r.Status()
 
 	assert.EqualValues(t, 7, s.Applied)
-	assert.Equal(t, TrafficInfo{SrcIn: 100, DstOut: 200}, s.Traffic)
+	assert.Equal(t, traffic.Info{SrcIn: 100, DstOut: 200}, s.Traffic)
 }
 
 func TestBatchCounts(t *testing.T) {
@@ -299,7 +301,7 @@ func TestStatusCopyIsStable(t *testing.T) {
 // Status читается из другой горутины, пока репликатор обновляет состояние (-race).
 func TestStatusConcurrent(t *testing.T) {
 	quietLog(t)
-	r := New(nil, nil, Config{DB: "d", Traffic: &Traffic{}})
+	r := New(nil, nil, Config{DB: "d", Traffic: &traffic.Counters{}})
 	var wg sync.WaitGroup
 
 	wg.Add(2)

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sergey-frv/mongo-replicator/cmd/mongo-replicator/replicator"
+	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
 const (
@@ -21,7 +22,7 @@ const (
 )
 
 // panelLines — строки панели без цветовых последовательностей
-func panelLines(st replicator.Status, at time.Time, prev replicator.TrafficInfo, prevAt time.Time) []string {
+func panelLines(st replicator.Status, at time.Time, prev traffic.Info, prevAt time.Time) []string {
 	return strings.Split(ansi.ReplaceAllString(renderPanel(st, at, prev, prevAt), ""), "\n")
 }
 
@@ -39,9 +40,9 @@ func TestRenderPanel(t *testing.T) {
 		LastBatch: &replicator.BatchInfo{At: clock(12, 1, 34), Ops: replicator.OpCounts{Ins: 30, Upd: 15, Del: 3},
 			Colls: []string{"links", "clicks"}},
 		LastDDL: &replicator.DDLInfo{At: clock(11, 40, 2), Op: "createIndexes", NS: "urlshrinker.links", Details: "slug_1"},
-		Traffic: replicator.TrafficInfo{SrcIn: 3*GiB + 100*MiB, SrcOut: 12 * MiB, DstIn: 40 * MiB, DstOut: 2*GiB + 900*MiB},
+		Traffic: traffic.Info{SrcIn: 3*GiB + 100*MiB, SrcOut: 12 * MiB, DstIn: 40 * MiB, DstOut: 2*GiB + 900*MiB},
 		Machine: &replicator.MachineTraffic{At: clock(12, 1, 0), Processes: 3, Active: 2,
-			Traffic: replicator.TrafficInfo{SrcIn: 12*GiB + 400*MiB, SrcOut: 300 * MiB, DstIn: 200 * MiB, DstOut: 11*GiB + 900*MiB}},
+			Traffic: traffic.Info{SrcIn: 12*GiB + 400*MiB, SrcOut: 300 * MiB, DstIn: 200 * MiB, DstOut: 11*GiB + 900*MiB}},
 		State: replicator.StateRunning,
 	}
 	prev := st.Traffic
@@ -64,9 +65,9 @@ func TestRenderPanelMinimal(t *testing.T) {
 	at := clock(12, 0, 5)
 	// без пачки, DDL и сводки, лаг неизвестен, предыдущего снимка нет — без скоростей
 	st := replicator.Status{DB: "a", DstDB: "b", Started: at.Add(-5 * time.Second), Rate: 0.3, Lag: -1,
-		Traffic: replicator.TrafficInfo{SrcIn: 512, SrcOut: 1536}, State: replicator.StateStarting}
+		Traffic: traffic.Info{SrcIn: 512, SrcOut: 1536}, State: replicator.StateStarting}
 
-	lines := panelLines(st, at, replicator.TrafficInfo{}, time.Time{})
+	lines := panelLines(st, at, traffic.Info{}, time.Time{})
 
 	assert.Equal(t, []string{
 		"a → b · с запуска 5с · лаг неизвестен",
@@ -83,8 +84,8 @@ func TestRenderPanelRetry(t *testing.T) {
 			Colls: []string{"x", "y", "z"}, More: 2},
 		State: replicator.StateRetry, Retry: 2, LastErr: "connection refused"}
 
-	lines := panelLines(st, at, replicator.TrafficInfo{}, time.Time{})
-	raw := renderPanel(st, at, replicator.TrafficInfo{}, time.Time{})
+	lines := panelLines(st, at, traffic.Info{}, time.Time{})
+	raw := renderPanel(st, at, traffic.Info{}, time.Time{})
 
 	assert.Equal(t, []string{
 		"a → a · с запуска 3м5с · лаг 0с",
@@ -101,7 +102,7 @@ func TestRenderPanelStopped(t *testing.T) {
 	st := replicator.Status{DB: "a", DstDB: "a", Started: at.Add(-time.Minute), Lag: 0,
 		State: replicator.StateStopped, LastErr: "аренду забрал другой процесс"}
 
-	lines := panelLines(st, at, replicator.TrafficInfo{}, time.Time{})
+	lines := panelLines(st, at, traffic.Info{}, time.Time{})
 
 	assert.Equal(t, "состояние: остановлен: аренду забрал другой процесс", lines[len(lines)-1])
 }
@@ -149,7 +150,7 @@ func TestPanelUpdate(t *testing.T) {
 	n := 0
 	m := newPanel(func() replicator.Status {
 		n++
-		return replicator.Status{Applied: int64(n), Traffic: replicator.TrafficInfo{SrcIn: uint64(n)}}
+		return replicator.Status{Applied: int64(n), Traffic: traffic.Info{SrcIn: uint64(n)}}
 	})
 	assert.True(t, m.prevAt.IsZero(), "до первого тика скоростей нет")
 

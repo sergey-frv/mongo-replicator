@@ -22,6 +22,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
 // ErrNoStartPoint — на цели нет чекпойнта и StartTS не задан: неизвестно, откуда читать поток.
@@ -61,15 +63,15 @@ var SystemDBs = []string{"admin", "config", "local"}
 
 // Config — параметры репликации.
 type Config struct {
-	StartTS    uint32   // unix-сек, старт при отсутствии чекпойнта
-	BatchSize  int      // максимум операций в одной пачке записи
-	DB         string   // база источника
-	DstDB      string   // база цели; New: пусто — как DB
-	ApplyDrops []string // namespace источника (<DB>.<коллекция>), drop которых разрешён
-	Traffic    *Traffic // счётчики байт клиентов (их диалеры); nil — трафик не учитывается
-	StateFile  string   // файл состояния процесса на машине (StatePath); пусто — не пишется
-	StateDir   string   // каталог файлов состояния для сводки по машине; пусто — сводки нет
-	Cluster    string   // ключ кластера цели (StatePath): сверяется с файлом состояния
+	StartTS    uint32            // unix-сек, старт при отсутствии чекпойнта
+	BatchSize  int               // максимум операций в одной пачке записи
+	DB         string            // база источника
+	DstDB      string            // база цели; New: пусто — как DB
+	ApplyDrops []string          // namespace источника (<DB>.<коллекция>), drop которых разрешён
+	Traffic    *traffic.Counters // счётчики байт клиентов (их диалеры); nil — трафик не учитывается
+	StateFile  string            // файл состояния процесса на машине (StatePath); пусто — не пишется
+	StateDir   string            // каталог файлов состояния для сводки по машине; пусто — сводки нет
+	Cluster    string            // ключ кластера цели (StatePath): сверяется с файлом состояния
 }
 
 // Replicator переносит изменения из src в dst.
@@ -92,7 +94,7 @@ type Replicator struct {
 	// лог прогресса переживает перезапуски Run: при ретраях лаг тоже виден
 	lastLog     time.Time
 	lastN       int64
-	lastTraffic TrafficInfo
+	lastTraffic traffic.Info
 
 	owner      string        // владелец аренды базы цели (newOwner): один на экземпляр, и для повторных Run
 	leaseTTL   time.Duration // срок аренды
@@ -104,7 +106,7 @@ type Replicator struct {
 	// файл состояния (Config.StateFile): читается один раз за процесс, пишет его
 	// горутина-писатель от загрузки до Release
 	stateLoaded bool          // загрузка была; повторный Run её не повторяет
-	stateBase   TrafficInfo   // накопленное прошлыми процессами
+	stateBase   traffic.Info  // накопленное прошлыми процессами
 	stateEvery  time.Duration // интервал записи
 	stateStop   chan struct{} // остановка писателя; nil — писатель не запущен
 	stateDone   chan struct{} // закрывается, когда писатель вышел

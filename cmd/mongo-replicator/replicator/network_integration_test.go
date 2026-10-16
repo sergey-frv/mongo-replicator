@@ -17,16 +17,18 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
+
+	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
 // netEnv — клиенты сетевого теста через прокси src и dst.
 type netEnv struct {
 	t        *testing.T
 	src, dst *mongo.Client
-	traffic  *Traffic
+	traffic  *traffic.Counters
 }
 
-// netCase готовит сетевой тест: клиенты через Toxiproxy с диалерами Traffic.
+// netCase готовит сетевой тест: клиенты через Toxiproxy с диалерами traffic.Counters.
 // Вызывать до start: cleanup (сеть восстановлена, токсики сняты, клиенты закрыты)
 // выполнится после остановки репликатора. Без Toxiproxy тест пропускается.
 func netCase(t *testing.T) *netEnv {
@@ -35,7 +37,7 @@ func netCase(t *testing.T) *netEnv {
 		t.Skip("IT_PROXY_API не задан: сетевые тесты запускаются через make test-integration")
 	}
 	resetProxies(t) // остатки упавшего теста
-	nc := &netEnv{t: t, traffic: &Traffic{}}
+	nc := &netEnv{t: t, traffic: &traffic.Counters{}}
 	var err error
 	nc.src, err = connectIT(options.Client().ApplyURI(srcProxyURI).
 		SetAppName("cs-replicator").SetDialer(nc.traffic.SrcDialer()))

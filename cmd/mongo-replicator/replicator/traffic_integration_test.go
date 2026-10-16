@@ -15,6 +15,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
+
+	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
 // Трафик считается через диалеры клиентов: поток источника отдаёт fullDocument
@@ -25,7 +27,7 @@ import (
 // диалера нет); клиенты закрываются в cleanup теста.
 func newTrafficIT(t *testing.T, cfg Config) *Replicator {
 	t.Helper()
-	tr := &Traffic{}
+	tr := &traffic.Counters{}
 	src, err := connectIT(options.Client().ApplyURI(srcURI).SetDialer(tr.SrcDialer()))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = src.Disconnect(context.Background()) })
@@ -184,7 +186,7 @@ func TestIntegrationStateFileDBMismatch(t *testing.T) {
 	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a"})
 	cfg := withState(Config{BatchSize: 1000, DB: "it_mismatch_b", DstDB: "it_mismatch_a"}, dir)
 	require.NoError(t, writeState(cfg.StateFile, state{DB: "it_mismatch_a", DstDB: "it_mismatch_a",
-		Cluster: cfg.Cluster, Traffic: TrafficInfo{SrcIn: 12345}}))
+		Cluster: cfg.Cluster, Traffic: traffic.Info{SrcIn: 12345}}))
 	before, err := os.ReadFile(cfg.StateFile)
 	require.NoError(t, err)
 
@@ -232,7 +234,7 @@ func TestIntegrationMachineTraffic(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, mt.Processes)
-	assert.Equal(t, TrafficInfo{
+	assert.Equal(t, traffic.Info{
 		SrcIn: a.SrcIn + b.SrcIn, SrcOut: a.SrcOut + b.SrcOut,
 		DstIn: a.DstIn + b.DstIn, DstOut: a.DstOut + b.DstOut,
 	}, mt.Traffic)

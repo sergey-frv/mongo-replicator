@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
 // ErrStateCorrupt — файл состояния не разбирается как JSON.
@@ -30,21 +32,21 @@ var stateActiveFor = 30 * time.Second
 
 // state — содержимое файла состояния процесса на машине.
 type state struct {
-	DB        string      `json:"db"`
-	DstDB     string      `json:"dst_db"`
-	Cluster   string      `json:"cluster"`
-	Owner     string      `json:"owner"`
-	StartedAt time.Time   `json:"started_at"`
-	UpdatedAt time.Time   `json:"updated_at"`
-	Traffic   TrafficInfo `json:"traffic"`
+	DB        string       `json:"db"`
+	DstDB     string       `json:"dst_db"`
+	Cluster   string       `json:"cluster"`
+	Owner     string       `json:"owner"`
+	StartedAt time.Time    `json:"started_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
+	Traffic   traffic.Info `json:"traffic"`
 }
 
 // MachineTraffic — сводка трафика по файлам состояния каталога.
 type MachineTraffic struct {
-	At        time.Time   // время сводки
-	Processes int         // файлы состояния
-	Active    int         // из них обновлённые не раньше stateActiveFor
-	Traffic   TrafficInfo // сумма накопленного в файлах
+	At        time.Time    // время сводки
+	Processes int          // файлы состояния
+	Active    int          // из них обновлённые не раньше stateActiveFor
+	Traffic   traffic.Info // сумма накопленного в файлах
 }
 
 // clusterKey — ключ кластера цели по URI как написан: разрешённые хосты не
@@ -208,7 +210,7 @@ func machineTraffic(dir string, now time.Time) (MachineTraffic, error) {
 		if now.Sub(s.UpdatedAt) < stateActiveFor {
 			mt.Active++
 		}
-		mt.Traffic = mt.Traffic.add(s.Traffic)
+		mt.Traffic = mt.Traffic.Add(s.Traffic)
 	}
 	return mt, nil
 }
@@ -255,18 +257,18 @@ func (r *Replicator) startState() {
 // loadStateBase читает накопленный трафик из файла состояния. Битый файл или файл
 // другой пары баз или кластера переносится в сторону, счёт — с нуля. false — файл
 // не прочитан или не перенесён: писать в него нельзя, иначе история затрётся.
-func (r *Replicator) loadStateBase() (TrafficInfo, bool) {
+func (r *Replicator) loadStateBase() (traffic.Info, bool) {
 	path := r.cfg.StateFile
 	s, err := loadState(path)
 	var reason, msg string
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return TrafficInfo{}, true
+		return traffic.Info{}, true
 	case errors.Is(err, ErrStateCorrupt):
 		reason, msg = "corrupt", "файл состояния повреждён"
 	case err != nil:
 		log.Warn().Err(err).Str("file", path).Msg("файл состояния не прочитан: трафик в него не пишется")
-		return TrafficInfo{}, false
+		return traffic.Info{}, false
 	case s.DB != r.cfg.DB || s.DstDB != r.cfg.DstDB || s.Cluster != r.cfg.Cluster:
 		reason, msg = "mismatch", fmt.Sprintf("файл состояния записан для %q → %q (%s)", s.DB, s.DstDB, s.Cluster)
 	default:
@@ -275,10 +277,10 @@ func (r *Replicator) loadStateBase() (TrafficInfo, bool) {
 	to, mvErr := moveAside(path, reason)
 	if mvErr != nil {
 		log.Warn().Err(mvErr).Str("file", path).Msg(msg + ", но не перенесён: трафик в него не пишется")
-		return TrafficInfo{}, false
+		return traffic.Info{}, false
 	}
 	log.Warn().Err(err).Str("file", path).Str("moved_to", to).Msg(msg + ": перенесён в сторону, счёт трафика — с нуля")
-	return TrafficInfo{}, true
+	return traffic.Info{}, true
 }
 
 // writeStateFile пишет в файл состояния накопленное: базу и счётчики процесса.
@@ -287,7 +289,7 @@ func (r *Replicator) writeStateFile() {
 	s := state{
 		DB: r.cfg.DB, DstDB: r.cfg.DstDB, Cluster: r.cfg.Cluster, Owner: r.owner,
 		StartedAt: r.Status().Started.UTC(), UpdatedAt: time.Now().UTC(),
-		Traffic: r.stateBase.add(r.cfg.Traffic.Snapshot()),
+		Traffic: r.stateBase.Add(r.cfg.Traffic.Snapshot()),
 	}
 	if err := writeState(r.cfg.StateFile, s); err != nil {
 		log.Warn().Err(err).Msg("файл состояния не записан")

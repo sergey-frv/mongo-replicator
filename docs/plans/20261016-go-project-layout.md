@@ -242,11 +242,11 @@ github.com/sergey-frv/mongo-replicator
 - Modify: `cmd/mongo-replicator/replicator/{traffic,traffic_test,statefile,statefile_test,replicator,status,status_test}.go`, интеграционные тесты с `Traffic`/`TrafficInfo` (`traffic_integration_test.go`, `network_integration_test.go`)
 - Modify: `cmd/mongo-replicator/{main,progress,progress_test}.go`
 
-- [ ] перенести `Traffic`, `TrafficInfo` (+ `Add`), `countingDialer`, `countingConn` с переименованиями; doc-комментарии у экспортированных имён
-- [ ] перенести тесты и хелперы счётчиков в `internal/traffic/traffic_test.go`
-- [ ] поправить вызовы: `grep -rln '\bTraffic\b\|TrafficInfo\|\.add(' --include='*.go' cmd`
-- [ ] проверки из Testing Strategy; `make test`, `make test-integration`, `make lint`
-- [ ] коммит
+- [x] перенести `Traffic`, `TrafficInfo` (+ `Add`), `countingDialer`, `countingConn` с переименованиями; doc-комментарии у экспортированных имён (+ `// Package traffic`)
+- [x] перенести тесты и хелперы счётчиков в `internal/traffic/traffic_test.go`
+- [x] поправить вызовы: `grep -rln '\bTraffic\b\|TrafficInfo\|\.add(' --include='*.go' cmd`
+- [x] проверки из Testing Strategy; `make test`, `make test-integration`, `make lint` (имена: юнит — 143, интеграционные — 204, совпадают; в сверке строк — только doc-комментарии и имена без префикса внутри `internal/traffic`)
+- [x] коммит
 
 ### Task 4: Пакет `internal/statefile`
 
