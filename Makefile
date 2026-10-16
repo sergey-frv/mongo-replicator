@@ -17,7 +17,7 @@ lint:
 .PHONY: test
 test:
 	docker compose run --rm --no-deps app /bin/sh -c "\
-		CGO_ENABLED=1 go test -race -timeout=\"300s\" ./..."
+		CGO_ENABLED=1 go test -race -v -timeout=\"300s\" ./..."
 
 # -count=1: иначе go-build-cache отдаёт (cached) без обращения к MongoDB
 # -p 1: пакеты не параллельно — тесты делят кластеры, а тесты аренды
@@ -25,7 +25,7 @@ test:
 .PHONY: test-integration
 test-integration:
 	docker compose run --rm app /bin/sh -c "\
-		CGO_ENABLED=1 go test -count=1 -race -p 1 -timeout=\"600s\" -tags integration ./..."
+		CGO_ENABLED=1 go test -count=1 -race -v -p 1 -timeout=\"600s\" -tags integration ./..."
 
 # без --start-ts на пустом чекпойнте Run вернёт ErrNoStartPoint
 .PHONY: run
