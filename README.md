@@ -210,6 +210,16 @@ make run              # mongo-src (8.0, rs8) + mongo-dst (8.0, rsdst) и реп�
 
 ### Разработка
 
+Пакеты модуля `github.com/sergey-frv/mongo-replicator`:
+
+```
+cmd/mongo-replicator/   CLI: опции, лог, маскирование секретов, подсказки, запуск
+internal/replicator/    ядро: поток изменений, запись на цель, DDL, чекпойнт, аренда, статус
+internal/statefile/     файл состояния на машине: путь, чтение и запись, сводка
+internal/traffic/       счётчики трафика клиентов
+internal/panel/         панель статуса в терминале
+```
+
 ```sh
 make test               # юнит-тесты, mongo не нужна
 make test-integration   # интеграционные тесты против mongo-src и mongo-dst (и через toxiproxy), строго последовательно (-p 1): тесты делят кластеры, а тесты аренды чувствительны ко времени

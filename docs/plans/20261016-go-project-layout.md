@@ -305,10 +305,10 @@ github.com/sergey-frv/mongo-replicator
 - Modify: `CLAUDE.md`, `README.md`
 - Modify локально (без коммита): `.revmux/profile.md`
 
-- [ ] `CLAUDE.md` — по Technical Details → Документация
-- [ ] `README.md`, раздел «Разработка» — схема пакетов
-- [ ] устаревших ссылок не осталось: `grep -rnE 'cmd/mongo-replicator/replicator|StatePath|MachineTraffic|stateActiveFor|shortActive|progress\.go|replicator_test\.go|moveAside|TrafficInfo|loadState|writeState|machineTraffic|statefile\.go|traffic\.go' CLAUDE.md README.md .claude .revmux/profile.md`
-- [ ] коммит (`CLAUDE.md`, `README.md`)
+- [x] `CLAUDE.md` — по Technical Details → Документация (исключение для `main.go` убрано; `restoreLogger`/`captureStdout` — в примерах общих хелперов)
+- [x] `README.md`, раздел «Разработка» — схема пакетов
+- [x] устаревших ссылок не осталось (`.revmux/profile.md` поправлен локально: строки 4 и 40): `grep -rnE 'cmd/mongo-replicator/replicator|StatePath|MachineTraffic|stateActiveFor|shortActive|progress\.go|replicator_test\.go|moveAside|TrafficInfo|loadState|writeState|machineTraffic|statefile\.go|traffic\.go' CLAUDE.md README.md .claude .revmux/profile.md`
+- [x] коммит (`CLAUDE.md`, `README.md`)
 
 ### Task 9: Verify acceptance criteria
 - [ ] дерево: `cmd/mongo-replicator/` (только `package main`), `internal/{replicator,statefile,traffic,panel}`; нет `cmd/mongo-replicator/replicator` и `progress.go`

@@ -1,6 +1,14 @@
 # mongo-replicator
 
-Репликация одной базы MongoDB между кластерами через change streams. Код — `cmd/mongo-replicator` (CLI, `main.go`) и `cmd/mongo-replicator/replicator`.
+Репликация одной базы MongoDB между кластерами через change streams. Модуль `github.com/sergey-frv/mongo-replicator`:
+```
+cmd/mongo-replicator/   package main — CLI: опции, лог, маскирование, подсказки, запуск
+internal/replicator/    ядро: *Replicator (поток, запись, DDL, чекпойнт, аренда, статус)
+internal/statefile/     файл состояния на машине: путь, чтение/запись, сводка
+internal/traffic/       счётчики байт клиентов (диалер)
+internal/panel/         панель статуса (bubbletea)
+```
+Зависимости — в одну сторону: `traffic ← statefile ← replicator ← panel ← main`.
 
 ## Команды
 - `make test` — unit-тесты в контейнере `app`
@@ -8,19 +16,19 @@
 - `make lint`, `make build` (`build` делает `go mod tidy` + `go mod vendor`, зависимости вендорятся)
 
 ## Где живёт состояние
-- **на цели** — один документ `{_id: "checkpoint"}` в `<dst-db>._replicator_checkpoint` (`ckptColl`/`ckptID`, `checkpoint.go`): позиция, пара баз, аренда. Отдельной служебной базы нет, на цели нужен только `readWrite` на `--dst-db`; `SystemDBs` — только `admin`, `config`, `local`
+- **на цели** — один документ `{_id: "checkpoint"}` в `<dst-db>._replicator_checkpoint` (`ckptColl`/`ckptID`, `internal/replicator/checkpoint.go`): позиция, пара баз, аренда. Отдельной служебной базы нет, на цели нужен только `readWrite` на `--dst-db`; `SystemDBs` — только `admin`, `config`, `local`
 - служебную коллекцию **всегда** отсекает `streamPipeline` (`$match` по `ns.coll`), но rename проходит фильтр намеренно: rename в `_replicator_checkpoint` или из него ловит `applyDDL` до `checkLease()` и возвращает перманентную `ErrReservedCollection`. Меняя фильтр, сохранять пропуск rename
 - в тестах списки коллекций цели сравнивать через `collNames` (исключает служебную), не через `ListCollectionNames`
-- **на машине** — трафик процесса в `<state-dir>/<dst-db>.<8 hex sha256(ключа кластера)>.json` (`statefile.go`); потеря файла не ломает репликацию, ошибки записи — WARN. Сводка «на машине» — сумма всех `*.json` каталога
+- **на машине** — трафик процесса в `<state-dir>/<dst-db>.<8 hex sha256(ключа кластера)>.json` (`internal/statefile`, писатель — `internal/replicator/state.go`); потеря файла не ломает репликацию, ошибки записи — WARN. Сводка «на машине» — сумма всех `*.json` каталога
 - ключ кластера (`clusterKey`) — по URI цели как написан, не по разрешённым хостам: `srv:<host>` для `mongodb+srv` (SRV с `srvMaxHosts` даёт случайное подмножество), для `mongodb://` — хосты в нижнем регистре с портом, отсортированные
 - битый файл или чужая пара баз/кластер — файл переносится в сторону (`.corrupt-*`/`.mismatch-*`), не удаляется; база файла читается один раз за процесс и только после проверки пары баз
 - пустые `Config.StateFile`/`StateDir` выключают файлы и сводку — так работает большинство интеграционных тестов
 - файл пишет только владелец аренды: загрузка — после `acquireLease` и `checkDBs` и только со свежей арендой (`checkLease`), писатель пропускает запись при устаревшей аренде, последняя запись в `Release` — после подтверждающего `renewOnce` и **до** снятия аренды (иначе преемник прочитает файл без неё)
-- `moveAside` не заменяет занятое имя переноса (`Rename` на Unix заменил бы прежний `.corrupt-*`)
+- `statefile.MoveAside` не заменяет занятое имя переноса (`Rename` на Unix заменил бы прежний `.corrupt-*`)
 
 ## Тесты
 Правила действуют для всех тестов и хелперов.
-- **раскладка**: юнит — `<file>_test.go` рядом с `<file>.go`; исключение — `main.go`, его тесты по темам: `options_test.go` (`parseOpts`, `stateDir`), `mask_test.go`, `errors_test.go`, `log_test.go` (логгер и общие хелперы `restoreLogger`, `captureStdout`), остальное — `main_test.go`; интеграционный — `<область>_integration_test.go` с тегом `integration`; интеграционный хелпер, нужный ≥2 файлам, — `harness_integration_test.go`; юнит-хелпер, нужный ≥2 файлам, — в файле области, где появился (`mustMarshal` — `replicator_test.go`, `quietLog`/`lazyClient` — `status_test.go`): тег `integration` прячет обвязку от юнит-тестов; хелпер одной области — в её файле (компилятор размещение не проверяет: пакет один); новый тест — в файл своей области, новая область — новый файл
+- **раскладка**: юнит — `<file>_test.go` рядом с `<file>.go`; интеграционный — `<область>_integration_test.go` с тегом `integration`; интеграционный хелпер, нужный ≥2 файлам, — `harness_integration_test.go`; юнит-хелпер, нужный ≥2 файлам, — в файле области, где появился (`mustMarshal` — `event_test.go`, `quietLog`/`lazyClient` — `status_test.go`, `restoreLogger`/`captureStdout` — `log_test.go`): тег `integration` прячет обвязку от юнит-тестов; хелпер одной области — в её файле (в пределах пакета компилятор размещение не проверяет); общий тестовый хелпер разных пакетов дублируется (`ansi` — в `log_test.go` и `panel_test.go`); новый тест — в файл своей области, новая область — новый файл
 - **структура**: «дано → действие → проверка», блоки через пустую строку; без логики в теле, кроме перебора таблицы; ожидания — литералы
 - **проверки**: testify, без `t.Fatal*`/`t.Error*`: `require` (продолжать бессмысленно) / `assert` (независимые проверки); `assert.Equal(t, want, got)` — ожидание первым; сообщение-контекст — когда из выражения и имени подтеста не виден смысл значения: откуда оно (пароль из URI или с терминала), почему именно оно (число документов после `dropTarget`), значение без имени (`n`, `warn`); ошибки — `ErrorIs`, текст — только когда важен сам текст (подсказки оператору)
   - таймаут в `select` — `case <-time.After(…): require.FailNow(t, "…")`
@@ -45,7 +53,7 @@
 ## Интеграционные тесты
 - обвязка (`TestMain`, `newIT`, `start`/`startOn`, `runner`, `withState`, `writeCkpt`, `readLease`, `populateProxies`…) — в `harness_integration_test.go`
 - репликатор — только через `newIT`/`newTrafficIT`/`nc.newIT` (короткие аренда и `stateEvery`), не через голый `New`; менять поля репликатора (`stateEvery`) — до `startOn`, иначе гонка с `Run`
-- файлы состояния включает `withState(cfg, t.TempDir())`; `shortActive(t)` меняет пакетную `stateActiveFor` — `t.Parallel` в пакете нельзя
+- файлы состояния включает `withState(cfg, t.TempDir())`; сводки в тестах — `statefile.Summary(dir, time.Now(), itActiveFor)` (окно активности 1 с вместо `statefile.DefaultActiveFor`); `t.Parallel` в `internal/replicator` нельзя: тесты делят кластеры
 
 ## Сетевые тесты (Toxiproxy)
 - сетевые хелперы (`netCase`, `startRetry`, `hang`, `startWriter`…) — в `network_integration_test.go`, создание прокси (`populateProxies`) — в обвязке
