@@ -229,11 +229,11 @@ github.com/sergey-frv/mongo-replicator
 - Modify: `go.mod`, `vendor/modules.txt` (если меняется)
 - Modify: все `.go` с импортом `mongo-replicator/...`
 
-- [ ] `module github.com/sergey-frv/mongo-replicator` в `go.mod`; переписать импорты (`grep -rl '"mongo-replicator/' --include='*.go' cmd`)
-- [ ] `docker compose run --rm --no-deps app sh -c 'go mod tidy && go mod vendor'`
-- [ ] `grep -rn '"mongo-replicator/' --include='*.go' . --exclude-dir=vendor` — пусто
-- [ ] `make test`, `make test-integration`, `make lint`; имена тестов совпадают с эталоном
-- [ ] коммит
+- [x] `module github.com/sergey-frv/mongo-replicator` в `go.mod`; переписать импорты (`grep -rl '"mongo-replicator/' --include='*.go' cmd`) (5 файлов в `cmd/mongo-replicator`)
+- [x] `docker compose run --rm --no-deps app sh -c 'go mod tidy && go mod vendor'` (`go.sum` и `vendor/` не изменились)
+- [x] `grep -rn '"mongo-replicator/' --include='*.go' . --exclude-dir=vendor` — пусто
+- [x] `make test`, `make test-integration`, `make lint`; имена тестов совпадают с эталоном (юнит — 143, интеграционные — 204)
+- [x] коммит
 
 ### Task 3: Пакет `internal/traffic`
 

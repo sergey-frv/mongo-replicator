@@ -1,4 +1,4 @@
-module mongo-replicator
+module github.com/sergey-frv/mongo-replicator
 
 go 1.26.0
 
