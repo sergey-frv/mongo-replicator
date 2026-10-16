@@ -268,18 +268,21 @@
 
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/network_integration_test.go`
+- Modify: `cmd/mongo-replicator/replicator/harness_integration_test.go` (➕ `findLease`)
 
-- [ ] `retrier.waitErr`/`waitSame` → `Eventually`/`EventuallyWithT`; дифф и `rt.runErrs()` — в проверке на `c`
-- [ ] захват аренды в `NetDstHangLease` → `Eventually`: неожиданная ошибка и `acquiredAt` записываются в переменные, проверка после ожидания. Таймаут `select` → `require.FailNow`
-- [ ] сны `NetSrcDown`:
+- [x] `retrier.waitErr`/`waitSame` → `Eventually`/`EventuallyWithT`; дифф и `rt.runErrs()` — в проверке на `c`
+- [x] захват аренды в `NetDstHangLease` → `Eventually`: неожиданная ошибка и `acquiredAt` записываются в переменные, проверка после ожидания. Таймаут `select` → `require.FailNow`
+  - ➕ чтение аренды без `t` для условия — `findLease(dstDB) (leaseState, bool, error)` в обвязке, `readLease(t)` — обёртка над ним (пригодится и в Task 4, `TestIntegrationLeaseLost`)
+- [x] сны `NetSrcDown`:
   - `network:278` — законный, с комментарием «обрыв доходит до репликатора»;
   - `network:280` → `assert.Never(…, 3*time.Second, pollEvery, …)` и финальный `assert.Equal`;
   - остальные сны — по таблице видов, с комментариями
-- [ ] `waitApplied` — сообщение в `Eventually`; `ckptBehind` → `assertCkptBehind`; структура тестов «дано → действие → проверка»
-- [ ] мутации на каждый изменённый тест и хелпер, например:
+- [x] `waitApplied` — сообщение в `Eventually`; `ckptBehind` → `assertCkptBehind`; структура тестов «дано → действие → проверка»
+- [x] мутации на каждый изменённый тест и хелпер, например:
   - чекпойнт сохраняется до записи данных → `assertCkptBehind` падает;
+    - ➕ взята мутация «`toModel` пропускает документ `_id` 7»: чекпойнт проходит дальше недописанного документа детерминированно. Перестановка `saveToken`/`flush` ловилась бы только в окне в несколько мс, а при отключённой цели не пишется ни то, ни другое
   - `Snapshot()` делает `SrcIn.Add(1)` при каждом вызове → `assert.Never` в `NetSrcDown` падает
-- [ ] `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
+- [x] `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
 
 ### Task 4: Аренда
 

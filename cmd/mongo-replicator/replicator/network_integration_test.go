@@ -92,8 +92,8 @@ func TestIntegrationNetProxy(t *testing.T) {
 	got := nc.traffic.Snapshot()
 	assert.GreaterOrEqual(t, got.SrcIn, size, "поток отдал все документы через прокси")
 	assert.GreaterOrEqual(t, got.DstOut, size, "запись отправила все документы через прокси")
-	assert.Positive(t, got.SrcOut)
-	assert.Positive(t, got.DstIn)
+	assert.Positive(t, got.SrcOut, "запросы к источнику через прокси")
+	assert.Positive(t, got.DstIn, "ответы цели через прокси")
 }
 
 // netPause — пауза повтора в сетевых тестах (в main — retryTimeout, 5 с).
@@ -156,32 +156,25 @@ func (rt *retrier) runErrs() []error {
 // waitErr ждёт n-ю ошибку Run не дольше timeout и возвращает её.
 func (rt *retrier) waitErr(n int, timeout time.Duration) error {
 	rt.t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		if errs := rt.runErrs(); len(errs) >= n {
-			return errs[n-1]
+	var err error
+	require.Eventually(rt.t, func() bool {
+		errs := rt.runErrs()
+		if len(errs) < n {
+			return false
 		}
-		if time.Now().After(deadline) {
-			rt.t.Fatalf("Run не вернул ошибку за %s", timeout)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+		err = errs[n-1]
+		return true
+	}, timeout, 50*time.Millisecond, "Run не вернул ошибку за %s", timeout)
+	return err
 }
 
 // waitSame ждёт совпадения одноимённой базы на кластерах; ошибки Run допустимы.
 func (rt *retrier) waitSame(db string) {
 	rt.t.Helper()
-	deadline := time.Now().Add(waitTimeout)
-	for {
+	require.EventuallyWithT(rt.t, func(c *assert.CollectT) {
 		ok, diff := same(db)
-		if ok {
-			return
-		}
-		if time.Now().After(deadline) {
-			rt.t.Fatalf("база %s не совпала за %s: %s; ошибки Run: %v", db, waitTimeout, diff, rt.runErrs())
-		}
-		time.Sleep(pollEvery)
-	}
+		assert.True(c, ok, "база %s не совпала: %s; ошибки Run: %v", db, diff, rt.runErrs())
+	}, waitTimeout, pollEvery, "база %s не совпала за %s", db, waitTimeout)
 }
 
 // srcWriter вставляет на источнике (напрямую, мимо прокси) документы с _id 0, 1, …
@@ -221,7 +214,7 @@ func startWriter(t *testing.T, db string) *srcWriter {
 			w.at = append(w.at, *sess.OperationTime())
 			w.mu.Unlock()
 			sess.EndSession(context.Background())
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(20 * time.Millisecond) // темп нагрузки: вставка раз в 20 мс
 		}
 	}()
 	var once sync.Once
@@ -251,7 +244,7 @@ func waitApplied(t *testing.T, db string, n int64) {
 		defer cancel()
 		got, err := dstClient.Database(db).Collection("items").CountDocuments(ctx, bson.M{})
 		return err == nil && got >= n
-	}, waitTimeout, pollEvery)
+	}, waitTimeout, pollEvery, "на цели нет %d документов %s.items за %s", n, db, waitTimeout)
 }
 
 // hang вешает прокси: timeout-токсик (timeout 0 — данные отбрасываются, соединения
@@ -275,21 +268,22 @@ func TestIntegrationNetSrcDown(t *testing.T) {
 	waitApplied(t, db, 5)
 
 	require.NoError(t, srcProxy.Disable())
-	time.Sleep(time.Second)
+	time.Sleep(time.Second) // обрыв доходит до репликатора: ответы в полёте дочитаны
 	cut := nc.traffic.Snapshot().SrcIn
-	time.Sleep(3 * time.Second)
+	assert.Never(t, func() bool { return nc.traffic.Snapshot().SrcIn != cut }, 3*time.Second, pollEvery,
+		"обрыв дошёл до репликатора: с источника ничего не приходит")
 	assert.Equal(t, cut, nc.traffic.Snapshot().SrcIn, "обрыв дошёл до репликатора: с источника ничего не приходит")
 	require.NoError(t, srcProxy.Enable())
-	time.Sleep(time.Second) // записи и после восстановления
+	time.Sleep(time.Second) // длительность записи после восстановления: писатель вставляет ещё секунду
 	w.stop()
 
 	rt.waitSame(db)
 	t.Logf("ошибки Run: %v", rt.runErrs())
 }
 
-// ckptBehind проверяет, что чекпойнт не обогнал данные: все документы источника
+// assertCkptBehind проверяет, что чекпойнт не обогнал данные: все документы источника
 // со временем вставки не новее clusterTime чекпойнта уже на цели.
-func ckptBehind(t *testing.T, db string, w *srcWriter) {
+func assertCkptBehind(t *testing.T, db string, w *srcWriter) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -317,20 +311,22 @@ func TestIntegrationNetDstDown(t *testing.T) {
 	w := startWriter(t, db)
 	waitApplied(t, db, 5)
 
+	// длительность действия: обрыв держится 4 с, чекпойнт проверяется каждые 500 мс
+	// по ходу обрыва и 2 с после восстановления; читается напрямую, мимо прокси
 	require.NoError(t, dstProxy.Disable())
 	for range 8 {
 		time.Sleep(500 * time.Millisecond)
-		ckptBehind(t, db, w) // чекпойнт читается напрямую, мимо прокси
+		assertCkptBehind(t, db, w)
 	}
 	require.NoError(t, dstProxy.Enable())
 	for range 4 {
 		time.Sleep(500 * time.Millisecond)
-		ckptBehind(t, db, w)
+		assertCkptBehind(t, db, w)
 	}
 	w.stop()
 
 	rt.waitSame(db)
-	ckptBehind(t, db, w)
+	assertCkptBehind(t, db, w)
 	assert.NotEmpty(t, rt.runErrs(), "без цели Run не работает дольше 2/3 срока аренды")
 	t.Logf("ошибки Run: %v", rt.runErrs())
 }
@@ -393,25 +389,37 @@ func TestIntegrationNetDstHangLease(t *testing.T) {
 	// r1Until — последний срок аренды первого на цели: после зависания продления
 	// до сервера не доходят, и срок перестаёт двигаться
 	var r1Until, acquiredAt time.Time
-	for {
-		if st, ok := readLease(t, db); ok && st.Owner == r1.owner {
+	var unexpected error
+	require.Eventually(t, func() bool {
+		// неожиданная ошибка прекращает ожидание и проверяется после него
+		st, ok, err := findLease(db)
+		if err != nil {
+			unexpected = err
+			return true
+		}
+		if ok && st.Owner == r1.owner {
 			r1Until = st.LeaseUntil
 		}
-		err := r2.acquireLease(ctx)
+		err = r2.acquireLease(ctx)
 		if err == nil {
 			acquiredAt = time.Now()
-			break
+			return true
 		}
-		require.ErrorIs(t, err, ErrLeaseHeld)
-		time.Sleep(20 * time.Millisecond)
-	}
+		if !errors.Is(err, ErrLeaseHeld) {
+			unexpected = err
+			return true
+		}
+		return false
+	}, waitTimeout, 20*time.Millisecond, "второй процесс не захватил аренду за %s", waitTimeout)
+	require.NoError(t, unexpected, "захват аренды вторым процессом: ожидалась только ErrLeaseHeld")
 	rn2 := startOn(t, r2) // продлевает захваченную аренду
 
 	select {
 	case <-r1Done:
 	case <-time.After(waitTimeout):
-		t.Fatal("первый процесс не остановился")
+		require.FailNow(t, "первый процесс не остановился")
 	}
+
 	require.ErrorIs(t, r1Err, errLeaseExpiring)
 	assert.True(t, exitAt.Before(r1Until), "первый остановился в %s, аренда до %s",
 		exitAt.Format(time.StampMilli), r1Until.Format(time.StampMilli))
@@ -420,7 +428,8 @@ func TestIntegrationNetDstHangLease(t *testing.T) {
 
 	resetProxies(t)
 	st, _ := readLease(t, db)
-	assert.Equal(t, r2.owner, st.Owner)
+	assert.Equal(t, r2.owner, st.Owner, "аренда у второго процесса")
+
 	// после зависания соединения первого восстанавливаются не сразу
 	require.Eventually(t, func() bool {
 		rctx, rcancel := context.WithTimeout(ctx, 5*time.Second)
@@ -442,19 +451,19 @@ func TestIntegrationNetTraffic(t *testing.T) {
 
 	require.NoError(t, srcProxy.Disable())
 	require.NoError(t, dstProxy.Disable())
-	time.Sleep(3 * time.Second)
+	time.Sleep(3 * time.Second) // длительность обрыва: обе стороны недоступны 3 с
 	require.NoError(t, srcProxy.Enable())
 	require.NoError(t, dstProxy.Enable())
 	restored, before := time.Now(), nc.traffic.Snapshot()
-	time.Sleep(time.Second) // записи и после восстановления
+	time.Sleep(time.Second) // длительность записи после восстановления: писатель вставляет ещё секунду
 	w.stop()
 	rt.waitSame(db)
 
 	after := nc.traffic.Snapshot()
-	assert.Greater(t, after.SrcIn, before.SrcIn)
-	assert.Greater(t, after.SrcOut, before.SrcOut)
-	assert.Greater(t, after.DstIn, before.DstIn)
-	assert.Greater(t, after.DstOut, before.DstOut)
+	assert.Greater(t, after.SrcIn, before.SrcIn, "приём с источника после восстановления")
+	assert.Greater(t, after.SrcOut, before.SrcOut, "отправка на источник после восстановления")
+	assert.Greater(t, after.DstIn, before.DstIn, "приём с цели после восстановления")
+	assert.Greater(t, after.DstOut, before.DstOut, "отправка на цель после восстановления")
 	require.Eventually(t, func() bool {
 		s, err := loadState(cfg.StateFile)
 		return err == nil && s.UpdatedAt.After(restored) && s.Traffic.DstOut > before.DstOut

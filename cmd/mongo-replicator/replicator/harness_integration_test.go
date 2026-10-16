@@ -642,15 +642,24 @@ type leaseState struct {
 // readLease читает документ чекпойнта базы цели dstDB; false — документа нет.
 func readLease(t *testing.T, dstDB string) (leaseState, bool) {
 	t.Helper()
+	st, ok, err := findLease(dstDB)
+	require.NoError(t, err)
+	return st, ok
+}
+
+// findLease — readLease без t, для условий Eventually.
+func findLease(dstDB string) (leaseState, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var st leaseState
 	err := ckptOf(dstDB).FindOne(ctx, bson.M{"_id": ckptID}).Decode(&st)
 	if errors.Is(err, mongo.ErrNoDocuments) {
-		return leaseState{}, false
+		return leaseState{}, false, nil
 	}
-	require.NoError(t, err)
-	return st, true
+	if err != nil {
+		return leaseState{}, false, err
+	}
+	return st, true, nil
 }
 
 // captureLog пишет лог пакета в буфер до конца теста; читать буфер — после остановки репликатора.
