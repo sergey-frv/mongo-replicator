@@ -213,7 +213,7 @@ make run              # mongo-src (8.0, rs8) + mongo-dst (8.0, rsdst) и реп�
 Пакеты модуля `github.com/sergey-frv/mongo-replicator`:
 
 ```
-cmd/mongo-replicator/   CLI: опции, лог, маскирование секретов, подсказки, запуск
+cmd/mongo-replicator/   CLI: опции, учётные данные и запрос пароля, лог, маскирование секретов, подсказки, запуск
 internal/replicator/    ядро: поток изменений, запись на цель, DDL, чекпойнт, аренда, статус
 internal/statefile/     файл состояния на машине: путь, чтение и запись, сводка
 internal/traffic/       счётчики трафика клиентов

@@ -183,6 +183,17 @@ func TestMachineTraffic(t *testing.T) {
 			Traffic: traffic.Info{SrcIn: 111, SrcOut: 222, DstIn: 333, DstOut: 444}}, mt)
 	})
 
+	t.Run("окно активности задаёт вызывающий", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, Write(filepath.Join(dir, "a.00000001.json"), State{UpdatedAt: now.Add(-45 * time.Second)}))
+		require.NoError(t, Write(filepath.Join(dir, "b.00000002.json"), State{UpdatedAt: now.Add(-time.Minute)}))
+
+		mt, err := Summary(dir, now, time.Minute)
+
+		require.NoError(t, err)
+		assert.Equal(t, Machine{At: now, Processes: 2, Active: 1}, mt, "обновлённый ровно activeFor назад — не активен")
+	})
+
 	t.Run("символы шаблона в пути каталога", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "repl[1]")
 		require.NoError(t, os.Mkdir(dir, 0o750))

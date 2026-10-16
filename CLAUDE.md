@@ -2,7 +2,7 @@
 
 Репликация одной базы MongoDB между кластерами через change streams. Модуль `github.com/sergey-frv/mongo-replicator`:
 ```
-cmd/mongo-replicator/   package main — CLI: опции, лог, маскирование, подсказки, запуск
+cmd/mongo-replicator/   package main — CLI: опции, учётные данные (пароль с терминала), лог, маскирование, подсказки, запуск
 internal/replicator/    ядро: *Replicator (поток, запись, DDL, чекпойнт, аренда, статус)
 internal/statefile/     файл состояния на машине: путь, чтение/запись, сводка
 internal/traffic/       счётчики байт клиентов (диалер)
