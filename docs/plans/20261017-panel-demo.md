@@ -117,8 +117,8 @@
 **Files:**
 - Modify: `Makefile`
 
-- [ ] цель `panel-demo` по Technical Details: `go build -o bin/mongo-replicator-panel ./cmd/panel-demo`
-- [ ] проверить сборку в контейнере (`docker compose run --rm --no-deps app go build -o /dev/null ./cmd/panel-demo`) и что `bin/` в `.gitignore`
+- [x] цель `panel-demo` по Technical Details: `go build -o bin/mongo-replicator-panel ./cmd/panel-demo`
+- [x] проверить сборку в контейнере (`docker compose run --rm --no-deps app go build -o /dev/null ./cmd/panel-demo`) и что `bin/` в `.gitignore`
 
 ### Task 4: Verify acceptance criteria
 - [ ] утилита и демо используют одни и те же `panel.Input`, `panel.SignalSelf`, `panel.Start` (`grep` — в `cmd/mongo-replicator` и `cmd/panel-demo` нет своих копий выбора ввода)

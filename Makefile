@@ -9,6 +9,10 @@ build:
 	go mod vendor
 	go build -ldflags "-X main.revision=$(REVISION)" -o bin/mongo-replicator ./cmd/mongo-replicator
 
+.PHONY: panel-demo
+panel-demo: ## Build panel demo with mock status
+	go build -o bin/mongo-replicator-panel ./cmd/panel-demo
+
 .PHONY: lint
 lint:
 	docker compose run --rm --no-deps linter /bin/sh -c "\
