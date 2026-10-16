@@ -343,18 +343,23 @@
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/replicator_test.go`
 
-- [ ] `TestDecodeAndModel` → отдельные тесты (Technical Details → Таблицы)
-- [ ] `mustMarshal` и остальные `t.Fatal*` → `require`. `mustMarshal` вызывают `lag_test.go` и `status_test.go`, проверить, что они проходят
-- [ ] `TestCheckNS` → две таблицы; `TestRawIsCopied`, `TestBatchOrder`, `TestDDLDescriptionParsing` — проверки testify и структура
-- [ ] остальные тесты файла — структура и таблицы по правилам
-- [ ] мутации на каждый изменённый тест, например:
+- [x] `TestDecodeAndModel` → отдельные тесты (Technical Details → Таблицы)
+  - ➕ `TestToModelInsert`, `TestToModelDelete` (таблица: `documentKey` из `_id` и составной — случай с простым ключом добавлен), `TestToModelUpdateWithoutDocument` (таблица: `fullDocument: null`, нет поля); сборка события — `changeEvent`, декодирование и проверка resume token — `decodeEvent`
+- [x] `mustMarshal` и остальные `t.Fatal*` → `require`. `mustMarshal` вызывают `lag_test.go` и `status_test.go`, проверить, что они проходят
+- [x] `TestCheckNS` → две таблицы; `TestRawIsCopied`, `TestBatchOrder`, `TestDDLDescriptionParsing` — проверки testify и структура
+  - ➕ `TestCheckNS` → `TestCheckNSAllowed` и `TestCheckNSForeign`
+  - ➕ `TestRawIsCopied` сравнивает каждое поле с литералом (было — со снимком до порчи буфера); `TestBatchOrder` — модели с разными фильтрами, чтобы `assert.Equal` различал их, и проверка `ops` целиком
+- [x] остальные тесты файла — структура и таблицы по правилам
+  - ➕ хвост `TestApplyDDLRenameReserved` (обычный rename) → `TestApplyDDLRenameChecksLease`; проверка совпадающей пары из `TestCheckDBs` → `TestCheckDBsSame`, ожидания `TestCheckDBs` — литералы вместо `Sprintf`; в `TestLogProgressBeforeFirstSave` `defer` → `t.Cleanup`
+- [x] мутации на каждый изменённый тест, например:
   - delete-модель с полным `documentKey` вместо `_id`;
   - replace без `upsert`;
   - `bson.Raw` без копирования;
   - нарушен порядок пачки.
 
   Для `mustMarshal` — контроль в тесте (`make(chan int)`)
-- [ ] `make test`, `make lint`, охранная проверка; коммит с журналом мутаций
+  - ➕ «`bson.Raw` без копирования» — мутация в вендоренном драйвере (`value_reader.go`, `readValueBytes` возвращает срез буфера), делается и откатывается внутри контейнера: `vendor/` принадлежит root. `UnmarshalBSON` у `event` для мутации не годится: драйвер передаёт ему копию
+- [x] `make test`, `make lint`, охранная проверка; коммит с журналом мутаций
 
 ### Task 9: Прочие юнит-тесты пакета `replicator`
 
