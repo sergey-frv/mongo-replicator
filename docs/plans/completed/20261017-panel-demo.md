@@ -129,11 +129,11 @@
 - [x] `make lint` без замечаний
 
 ### Task 5: [Final] Update documentation
-- [ ] README, раздел «Панель статуса»: как посмотреть панель без кластеров — `make panel-demo && ./bin/mongo-replicator-panel`, что показывает сценарий, клавиши те же
-- [ ] README, раздел «Разработка»: `cmd/panel-demo/` в карте пакетов, `make panel-demo` в списке команд
-- [ ] CLAUDE.md: карта пакетов — `cmd/panel-demo/` (демо панели на мок-данных); строка зависимостей — `… ← panel ← main, panel-demo`; «Команды» — `make panel-demo`
-- [ ] CLAUDE.md, «Панель и терминал»: выбор ввода и `SignalSelf` — в `internal/panel` (`panel.Input`/`pickInput`), ссылки на `panelInput`/`run` поправить; `panel.Start` ввод сам не выбирает, `panel.Input` вызывают только `main` и демо, тесты — никогда; в демо-`sim` WARN не логируется под мьютексом (взаимоблокировка с `status()` панели)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] README, раздел «Панель статуса»: как посмотреть панель без кластеров — `make panel-demo && ./bin/mongo-replicator-panel`, что показывает сценарий, клавиши те же
+- [x] README, раздел «Разработка»: `cmd/panel-demo/` в карте пакетов, `make panel-demo` в списке команд
+- [x] CLAUDE.md: карта пакетов — `cmd/panel-demo/` (демо панели на мок-данных); строка зависимостей — `… ← panel ← main, panel-demo`; «Команды» — `make panel-demo`
+- [x] CLAUDE.md, «Панель и терминал»: выбор ввода и `SignalSelf` — в `internal/panel` (`panel.Input`/`pickInput`), ссылки на `panelInput`/`run` поправить; `panel.Start` ввод сам не выбирает, `panel.Input` вызывают только `main` и демо, тесты — никогда; в демо-`sim` WARN не логируется под мьютексом (взаимоблокировка с `status()` панели)
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*

@@ -6,14 +6,16 @@ cmd/mongo-replicator/   package main — CLI: опции, учётные дан�
 internal/replicator/    ядро: *Replicator (поток, запись, DDL, чекпойнт, аренда, статус)
 internal/statefile/     файл состояния на машине: путь, чтение/запись, сводка
 internal/traffic/       счётчики байт клиентов (диалер)
-internal/panel/         панель статуса (bubbletea)
+internal/panel/         панель статуса (bubbletea), выбор ввода (`Input`), `SignalSelf`
+cmd/panel-demo/         package main — демо панели на мок-данных, без кластеров
 ```
-Зависимости — в одну сторону: `traffic ← statefile ← replicator ← panel ← main`.
+Зависимости — в одну сторону: `traffic ← statefile ← replicator ← panel ← main, panel-demo`.
 
 ## Команды
 - `make test` — unit-тесты в контейнере `app`
 - `make test-integration` — интеграционные (`-tags integration`, `-p 1`); compose поднимает `mongo-src`, `mongo-dst`, `toxiproxy`
 - `make lint`, `make build` (`build` делает `go mod tidy` + `go mod vendor`, зависимости вендорятся)
+- `make panel-demo` — `bin/mongo-replicator-panel`, демо панели на мок-данных (сборка на хосте, без `tidy`/`vendor`)
 
 ## Где живёт состояние
 - **на цели** — один документ `{_id: "checkpoint"}` в `<dst-db>._replicator_checkpoint` (`ckptColl`/`ckptID`, `internal/replicator/checkpoint.go`): позиция, пара баз, аренда. Отдельной служебной базы нет, на цели нужен только `readWrite` на `--dst-db`; `SystemDBs` — только `admin`, `config`, `local`
@@ -32,7 +34,9 @@ internal/panel/         панель статуса (bubbletea)
 - вызовы `golang.org/x/sys/unix` — в `*_unix.go`/`*_linux.go` с заглушкой `*_other.go`: вне Unix `foreground` — `false` (панель без клавиш), вне Linux `jobControl` — `false` (Ctrl+Z игнорируется)
 - встроенный обработчик сигналов bubbletea выключен (`WithoutSignalHandler`): SIGINT/SIGTERM обрабатывает `main`, и без панели тоже
 - ввод — `*os.File`, не `io.Reader`: `(*os.File)(nil)` в интерфейсе не `nil`, и bubbletea включил бы ввод; `nil` — панель без клавиатуры
-- ввод выбирает `run` (`panelInput`), не `withPanel`: stdin `go test` — `/dev/null`, и тест `withPanel` открыл бы `/dev/tty`; `/dev/tty` — через `os.OpenFile`, не `tea.OpenTTY` (тот отдаёт один файл как ввод и вывод); ввод берётся только на переднем плане терминала (`foreground`), иначе SIGTTOU
+- ввод и отправка сигнала — в `internal/panel` (`input.go`): `panel.Input` (обёртка над `pickInput` с подставляемыми `openTTY`/`foreground`) и `panel.SignalSelf`; ими пользуются и `main`, и `cmd/panel-demo` — своих копий там нет. `panel.Start` ввод сам не выбирает: его передаёт вызывающий
+- `panel.Input` вызывают только `main` (`run`, не `withPanel`) и демо, тесты — **никогда**: stdin `go test` — `/dev/null`, и `Input` открыл бы настоящий `/dev/tty`; логику проверяют тесты `pickInput`. `/dev/tty` — через `os.OpenFile`, не `tea.OpenTTY` (тот отдаёт один файл как ввод и вывод); ввод берётся только на переднем плане терминала (`foreground`), иначе SIGTTOU
+- демо (`cmd/panel-demo/sim.go`): `step` не логирует под `sim.mu`, а возвращает тексты WARN — `main` пишет их после возврата. Иначе взаимоблокировка: лог панели (`teaWriter.Write` → `p.Send`) ждёт цикл событий bubbletea, а тот на тике ждёт `sim.mu` в `status()`. Это касается любого `status` для `panel.Start`: не писать в консоль панели под блокировкой, которую берёт `status`
 - тесты не открывают `/dev/tty` и **никогда не пишут в псевдотерминал байт 0x1a** (Ctrl+Z): настоящий Suspend остановит группу `go test`; raw-режим проверяется на своём псевдотерминале (`internal/panel/pty_linux_test.go`)
 
 ## Тесты
