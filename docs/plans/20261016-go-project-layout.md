@@ -311,18 +311,19 @@ github.com/sergey-frv/mongo-replicator
 - [x] коммит (`CLAUDE.md`, `README.md`)
 
 ### Task 9: Verify acceptance criteria
-- [ ] дерево: `cmd/mongo-replicator/` (только `package main`), `internal/{replicator,statefile,traffic,panel}`; нет `cmd/mongo-replicator/replicator` и `progress.go`
-- [ ] импорты внутренних пакетов не шире схемы: `docker compose run --rm --no-deps app go list -f '{{.ImportPath}}: {{join .Imports " "}}' ./internal/... ./cmd/...`:
+- [x] дерево: `cmd/mongo-replicator/` (только `package main`), `internal/{replicator,statefile,traffic,panel}`; нет `cmd/mongo-replicator/replicator` и `progress.go` (13 файлов `package main`)
+- [x] импорты внутренних пакетов не шире схемы (совпадают со схемой: `panel` — `replicator`, `traffic`; `main` — все четыре): `docker compose run --rm --no-deps app go list -f '{{.ImportPath}}: {{join .Imports " "}}' ./internal/... ./cmd/...`:
   - `traffic` — без внутренних пакетов;
   - `statefile` — не больше `traffic`;
   - `replicator` — не больше `traffic`, `statefile`;
   - `panel` — не больше `replicator`, `traffic`, `statefile`;
   - `main` — любые из них
-- [ ] каждый `<file>.go`, у которого есть юнит-тесты, имеет `<file>_test.go`; исключения — по таблице и ➕
-- [ ] имена тестов совпадают с эталоном Task 1
-- [ ] `make build` собирает `bin/mongo-replicator` и `--help` работает; после `make build` в `git status` нет изменений `go.mod`/`go.sum`/`vendor`
-- [ ] `make test`, `make test-integration`, `make lint`
-- [ ] `git diff 8023706 -- Makefile` пустой
+- [x] каждый `<file>.go`, у которого есть юнит-тесты, имеет `<file>_test.go`; исключения — по таблице и ➕ (исключений нет: у каждого `.go` есть `_test.go`, юнит-тестов без пары нет)
+- [x] имена тестов совпадают с эталоном Task 1 (юнит — 143, интеграционные — 204)
+- [x] `make build` собирает `bin/mongo-replicator` и `--help` работает; после `make build` в `git status` нет изменений `go.mod`/`go.sum`/`vendor`
+  - ⚠️ первый запуск упал: `go mod vendor` из контейнера в Task 2 оставил `vendor/` за root, а `make build` идёт на хосте. Владелец возвращён (`docker compose run --rm --no-deps app chown -R 1000:1000 vendor`), содержимое не менялось
+- [x] `make test`, `make test-integration`, `make lint` (пропущены только `TestLimitationUpdateLookupAfterRename`, `TestLimitationRenameInCatchUpWindow`)
+- [x] `git diff 8023706 -- Makefile` пустой
 
 ### Task 10: [Final] Update documentation
 - [ ] README.md и CLAUDE.md обновлены (Task 8)
