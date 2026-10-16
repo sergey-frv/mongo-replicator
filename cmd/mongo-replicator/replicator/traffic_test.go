@@ -58,7 +58,7 @@ func TestTrafficDialers(t *testing.T) {
 
 			n, err := c.Write(bytes.Repeat([]byte{'s'}, sent))
 			require.NoError(t, err)
-			require.Equal(t, sent, n)
+			require.Equal(t, sent, n, "записано байт")
 			_, err = io.ReadFull(c, make([]byte, got))
 			require.NoError(t, err)
 
@@ -91,7 +91,7 @@ func TestCountingConnPartial(t *testing.T) {
 
 	n, err := c.Read(make([]byte, 10))
 
-	assert.Equal(t, 3, n)
+	assert.Equal(t, 3, n, "прочитано байт")
 	var ne net.Error
 	require.ErrorAs(t, err, &ne)
 	assert.True(t, ne.Timeout())
@@ -99,7 +99,7 @@ func TestCountingConnPartial(t *testing.T) {
 
 	n, err = c.Write(make([]byte, 10))
 
-	assert.Equal(t, 3, n)
+	assert.Equal(t, 3, n, "записано байт")
 	assert.Equal(t, timeoutErr{}, err)
 
 	assert.Equal(t, uint64(3), in.Load())

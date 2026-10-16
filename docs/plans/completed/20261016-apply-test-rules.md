@@ -344,7 +344,7 @@
 - Modify: `cmd/mongo-replicator/replicator/replicator_test.go`
 
 - [x] `TestDecodeAndModel` → отдельные тесты (Technical Details → Таблицы)
-  - ➕ `TestToModelInsert`, `TestToModelDelete` (таблица: `documentKey` из `_id` и составной — случай с простым ключом добавлен), `TestToModelUpdateWithoutDocument` (таблица: `fullDocument: null`, нет поля); сборка события — `changeEvent`, декодирование и проверка resume token — `decodeEvent`
+  - ➕ `TestToModelInsert` (после ревью → `TestToModelUpsert`, см. «Правки после ревью»), `TestToModelDelete` (таблица: `documentKey` из `_id` и составной — случай с простым ключом добавлен), `TestToModelUpdateWithoutDocument` (таблица: `fullDocument: null`, нет поля); сборка события — `changeEvent`, декодирование и проверка resume token — `decodeEvent`
 - [x] `mustMarshal` и остальные `t.Fatal*` → `require`. `mustMarshal` вызывают `lag_test.go` и `status_test.go`, проверить, что они проходят
 - [x] `TestCheckNS` → две таблицы; `TestRawIsCopied`, `TestBatchOrder`, `TestDDLDescriptionParsing` — проверки testify и структура
   - ➕ `TestCheckNS` → `TestCheckNSAllowed` и `TestCheckNSForeign`
@@ -453,6 +453,29 @@
 - [x] README.md — только если ссылается на переименованные хелперы или тесты
   - ➕ не менялся: README ссылается на `TestIntegrationCrossDBRenameIn`/`Out`, `TestLimitationRenameInCatchUpWindow`, `TestLimitationUpdateLookupAfterRename`, префикс `TestIntegrationNet` — все существуют; переименованных хелперов не упоминает
 - [x] move this plan to `docs/plans/completed/`
+
+### Правки после ревью
+Ревью кода после Task 15 (коммит `b9994fd`) и ревью Codex. Журнал мутаций — здесь, а не в теле коммита: `b9994fd` уже без журнала.
+
+- [x] `TestToModelInsert` → `TestToModelUpsert` (таблица `insert`/`replace`/`update`), добавлен `TestToModelNotDML`
+- [x] `waitUntil` — общий для `waitSameDBs` и четырёх ожиданий с ранним выходом `Run` и ошибкой `cond`; `srcNow` — неожиданная ошибка `appendSrcNote` прекращает ожидание; `TestIntegrationNetDstHangLease` — владелец копируется до `Eventually`; `TestStateDir` — `t.Chdir(t.TempDir())`
+- [x] `TestIntegrationLagPosition`: `srcTime`, вторая `insertAt` и опрос `loadCheckpoint` — с новым контекстом после `waitSame` и `waitQuiet` (прежний мог на них истратиться)
+- [x] журнал мутаций:
+  - `TestToModelUpsert/replace`: `event.go:37` `replace` не в списке → FAIL: «replace даёт модель»
+  - `TestToModelUpsert/update`: `event.go:37` `update` не в списке → FAIL: «update даёт модель»
+  - `TestToModelNotDML`: `event.go:52` не-DML даёт delete-модель → FAIL: «drop — не DML»
+  - `TestStateDir`: `main.go:160` `filepath.IsAbs(x)` → `x != ""` → FAIL: `expected: ".../.local/state/mongo-replicator" actual: "rel/state/mongo-replicator"` / «относительный XDG_STATE_HOME не создан»
+  - `waitUntil`, ранний выход (`TestIntegrationRenameAbsentOnTargetStatus`): `ddl.go:100` любой rename — `ErrReservedCollection` → FAIL за 0.9 с: «Run вернулся раньше времени: rename … служебную коллекцию»
+  - `waitUntil`, ошибка `cond` (`TestIntegrationLeaseLost`): контроль в тесте, `findLease("bad/db")` → FAIL за 0.4 с: «репликатор не захватил аренду за 30s» с ошибкой
+  - `TestIntegrationLagPosition`: `replicator.go:358` post-batch token не сохраняется → FAIL через 30 с: «применённая позиция {…}» / «применённая позиция не дошла до записи в другую базу»
+  - `TestIntegrationRenameAbsentOnTargetStatus`: `status.go:127` `Op` = `"x" + op` → FAIL через 30 с: `expected: "rename" actual: "xrename"` / «rename не появился в статусе за 30s»
+  - `TestIntegrationReplayIdempotent`: `replicator.go:141` `Applied()` возвращает половину → FAIL через 30 с: `"2" is not greater than or equal to "4"` / «повтор не дошёл до 4 применённых операций за 30s»
+  - `TestIntegrationLeaseLost`: `lease.go:77` `acquireLease` пишет `owner+"x"` → FAIL за 0.5 с: «Run вернулся раньше времени: … аренда базы цели потеряна»
+  - `srcNow` (`TestIntegrationLagPosition`): контроль в тесте, `appendSrcNote` в `srcNow` заменён ошибкой → FAIL за 0.01 с: «no-op в oplog источника»
+  - `TestIntegrationNetDstHangLease`: контроль в тесте, `r1Owner := r2.owner` → FAIL: «первый остановился в …, аренда до Jan  1 00:00:00.000»
+- [x] `CLAUDE.md`: сообщение у `assert.Equal` — когда из выражения и имени подтеста не виден смысл значения; правило `assert.Equal(t, want, got, "контекст")` читалось как обязательное сообщение у каждой из ~180 проверок без него, где выражение (`lines[0]["l"]`, `s.LastDDL.Op`) и отчёт testify уже говорят, что сравнивается (план сообщения существующих проверок не менял, п. «смысл теста не меняется»)
+- [x] сообщения у проверок безымянного `n` (число документов, байт): `dml`, `dbs`, `ddl`, `drops`, `checkpoint` (integration), `traffic_test.go` — по новому правилу «значение без имени»; `n` как ожидание у `Applied()` после перезапуска (`dbs`, `ddl`, `dml`) — по правилу «почему именно оно», комментарий `dml` перенесён в сообщение
+- [x] `make test`, `make test-integration`, `make lint`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*

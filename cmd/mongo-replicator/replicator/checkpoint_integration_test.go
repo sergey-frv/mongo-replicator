@@ -121,7 +121,7 @@ func TestIntegrationCheckpointInDstDB(t *testing.T) {
 	assert.NotNil(t, doc.Token)
 	n, err := ckptOf(dstDB).CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
-	assert.EqualValues(t, 1, n)
+	assert.EqualValues(t, 1, n, "документов в служебной коллекции")
 
 	names, err := dstClient.Database(dstDB).ListCollectionNames(ctx, bson.D{})
 	require.NoError(t, err)

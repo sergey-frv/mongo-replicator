@@ -188,7 +188,7 @@ func TestIntegrationCrossDBRenameIn(t *testing.T) {
 	assert.Equal(t, []string{"_id_", "y_k"}, indexNames(ctx, t, dstClient, db, "in"))
 	n, err := dstClient.Database(db).Collection("in").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
-	assert.EqualValues(t, 3, n)
+	assert.EqualValues(t, 3, n, "документов in на цели")
 	n, err = dstClient.Database(db).Collection("exist").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, n, "старые документы exist удалены dropTarget")
@@ -301,7 +301,7 @@ func TestIntegrationRestartAfterDDL(t *testing.T) {
 	rn2.waitSame(db)
 	rn2.waitQuiet()
 
-	assert.EqualValues(t, n, rn2.r.Applied())
+	assert.EqualValues(t, n, rn2.r.Applied(), "применено после перезапуска: только вставки в новую a")
 	colls, err := collNames(ctx, dstClient, db)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a", "b"}, colls)

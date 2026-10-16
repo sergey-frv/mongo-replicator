@@ -33,7 +33,7 @@ func TestIntegrationLagPosition(t *testing.T) {
 	cleanDB(t, other)
 	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*waitTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
 
 	own := insertAt(ctx, t, srcClient.Database(db).Collection("items"), int32(1))
@@ -41,6 +41,10 @@ func TestIntegrationLagPosition(t *testing.T) {
 	rn.waitQuiet()
 
 	assert.False(t, rn.ckptTime().Before(own), "чекпойнт %v позади записи %v", rn.ckptTime(), own)
+
+	// новый контекст: прежний мог истратиться на waitSame и waitQuiet
+	ctx, cancel = context.WithTimeout(context.Background(), 2*waitTimeout)
+	defer cancel()
 
 	// время источника для лага: ping с правами на одну базу
 	now, err := rn.r.srcTime(ctx)

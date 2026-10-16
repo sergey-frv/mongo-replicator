@@ -245,7 +245,7 @@ func TestIntegrationFailedOut(t *testing.T) {
 	assert.Empty(t, tmp, "временная коллекция $out осталась на цели")
 	n, err := dstClient.Database(db).Collection("out").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
-	assert.EqualValues(t, 2, n)
+	assert.EqualValues(t, 2, n, "документов out на цели")
 }
 
 // --apply-drop: разрешённый drop применяется в базе цели один раз; повторный drop

@@ -65,7 +65,7 @@ func TestIntegrationSingleDB(t *testing.T) {
 	assert.Equal(t, []string{"y", "z"}, colls)
 	n, err := dstClient.Database(db).Collection("y").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
-	assert.EqualValues(t, 2, n)
+	assert.EqualValues(t, 2, n, "документов y на цели")
 	assert.False(t, dbExists(ctx, t, dstClient, other), "база %s попала на цель", other)
 	// 3 insert + update + delete + финальный insert; события other не считаются
 	assert.EqualValues(t, 6, rn.r.Applied())
@@ -158,7 +158,7 @@ func TestIntegrationSingleDBResume(t *testing.T) {
 	rn2.waitSame(db)
 	rn2.waitQuiet()
 
-	assert.EqualValues(t, n, rn2.r.Applied())
+	assert.EqualValues(t, n, rn2.r.Applied(), "применено после перезапуска: только вставки после остановки")
 	assert.Equal(t, dbPair{src: db, dst: db}, rn2.ckptPair())
 }
 

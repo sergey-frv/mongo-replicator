@@ -92,10 +92,10 @@ func TestIntegrationDML(t *testing.T) {
 	// цель не пустая: совпадение не из-за того, что обе стороны пусты
 	n, err := dstClient.Database(db).Collection("orders").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
-	assert.EqualValues(t, 3, n)
+	assert.EqualValues(t, 3, n, "документов orders на цели")
 	n, err = dstClient.Database(db).Collection("users").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
-	assert.EqualValues(t, 2, n)
+	assert.EqualValues(t, 2, n, "документов users на цели")
 	assert.NotNil(t, rn.ckptToken(), "чекпойнт сохранён")
 	// 4 insert + 3 update (UpdateOne + UpdateMany на 2) + replace + delete; 3 insert + 2 update + delete
 	assert.EqualValues(t, 15, rn.r.Applied())
@@ -158,10 +158,10 @@ func TestIntegrationTransaction(t *testing.T) {
 
 	n, err := dstClient.Database(db).Collection("accounts").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
-	assert.EqualValues(t, 2, n)
+	assert.EqualValues(t, 2, n, "документов accounts на цели")
 	n, err = dstClient.Database(db).Collection("ledger").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
-	assert.EqualValues(t, 2, n)
+	assert.EqualValues(t, 2, n, "документов ledger на цели")
 	// 3 insert до транзакции + insert, update, delete, update, insert в транзакции
 	assert.EqualValues(t, 8, rn.r.Applied())
 }
@@ -199,8 +199,7 @@ func TestIntegrationResume(t *testing.T) {
 	rn2.waitSame(db)
 	rn2.waitQuiet()
 
-	// ровно n: продолжили с токена, события до остановки повторно не применялись
-	assert.EqualValues(t, n, rn2.r.Applied())
+	assert.EqualValues(t, n, rn2.r.Applied(), "применено после перезапуска: только события после остановки, без повтора прежних")
 }
 
 func TestIntegrationReplayIdempotent(t *testing.T) {
