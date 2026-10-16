@@ -219,9 +219,9 @@ github.com/sergey-frv/mongo-replicator
 **Files:**
 - нет изменений в репозитории (эталон — в `/tmp/go-layout/`)
 
-- [ ] `git status --short` — допустим только неотслеживаемый файл этого плана; при других изменениях — ⚠️ и остановиться
-- [ ] снять имена юнит- и интеграционных тестов (Testing Strategy), отсортировать; сохранить копию исходников «до»
-- [ ] `make test`, `make test-integration`, `make lint` — исходное состояние зелёное
+- [x] `git status --short` — допустим только неотслеживаемый файл этого плана; при других изменениях — ⚠️ и остановиться (чисто; план уже закоммичен в 98356d0, ветка `go-project-layout`)
+- [x] снять имена юнит- и интеграционных тестов (Testing Strategy), отсортировать; сохранить копию исходников «до» (`/tmp/go-layout/unit.txt` — 143, `integ.txt` — 204, `before/` — 39 `.go`)
+- [x] `make test`, `make test-integration`, `make lint` — исходное состояние зелёное (пропущены только `TestLimitationUpdateLookupAfterRename`, `TestLimitationRenameInCatchUpWindow` — как и раньше)
 
 ### Task 2: Модуль `github.com/sergey-frv/mongo-replicator`
 
