@@ -159,11 +159,14 @@ func TestIntegrationLeaseLost(t *testing.T) {
 
 	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 	owner := rn.r.owner
-	require.EventuallyWithT(t, func(c *assert.CollectT) {
+	rn.waitUntil(func(c *assert.CollectT) error {
 		st, _, err := findLease(db)
-		require.NoError(c, err)
+		if err != nil {
+			return err
+		}
 		assert.Equal(c, owner, st.Owner, "владелец аренды")
-	}, waitTimeout, pollEvery, "репликатор не захватил аренду за %s", waitTimeout)
+		return nil
+	}, "репликатор не захватил аренду за %s", waitTimeout)
 
 	const intruder = "intruder:1:00000000"
 	_, err := ckptOf(db).UpdateOne(ctx,

@@ -49,6 +49,7 @@ func TestParseOptsEnv(t *testing.T) {
 }
 
 func TestStateDir(t *testing.T) {
+	t.Chdir(t.TempDir()) // относительный XDG_STATE_HOME проверяется в чистом рабочем каталоге
 	home, xdg := t.TempDir(), t.TempDir()
 	for _, tc := range []struct {
 		name, opt, xdg, want string

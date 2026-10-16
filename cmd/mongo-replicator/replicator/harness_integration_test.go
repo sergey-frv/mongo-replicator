@@ -195,12 +195,17 @@ func srcNow(t *testing.T) uint32 {
 	t.Helper()
 	name, last := t.Name(), lastSrcSec // условие идёт в своей горутине: глобальное копируем до вызова
 	var ts uint32
+	var noteErr error
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		op, err := appendSrcNote(name)
-		require.NoError(c, err)
+		if err != nil {
+			noteErr = err // неожиданная ошибка прекращает ожидание и проверяется после него
+			return
+		}
 		ts = op.T
 		assert.Greater(c, ts, last, "время источника не двигается: %d", ts)
 	}, 5*time.Second, 100*time.Millisecond, "время источника не ушло за секунду последней операции обвязки")
+	require.NoError(t, noteErr, "no-op в oplog источника")
 	return ts
 }
 
@@ -328,18 +333,29 @@ func (rn *runner) waitSame(db string) {
 // waitSameDBs ждёт совпадения базы srcDB источника и dstDB цели; если Run уже вернулся — падает сразу.
 func (rn *runner) waitSameDBs(srcDB, dstDB string) {
 	rn.t.Helper()
+	rn.waitUntil(func(c *assert.CollectT) error {
+		ok, diff := sameDBs(srcDB, dstDB)
+		assert.True(c, ok, "база %s → %s не совпала: %s", srcDB, dstDB, diff)
+		return nil
+	}, "база %s → %s не совпала за %s", srcDB, dstDB, waitTimeout)
+}
+
+// waitUntil ждёт, пока проверки cond на c пройдут. Ранний выход Run и ошибка,
+// которую вернул cond (возвращать до проверок на c), прекращают ожидание
+// и проверяются после него.
+func (rn *runner) waitUntil(cond func(c *assert.CollectT) error, msg string, args ...any) {
+	rn.t.Helper()
 	var exited bool
-	var exitErr error
+	var exitErr, condErr error
 	require.EventuallyWithT(rn.t, func(c *assert.CollectT) {
-		// ранний выход Run прекращает ожидание и проверяется после него
 		if done, err := rn.exited(); done {
 			exited, exitErr = true, err
 			return
 		}
-		ok, diff := sameDBs(srcDB, dstDB)
-		assert.True(c, ok, "база %s → %s не совпала: %s", srcDB, dstDB, diff)
-	}, waitTimeout, pollEvery, "база %s → %s не совпала за %s", srcDB, dstDB, waitTimeout)
+		condErr = cond(c)
+	}, waitTimeout, pollEvery, append([]any{msg}, args...)...)
 	require.False(rn.t, exited, "Run вернулся раньше времени: %v", exitErr)
+	require.NoError(rn.t, condErr, append([]any{msg}, args...)...)
 }
 
 // waitQuiet ждёт, пока чекпойнт и Applied перестанут меняться. Закрывает

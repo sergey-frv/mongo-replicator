@@ -390,6 +390,7 @@ func TestIntegrationNetDstHangLease(t *testing.T) {
 	// до сервера не доходят, и срок перестаёт двигаться
 	var r1Until, acquiredAt time.Time
 	var unexpected error
+	r1Owner := r1.owner // условие идёт в своей горутине: общее копируем до вызова
 	require.Eventually(t, func() bool {
 		// неожиданная ошибка прекращает ожидание и проверяется после него
 		st, ok, err := findLease(db)
@@ -397,7 +398,7 @@ func TestIntegrationNetDstHangLease(t *testing.T) {
 			unexpected = err
 			return true
 		}
-		if ok && st.Owner == r1.owner {
+		if ok && st.Owner == r1Owner {
 			r1Until = st.LeaseUntil
 		}
 		err = r2.acquireLease(ctx)

@@ -50,11 +50,14 @@ func TestIntegrationLagPosition(t *testing.T) {
 
 	n := rn.r.Applied()
 	foreign := insertAt(ctx, t, srcClient.Database(other).Collection("c"), int32(1))
-	require.EventuallyWithT(t, func(c *assert.CollectT) {
+	rn.waitUntil(func(c *assert.CollectT) error {
 		ck, err := rn.r.loadCheckpoint(ctx) // читает только dst: безопасно во время Run
-		require.NoError(c, err)
+		if err != nil {
+			return err
+		}
 		assert.False(c, ck.ClusterTime.Before(foreign), "применённая позиция %v", ck.ClusterTime)
-	}, waitTimeout, pollEvery, "применённая позиция не дошла до записи в другую базу %v", foreign)
+		return nil
+	}, "применённая позиция не дошла до записи в другую базу %v", foreign)
 
 	assert.Equal(t, n, rn.r.Applied(), "событие другой базы применено")
 }

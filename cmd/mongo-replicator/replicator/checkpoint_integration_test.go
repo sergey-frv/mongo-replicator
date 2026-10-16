@@ -208,7 +208,7 @@ func TestIntegrationRenameReserved(t *testing.T) {
 		name, from, to string
 		dst            []string // коллекции цели после ошибки
 	}{
-		{"to", "foo", ckptColl, []string{"foo", "keep"}}, // имя теста → имя базы: ≤ 63 символов
+		{"to", "foo", ckptColl, []string{"foo", "keep"}}, // имя теста → имя базы: ≤ 63 байт
 		{"from", ckptColl, "foo", []string{"keep"}},
 	}
 	for _, c := range cases {

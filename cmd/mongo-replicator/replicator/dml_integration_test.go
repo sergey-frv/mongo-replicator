@@ -260,8 +260,10 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 	// цель уже совпадает, поэтому сначала ждём, что повтор действительно прошёл:
 	// insert X, delete X, insert Y, update Y (update X пропущен)
 	const m = 4
-	require.Eventually(t, func() bool { return rn2.r.Applied() >= m }, waitTimeout, pollEvery,
-		"повтор не дошёл до %d применённых операций за %s", m, waitTimeout)
+	rn2.waitUntil(func(c *assert.CollectT) error {
+		assert.GreaterOrEqual(c, rn2.r.Applied(), int64(m), "применено операций")
+		return nil
+	}, "повтор не дошёл до %d применённых операций за %s", m, waitTimeout)
 	rn2.waitSame(db)
 	rn2.waitQuiet()
 

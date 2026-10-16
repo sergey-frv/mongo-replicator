@@ -164,10 +164,12 @@ func TestIntegrationRenameAbsentOnTargetStatus(t *testing.T) {
 	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 
 	renameColl(ctx, t, db, "a", "b")
-	require.Eventually(t, func() bool {
+	rn.waitUntil(func(c *assert.CollectT) error {
 		d := rn.r.Status().LastDDL
-		return d != nil && d.Op == "rename"
-	}, waitTimeout, pollEvery, "rename не появился в статусе за %s", waitTimeout)
+		require.NotNil(c, d, "DDL в статусе")
+		assert.Equal(c, "rename", d.Op, "последний DDL")
+		return nil
+	}, "rename не появился в статусе за %s", waitTimeout)
 
 	s := rn.r.Status()
 	assert.Equal(t, db+".a", s.LastDDL.NS)

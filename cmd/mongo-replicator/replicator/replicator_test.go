@@ -44,22 +44,27 @@ func decodeEvent(t *testing.T, d bson.D) event {
 	return ev
 }
 
-func TestToModelInsert(t *testing.T) {
-	ev := decodeEvent(t, changeEvent("insert", bson.D{{Key: "_id", Value: int32(7)}},
-		bson.E{Key: "clusterTime", Value: bson.Timestamp{T: 100, I: 2}},
-		bson.E{Key: "fullDocument", Value: bson.D{{Key: "_id", Value: int32(7)}, {Key: "z", Value: 1.5}, {Key: "a", Value: "x"}}},
-	))
+// insert, replace и update с документом — replace с upsert по _id.
+func TestToModelUpsert(t *testing.T) {
+	for _, op := range []string{"insert", "replace", "update"} {
+		t.Run(op, func(t *testing.T) {
+			ev := decodeEvent(t, changeEvent(op, bson.D{{Key: "_id", Value: int32(7)}},
+				bson.E{Key: "clusterTime", Value: bson.Timestamp{T: 100, I: 2}},
+				bson.E{Key: "fullDocument", Value: bson.D{{Key: "_id", Value: int32(7)}, {Key: "z", Value: 1.5}, {Key: "a", Value: "x"}}},
+			))
 
-	m, ok := toModel(&ev)
+			m, ok := toModel(&ev)
 
-	require.True(t, ok, "вставка даёт модель")
-	require.IsType(t, &mongo.ReplaceOneModel{}, m, "вставка — replace")
-	rm := m.(*mongo.ReplaceOneModel)
-	assert.Equal(t, bson.Raw(mustMarshal(t, bson.D{{Key: "_id", Value: int32(7)}})), bson.Raw(mustMarshal(t, rm.Filter)), "фильтр по _id")
-	assert.Equal(t, bson.Raw(mustMarshal(t, bson.D{{Key: "_id", Value: int32(7)}, {Key: "z", Value: 1.5}, {Key: "a", Value: "x"}})), rm.Replacement,
-		"документ доходит байт в байт (порядок полей и типы)")
-	require.NotNil(t, rm.Upsert, "upsert не задан")
-	assert.True(t, *rm.Upsert, "upsert не задан")
+			require.True(t, ok, "%s даёт модель", op)
+			require.IsType(t, &mongo.ReplaceOneModel{}, m, "%s — replace", op)
+			rm := m.(*mongo.ReplaceOneModel)
+			assert.Equal(t, bson.Raw(mustMarshal(t, bson.D{{Key: "_id", Value: int32(7)}})), bson.Raw(mustMarshal(t, rm.Filter)), "фильтр по _id")
+			assert.Equal(t, bson.Raw(mustMarshal(t, bson.D{{Key: "_id", Value: int32(7)}, {Key: "z", Value: 1.5}, {Key: "a", Value: "x"}})), rm.Replacement,
+				"документ доходит байт в байт (порядок полей и типы)")
+			require.NotNil(t, rm.Upsert, "upsert не задан")
+			assert.True(t, *rm.Upsert, "upsert не задан")
+		})
+	}
 }
 
 func TestToModelDelete(t *testing.T) {
@@ -103,6 +108,16 @@ func TestToModelUpdateWithoutDocument(t *testing.T) {
 			assert.Nil(t, m, "update без документа пропускается")
 		})
 	}
+}
+
+// Не DML-событие (DDL) модели не даёт.
+func TestToModelNotDML(t *testing.T) {
+	ev := decodeEvent(t, changeEvent("drop", bson.D{{Key: "_id", Value: int32(7)}}))
+
+	m, ok := toModel(&ev)
+
+	assert.False(t, ok, "drop — не DML")
+	assert.Nil(t, m, "drop — не DML")
 }
 
 // Декодированные bson.Raw не должны ссылаться на буфер события:
