@@ -184,7 +184,7 @@ func withPanel(opts options, status func() replicator.Status, logFile *os.File) 
 		log.Warn().Msg("полный лог не пишется: добавьте --log-file")
 	}
 	file, fileLevel := fileWriter(logFile), logLevels[opts.LogFileLevel]
-	console, stopP, killP := panel.Start(status, os.Stdout)
+	console, stopP, killP := panel.Start(status, os.Stdout, nil, nil)
 	log.Logger = newLogger(console, true, max(zerolog.WarnLevel, logLevels[opts.LogLevel]), file, fileLevel)
 	restore := func() {
 		log.Logger = newLogger(os.Stdout, stdoutTTY(), logLevels[opts.LogLevel], file, fileLevel)

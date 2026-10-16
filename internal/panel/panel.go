@@ -5,12 +5,15 @@ package panel
 import (
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"golang.org/x/term"
 
 	"github.com/sergey-frv/mongo-replicator/internal/replicator"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
@@ -29,10 +32,14 @@ type panel struct {
 	at     time.Time // когда снят st
 	prev   traffic.Info
 	prevAt time.Time // нулевое — предыдущего снимка нет
+
+	sendSignal func(os.Signal) // сигнал своему процессу (клавиши Ctrl+C, Ctrl+\)
+	jobControl func() bool     // есть ли управление заданиями (можно ли Ctrl+Z)
+	exitSig    os.Signal       // отправить после выхода панели (Ctrl+\)
 }
 
 func newPanel(status func() replicator.Status) *panel {
-	return &panel{status: status, st: status(), at: time.Now()}
+	return &panel{status: status, st: status(), at: time.Now(), jobControl: jobControl}
 }
 
 func tick() tea.Cmd {
@@ -47,7 +54,10 @@ func (m *panel) snapshot() {
 }
 
 func (m *panel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg.(type) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		cmd := m.key(msg)
+		return m, cmd
 	case tickMsg:
 		m.snapshot()
 		return m, tick()
@@ -60,10 +70,39 @@ func (m *panel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// key переводит клавиши в прежние действия терминала. Панель читает клавиатуру в
+// raw-режиме: без него терминал сам выводил бы набранное и Enter поверх кадра и сбивал
+// перерисовку. В raw-режиме ISIG выключен и клавиши сигналов приходят нажатиями:
+//   - Ctrl+C — SIGINT своему процессу: остановкой управляет main, как без панели;
+//   - Ctrl+\ — SIGQUIT, но только после выхода панели (exitSig): рантайм печатает дамп
+//     и выходит без defer, а в raw-режиме дамп был бы нечитаем и терминал не
+//     восстановился бы;
+//   - Ctrl+Z — приостановка, только при управлении заданиями: в осиротевшей группе
+//     процессов ядро отбрасывает SIGTSTP, и bubbletea навсегда ждал бы SIGCONT.
+//
+// Сравнение по Keystroke: он берёт BaseCode, и Ctrl+С на русской раскладке в
+// kitty-совместимом терминале — тоже ctrl+c (с ReportAlternateKeys во View).
+func (m *panel) key(k tea.KeyPressMsg) tea.Cmd {
+	switch k.Keystroke() {
+	case "ctrl+c":
+		m.sendSignal(os.Interrupt)
+	case "ctrl+\\":
+		m.exitSig = syscall.SIGQUIT
+		return tea.Quit
+	case "ctrl+z":
+		if m.jobControl() {
+			return tea.Suspend
+		}
+	}
+	return nil
+}
+
 // View завершается переводом строки: при выходе рендерер стирает экран от последней
 // строки кадра, без него пропала бы строка состояния.
 func (m *panel) View() tea.View {
-	return tea.NewView(renderPanel(m.st, m.at, m.prev, m.prevAt) + "\n")
+	v := tea.NewView(renderPanel(m.st, m.at, m.prev, m.prevAt) + "\n")
+	v.KeyboardEnhancements.ReportAlternateKeys = true // BaseCode для key
+	return v
 }
 
 var (
@@ -239,14 +278,45 @@ func (w teaWriter) Write(b []byte) (int, error) {
 // лога, stop — показать финальный снимок и дождаться выхода, и kill — выход без
 // финального снимка с восстановлением терминала (для паники). extra — дополнительные
 // опции программы.
-func Start(status func() replicator.Status, out io.Writer, extra ...tea.ProgramOption,
+//
+// in — терминал, с которого панель читает клавиатуру (на время работы — raw-режим,
+// клавиши — по panel.key), nil — клавиатура не читается и терминал не трогается.
+// *os.File, а не io.Reader: nil-файл в интерфейсе не равен nil, и bubbletea взял бы
+// его вводом. sendSignal отправляет сигнал своему процессу, обязателен при in != nil.
+func Start(status func() replicator.Status, out io.Writer, in *os.File, sendSignal func(os.Signal),
+	extra ...tea.ProgramOption,
 ) (console io.Writer, stop, kill func()) {
-	opts := append([]tea.ProgramOption{tea.WithInput(nil), tea.WithoutSignalHandler(), tea.WithOutput(out)}, extra...)
-	p := tea.NewProgram(newPanel(status), opts...)
+	input := tea.WithInput(nil)
+	if in != nil {
+		input = tea.WithInput(in)
+	}
+	opts := append([]tea.ProgramOption{input, tea.WithoutSignalHandler(), tea.WithOutput(out)}, extra...)
+	m := newPanel(status)
+	m.sendSignal = sendSignal
+	p := tea.NewProgram(m, opts...)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = p.Run() // ошибку некуда писать: лог уйдёт в fallback
+		var (
+			fd    int
+			saved *term.State
+		)
+		if in != nil {
+			fd = int(in.Fd()) //nolint:gosec // дескриптор терминала помещается в int
+			saved, _ = term.GetState(fd)
+		}
+		final, err := p.Run()
+		// страховка: при ранней ошибке старта bubbletea выходит, не восстановив терминал
+		if saved != nil {
+			_ = term.Restore(fd, saved)
+		}
+		if err != nil {
+			_, _ = fmt.Fprintf(out, "панель статуса: %v\n", err)
+		}
+		// терминал восстановлен — теперь сигнал (Ctrl+\) не испортит его
+		if pm, ok := final.(*panel); ok && pm.exitSig != nil {
+			sendSignal(pm.exitSig)
+		}
 	}()
 	// свой done, а не p.Wait: канал Wait создаёт Run, до его старта Wait висит
 	stop = func() {

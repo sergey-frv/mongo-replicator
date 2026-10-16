@@ -107,15 +107,16 @@
 - Create: `internal/panel/pty_linux_test.go` (помощник псевдотерминала и тесты на нём)
 - Modify: `go.mod` (`golang.org/x/sys` — прямая зависимость; `vendor/modules.txt` не меняется)
 
-- [ ] `Start`: `in *os.File`, `sendSignal`; `in == nil` — прежнее `tea.WithInput(nil)`; `WithoutSignalHandler` остаётся; страховочное восстановление `term.GetState`/`Restore`; ошибка `Run` — в `fallback`
-- [ ] модель: `KeyPressMsg` по `Keystroke()` — Ctrl+C → `SIGINT`; Ctrl+\ → `exitSig` и `tea.Quit`, сигнал из горутины `Start` после `Run`; Ctrl+Z → `tea.Suspend` при `jobControl()`, иначе ничего; `ReportAlternateKeys` во `View`; doc-комментарии — почему клавиши переводятся в сигналы и почему Ctrl+\ после выхода
-- [ ] `jobControl` для Linux (`Getpgrp() != Getsid(0)`) и false для остальных ОС
-- [ ] обновить существующие вызовы `Start` в тестах (`in = nil`)
-- [ ] тесты `Update` (таблица по клавишам): `ctrl+c` → `SIGINT`, без команды; Ctrl+С на кириллице с `BaseCode: 'c'` → `SIGINT`; `ctrl+\` → команда `tea.Quit`, сигнала пока нет, `exitSig` = `SIGQUIT`; `ctrl+z` при `jobControl` true → `tea.SuspendMsg`; при false → нет команды; обычная клавиша и Enter → ничего
-- [ ] тест: `Start` с `(*os.File)(nil)` рисует панель (расширить `TestStartPanel`)
-- [ ] тесты на псевдотерминале: во время работы `ECHO` и `ISIG` сняты; после `stop` и после `kill` termios как до запуска; байт 0x03 в мастер → подставная функция получила `SIGINT`; байт 0x1c → панель вышла, `SIGQUIT` получен после восстановления termios. **Байт 0x1a не писать**
-- [ ] `go.mod`: `golang.org/x/sys` без `// indirect` (правкой или `docker compose run --rm --no-deps app sh -c "go mod tidy && go mod vendor"`); `git diff vendor/` — пусто
-- [ ] `make test`, `make lint` — должно пройти; по `-v` убедиться, что тесты на псевдотерминале выполнились
+- [x] `Start`: `in *os.File`, `sendSignal`; `in == nil` — прежнее `tea.WithInput(nil)`; `WithoutSignalHandler` остаётся; страховочное восстановление `term.GetState`/`Restore`; ошибка `Run` — в `fallback`
+- [x] модель: `KeyPressMsg` по `Keystroke()` — Ctrl+C → `SIGINT`; Ctrl+\ → `exitSig` и `tea.Quit`, сигнал из горутины `Start` после `Run`; Ctrl+Z → `tea.Suspend` при `jobControl()`, иначе ничего; `ReportAlternateKeys` во `View`; doc-комментарии — почему клавиши переводятся в сигналы и почему Ctrl+\ после выхода
+- [x] `jobControl` для Linux (`Getpgrp() != Getsid(0)`) и false для остальных ОС
+- [x] обновить существующие вызовы `Start` в тестах (`in = nil`)
+- [x] тесты `Update` (таблица по клавишам): `ctrl+c` → `SIGINT`, без команды; Ctrl+С на кириллице с `BaseCode: 'c'` → `SIGINT`; `ctrl+\` → команда `tea.Quit`, сигнала пока нет, `exitSig` = `SIGQUIT`; `ctrl+z` при `jobControl` true → `tea.SuspendMsg`; при false → нет команды; обычная клавиша и Enter → ничего
+- [x] тест: `Start` с `(*os.File)(nil)` рисует панель (расширить `TestStartPanel`)
+- [x] тесты на псевдотерминале: во время работы `ECHO` и `ISIG` сняты; после `stop` и после `kill` termios как до запуска; байт 0x03 в мастер → подставная функция получила `SIGINT`; байт 0x1c → панель вышла, `SIGQUIT` получен после восстановления termios. **Байт 0x1a не писать**
+- [x] `go.mod`: `golang.org/x/sys` без `// indirect` (правкой или `docker compose run --rm --no-deps app sh -c "go mod tidy && go mod vendor"`); `git diff vendor/` — пусто
+- [x] `make test`, `make lint` — должно пройти; по `-v` убедиться, что тесты на псевдотерминале выполнились
+- ➕ `main.go`: вызов `panel.Start(status, os.Stdout, nil, nil)` временно, чтобы собирался пакет `main`; ввод и `sendSignal` — Task 2
 
 ### Task 2: `main` выбирает ввод для панели и пересылает сигналы
 

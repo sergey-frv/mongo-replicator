@@ -3,8 +3,10 @@ package panel
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -172,6 +174,57 @@ func TestPanelUpdate(t *testing.T) {
 	assert.IsType(t, tea.QuitMsg{}, cmd())
 }
 
+// cmdMsg — сообщение команды, nil — команды нет
+func cmdMsg(cmd tea.Cmd) tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	return cmd()
+}
+
+func TestPanelKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		key        tea.KeyPressMsg
+		jobControl bool
+		wantSigs   []os.Signal
+		wantMsg    tea.Msg
+		wantExit   os.Signal
+	}{
+		{name: "ctrl+c", key: tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}, wantSigs: []os.Signal{os.Interrupt}},
+		{name: "ctrl+c на кириллице", key: tea.KeyPressMsg{Code: 'с', BaseCode: 'c', Mod: tea.ModCtrl},
+			wantSigs: []os.Signal{os.Interrupt}},
+		{name: "ctrl+\\", key: tea.KeyPressMsg{Code: '\\', Mod: tea.ModCtrl}, wantMsg: tea.QuitMsg{},
+			wantExit: syscall.SIGQUIT},
+		{name: "ctrl+z с управлением заданиями", key: tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl}, jobControl: true,
+			wantMsg: tea.SuspendMsg{}},
+		{name: "ctrl+z без управления заданиями", key: tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl}},
+		{name: "буква", key: tea.KeyPressMsg{Code: 'a', Text: "a"}},
+		{name: "enter", key: tea.KeyPressMsg{Code: tea.KeyEnter}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sigs []os.Signal
+			m := newPanel(func() replicator.Status { return replicator.Status{} })
+			m.sendSignal = func(s os.Signal) { sigs = append(sigs, s) }
+			m.jobControl = func() bool { return tc.jobControl }
+
+			_, cmd := m.Update(tc.key)
+
+			assert.Equal(t, tc.wantSigs, sigs, "сигналы при нажатии")
+			assert.Equal(t, tc.wantMsg, cmdMsg(cmd), "сообщение команды")
+			assert.Equal(t, tc.wantExit, m.exitSig, "сигнал после выхода панели")
+		})
+	}
+}
+
+func TestPanelViewReportsAlternateKeys(t *testing.T) {
+	m := newPanel(func() replicator.Status { return replicator.Status{} })
+
+	v := m.View()
+
+	assert.True(t, v.KeyboardEnhancements.ReportAlternateKeys, "BaseCode для Ctrl+С на кириллице")
+}
+
 // writeTimeout — Write в teaWriter должна вернуться, иначе тест падает, а не висит
 func writeTimeout(t *testing.T, w teaWriter, s string) {
 	t.Helper()
@@ -235,7 +288,7 @@ func TestStartPanel(t *testing.T) {
 	}
 	console, stop, kill := Start(func() replicator.Status {
 		return replicator.Status{DB: "src", DstDB: "dst", Lag: -1, State: replicator.StateStopped}
-	}, &out, tea.WithWindowSize(120, 10)) // вывод не терминал: без размера панель не рисуется
+	}, &out, nil, nil, tea.WithWindowSize(120, 10)) // вывод не терминал: без размера панель не рисуется
 
 	writeTimeout(t, console.(teaWriter), "WRN над панелью\n")
 	for _, line := range lines {
