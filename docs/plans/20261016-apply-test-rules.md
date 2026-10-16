@@ -366,10 +366,15 @@
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/{statefile,status,traffic,lag}_test.go`
 
-- [ ] `statefile_test.go:265`: сон → `assert.Never` «чужой файл не затёрт» и финальная проверка владельца; `statefile_test.go:247` — сообщение в `Eventually`
-- [ ] `TestStatusConcurrent` остаётся (Technical Details → Таблицы); таблицы, структура и проверки во всех тестах файлов
-- [ ] мутации на каждый изменённый тест
-- [ ] `make test`, `make lint`, охранная проверка; коммит с журналом мутаций
+- [x] `statefile_test.go:265`: сон → `assert.Never` «чужой файл не затёрт» и финальная проверка владельца; `statefile_test.go:247` — сообщение в `Eventually`
+  - ➕ путь файла копируется в локальную переменную до `Eventually`/`Never`
+- [x] `TestStatusConcurrent` остаётся (Technical Details → Таблицы); таблицы, структура и проверки во всех тестах файлов
+  - ➕ проверки в файлах уже на testify; правки — блоки пустыми строками
+  - ➕ `TestStopped` → `TestStoppedError` и `TestStoppedCanceled` (второй случай пересоздавал репликатор); хвост `TestLogMachine` «без каталога» → `TestLogMachineNoDir`
+  - ➕ `TestApplyDDLSkippedStatus` → таблица («не поддерживается», «view», у каждого случая свой репликатор); для view добавлены проверки `NS` и `At`
+- [x] мутации на каждый изменённый тест
+  - ⚠️ `TestLogMachineNoDir` не падает без проверки `StateDir == ""` в `logMachine`: `os.ReadDir("")` возвращает ошибку, и сводки нет и так. Проверка видна только по отсутствию WARN в логе; так же было и в исходном `TestLogMachine`
+- [x] `make test`, `make lint`, охранная проверка; коммит с журналом мутаций
 
 ### Task 10: Юнит-тесты `main`: ошибки, панель, лог
 

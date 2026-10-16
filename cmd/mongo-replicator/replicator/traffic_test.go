@@ -90,6 +90,7 @@ func TestCountingConnPartial(t *testing.T) {
 	c := &countingConn{Conn: partialConn{n: 3, err: timeoutErr{}}, in: &in, out: &out}
 
 	n, err := c.Read(make([]byte, 10))
+
 	assert.Equal(t, 3, n)
 	var ne net.Error
 	require.ErrorAs(t, err, &ne)
@@ -97,6 +98,7 @@ func TestCountingConnPartial(t *testing.T) {
 	assert.Equal(t, timeoutErr{}, err, "ошибка не обёрнута")
 
 	n, err = c.Write(make([]byte, 10))
+
 	assert.Equal(t, 3, n)
 	assert.Equal(t, timeoutErr{}, err)
 
@@ -112,7 +114,9 @@ func TestCountingConnDeadline(t *testing.T) {
 	defer c.Close()
 
 	require.NoError(t, c.SetReadDeadline(time.Now().Add(-time.Second)))
+
 	_, err = c.Read(make([]byte, 1))
+
 	var ne net.Error
 	require.ErrorAs(t, err, &ne, "таймаут виден драйверу как net.Error")
 	assert.True(t, ne.Timeout())
@@ -124,9 +128,10 @@ func TestTrafficDialClosedPort(t *testing.T) {
 	require.NoError(t, err)
 	addr := ln.Addr().String()
 	require.NoError(t, ln.Close())
-
 	var tr Traffic
+
 	c, err := tr.DstDialer().DialContext(context.Background(), "tcp", addr)
+
 	require.Error(t, err)
 	assert.Nil(t, c)
 	assert.Equal(t, TrafficInfo{}, tr.Snapshot())
@@ -134,6 +139,7 @@ func TestTrafficDialClosedPort(t *testing.T) {
 
 func TestTrafficSnapshotNil(t *testing.T) {
 	var tr *Traffic
+
 	assert.Equal(t, TrafficInfo{}, tr.Snapshot())
 }
 
@@ -142,6 +148,7 @@ func TestTrafficFields(t *testing.T) {
 	l := zerolog.New(&buf)
 	prev := TrafficInfo{SrcIn: 1000, SrcOut: 100, DstIn: 10, DstOut: 500}
 	cur := TrafficInfo{SrcIn: 21000, SrcOut: 200, DstIn: 30, DstOut: 10500}
+
 	trafficFields(l.Info(), cur, prev, 10*time.Second).Send()
 
 	var got map[string]any

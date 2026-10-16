@@ -36,7 +36,9 @@ func quietLog(t *testing.T) {
 
 func TestStatusInitial(t *testing.T) {
 	r := New(nil, nil, Config{DB: "shop", DstDB: "shop_v2"})
+
 	s := r.Status()
+
 	assert.Equal(t, "shop", s.DB)
 	assert.Equal(t, "shop_v2", s.DstDB)
 	assert.Equal(t, StateStarting, s.State)
@@ -53,7 +55,9 @@ func TestStatusAppliedAndTraffic(t *testing.T) {
 	r.applied.Store(7)
 	tr.SrcIn.Store(100)
 	tr.DstOut.Store(200)
+
 	s := r.Status()
+
 	assert.EqualValues(t, 7, s.Applied)
 	assert.Equal(t, TrafficInfo{SrcIn: 100, DstOut: 200}, s.Traffic)
 }
@@ -61,15 +65,18 @@ func TestStatusAppliedAndTraffic(t *testing.T) {
 func TestBatchCounts(t *testing.T) {
 	var b batch
 	m := mongo.NewDeleteOneModel()
+
 	for _, op := range []string{"insert", "insert", "update", "replace", "delete", "delete", "delete"} {
 		b.add(namespace{"d", "a"}, op, m)
 	}
+
 	assert.Equal(t, OpCounts{Ins: 2, Upd: 1, Rep: 1, Del: 3}, b.counts)
 	assert.Equal(t, 7, b.n)
 }
 
 func TestBatchInfo(t *testing.T) {
 	at := time.Date(2026, 10, 15, 12, 1, 34, 0, time.UTC)
+
 	assert.Nil(t, batchInfo(&batch{}, at), "пустая пачка не описывается")
 
 	m := mongo.NewDeleteOneModel()
@@ -77,7 +84,9 @@ func TestBatchInfo(t *testing.T) {
 	b.add(namespace{"d", "links"}, "insert", m)
 	b.add(namespace{"d", "clicks"}, "update", m)
 	b.add(namespace{"d", "links"}, "delete", m)
+
 	bi := batchInfo(&b, at)
+
 	require.NotNil(t, bi)
 	assert.Equal(t, at, bi.At)
 	assert.Equal(t, OpCounts{Ins: 1, Upd: 1, Del: 1}, bi.Ops)
@@ -87,7 +96,9 @@ func TestBatchInfo(t *testing.T) {
 	for _, c := range []string{"a", "b", "c"} {
 		b.add(namespace{"d", c}, "replace", m)
 	}
+
 	bi = batchInfo(&b, at)
+
 	assert.Equal(t, []string{"links", "clicks", "a"}, bi.Colls, "первые maxBatchColls в порядке появления")
 	assert.Equal(t, 2, bi.More)
 	assert.Equal(t, OpCounts{Ins: 1, Upd: 1, Rep: 3, Del: 1}, bi.Ops)
@@ -98,7 +109,9 @@ func TestFlushErrorKeepsLastBatch(t *testing.T) {
 	r := New(nil, lazyClient(t), Config{DB: "d"})
 	holdLease(r)
 	r.pending.add(namespace{"d", "c"}, "delete", mongo.NewDeleteOneModel().SetFilter(bson.D{{Key: "_id", Value: 1}}))
+
 	require.Error(t, r.flush(context.Background()))
+
 	assert.Nil(t, r.Status().LastBatch)
 }
 
@@ -106,29 +119,39 @@ func TestFlushEmptyKeepsLastBatch(t *testing.T) {
 	r := New(nil, nil, Config{DB: "d"})
 	prev := &BatchInfo{At: time.Now()}
 	r.st.LastBatch = prev
+
 	require.NoError(t, r.flush(context.Background()))
+
 	assert.Same(t, prev, r.Status().LastBatch, "пустой flush (простой) последнюю пачку не затирает")
 }
 
 func TestApplyDDLSkippedStatus(t *testing.T) {
-	quietLog(t)
-	r := New(nil, lazyClient(t), Config{DB: "d"})
-	holdLease(r)
+	for _, tc := range []struct {
+		name                        string
+		ev                          event
+		wantOp, wantNS, wantDetails string
+	}{
+		{"не поддерживается", event{OperationType: "modify", NS: namespace{"d", "c"}},
+			"modify", "d.c", "не поддерживается, пропущено"},
+		{"view", event{OperationType: "create", NS: namespace{"d", "v"},
+			OpDesc: mustMarshal(t, bson.D{{Key: "viewOn", Value: "c"}})},
+			"create", "d.v", "view, пропущено"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			quietLog(t)
+			r := New(nil, lazyClient(t), Config{DB: "d"})
+			holdLease(r)
 
-	ev := event{OperationType: "modify", NS: namespace{"d", "c"}}
-	require.NoError(t, r.applyDDL(context.Background(), &ev))
-	d := r.Status().LastDDL
-	require.NotNil(t, d)
-	assert.Equal(t, "modify", d.Op)
-	assert.Equal(t, "d.c", d.NS)
-	assert.Equal(t, "не поддерживается, пропущено", d.Details)
-	assert.WithinDuration(t, time.Now(), d.At, time.Second)
+			require.NoError(t, r.applyDDL(context.Background(), &tc.ev))
+			d := r.Status().LastDDL
 
-	ev = event{OperationType: "create", NS: namespace{"d", "v"},
-		OpDesc: mustMarshal(t, bson.D{{Key: "viewOn", Value: "c"}})}
-	require.NoError(t, r.applyDDL(context.Background(), &ev))
-	assert.Equal(t, "create", r.Status().LastDDL.Op)
-	assert.Equal(t, "view, пропущено", r.Status().LastDDL.Details)
+			require.NotNil(t, d)
+			assert.Equal(t, tc.wantOp, d.Op)
+			assert.Equal(t, tc.wantNS, d.NS)
+			assert.Equal(t, tc.wantDetails, d.Details)
+			assert.WithinDuration(t, time.Now(), d.At, time.Second)
+		})
+	}
 }
 
 // Ошибка DDL не обновляет LastDDL.
@@ -136,7 +159,9 @@ func TestApplyDDLErrorKeepsLastDDL(t *testing.T) {
 	r := New(nil, lazyClient(t), Config{DB: "d"})
 	holdLease(r)
 	ev := event{OperationType: "dropDatabase", NS: namespace{DB: "d"}}
+
 	require.Error(t, r.applyDDL(context.Background(), &ev))
+
 	assert.Nil(t, r.Status().LastDDL)
 }
 
@@ -168,36 +193,46 @@ func TestDDLDetails(t *testing.T) {
 
 func TestSetRetry(t *testing.T) {
 	r := New(nil, nil, Config{DB: "d"})
+
 	r.SetRetry(errors.New("bulk write: timeout"))
 	s := r.Status()
+
 	assert.Equal(t, StateRetry, s.State)
 	assert.Equal(t, 1, s.Retry)
 	assert.Equal(t, "bulk write: timeout", s.LastErr)
 
 	r.SetRetry(errors.New("ещё раз"))
 	s = r.Status()
+
 	assert.Equal(t, 2, s.Retry, "повторы подряд считаются")
 	assert.Equal(t, "ещё раз", s.LastErr)
 
 	r.streamOpened()
 	s = r.Status()
+
 	assert.Equal(t, StateRunning, s.State)
 	assert.Zero(t, s.Retry)
 	assert.Empty(t, s.LastErr)
 }
 
-func TestStopped(t *testing.T) {
+func TestStoppedError(t *testing.T) {
 	r := New(nil, nil, Config{DB: "d"})
+
 	r.stopped(context.Background(), errors.New("перманентная"))
 	s := r.Status()
+
 	assert.Equal(t, StateStopped, s.State)
 	assert.Equal(t, "перманентная", s.LastErr)
+}
 
-	r = New(nil, nil, Config{DB: "d"})
+func TestStoppedCanceled(t *testing.T) {
+	r := New(nil, nil, Config{DB: "d"})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+
 	r.stopped(ctx, context.Canceled)
-	s = r.Status()
+	s := r.Status()
+
 	assert.Equal(t, StateStopped, s.State)
 	assert.Empty(t, s.LastErr, "отмена вызывающим — не ошибка")
 }
@@ -208,8 +243,10 @@ func TestLogProgressStatus(t *testing.T) {
 	r := New(nil, nil, Config{DB: "d"})
 	r.applied.Store(50)
 	r.lastLog = time.Now().Add(-20 * time.Second)
+
 	r.logProgress(context.Background())
 	s := r.Status()
+
 	assert.InDelta(t, 2.5, s.Rate, 0.1)
 	assert.Equal(t, time.Duration(-1), s.Lag)
 	assert.True(t, s.AppliedAt.IsZero())
@@ -221,8 +258,10 @@ func TestLogProgressSrcUnavailable(t *testing.T) {
 	r := New(lazyClient(t), nil, Config{DB: "d"})
 	r.appliedTS = bson.Timestamp{T: 1760529693}
 	r.lastLog = time.Now().Add(-20 * time.Second)
+
 	r.logProgress(context.Background())
 	s := r.Status()
+
 	assert.Equal(t, time.Unix(1760529693, 0).UTC(), s.AppliedAt)
 	assert.Equal(t, time.Duration(-1), s.Lag)
 }
@@ -262,6 +301,7 @@ func TestStatusConcurrent(t *testing.T) {
 	quietLog(t)
 	r := New(nil, nil, Config{DB: "d", Traffic: &Traffic{}})
 	var wg sync.WaitGroup
+
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
