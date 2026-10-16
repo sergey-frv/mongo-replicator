@@ -86,6 +86,8 @@ func TestIntegrationDML(t *testing.T) {
 	require.NoError(t, err)
 
 	rn.waitSame(db)
+	// Applied растёт после BulkWrite, поэтому сверяем его, когда поток успокоился
+	rn.waitQuiet()
 
 	// цель не пустая: совпадение не из-за того, что обе стороны пусты
 	n, err := dstClient.Database(db).Collection("orders").CountDocuments(ctx, bson.D{})
@@ -94,9 +96,6 @@ func TestIntegrationDML(t *testing.T) {
 	n, err = dstClient.Database(db).Collection("users").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, n)
-
-	// Applied растёт после BulkWrite, поэтому сверяем его, когда поток успокоился
-	rn.waitQuiet()
 	assert.NotNil(t, rn.ckptToken(), "чекпойнт сохранён")
 	// 4 insert + 3 update (UpdateOne + UpdateMany на 2) + replace + delete; 3 insert + 2 update + delete
 	assert.EqualValues(t, 15, rn.r.Applied())
@@ -155,6 +154,7 @@ func TestIntegrationTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	rn.waitSame(db)
+	rn.waitQuiet()
 
 	n, err := dstClient.Database(db).Collection("accounts").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
@@ -162,8 +162,6 @@ func TestIntegrationTransaction(t *testing.T) {
 	n, err = dstClient.Database(db).Collection("ledger").CountDocuments(ctx, bson.D{})
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, n)
-
-	rn.waitQuiet()
 	// 3 insert до транзакции + insert, update, delete, update, insert в транзакции
 	assert.EqualValues(t, 8, rn.r.Applied())
 }
@@ -184,7 +182,6 @@ func TestIntegrationResume(t *testing.T) {
 	rn.waitSame(db)
 	rn.waitQuiet()
 	rn.stop()
-
 	// пока репликатор стоит: только insert/update без последующего delete,
 	// иначе update придёт с пустым fullDocument и не попадёт в Applied
 	const n = 5
@@ -201,6 +198,7 @@ func TestIntegrationResume(t *testing.T) {
 	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
 	rn2.waitSame(db)
 	rn2.waitQuiet()
+
 	// ровно n: продолжили с токена, события до остановки повторно не применялись
 	assert.EqualValues(t, n, rn2.r.Applied())
 }
@@ -254,18 +252,19 @@ func TestIntegrationReplayIdempotent(t *testing.T) {
 	rn.waitSame(db)
 	rn.waitQuiet()
 	rn.stop()
-
 	// сброс чекпойнта базы: поток перечитывается с того же StartTS поверх готовой цели
 	_, err = ckptOf(db).DeleteOne(ctx, bson.M{"_id": ckptID})
 	require.NoError(t, err)
-	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, ApplyDrops: []string{db + ".gone"}})
 
+	rn2 := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, ApplyDrops: []string{db + ".gone"}})
 	// цель уже совпадает, поэтому сначала ждём, что повтор действительно прошёл:
 	// insert X, delete X, insert Y, update Y (update X пропущен)
 	const m = 4
-	require.Eventually(t, func() bool { return rn2.r.Applied() >= m }, waitTimeout, pollEvery)
+	require.Eventually(t, func() bool { return rn2.r.Applied() >= m }, waitTimeout, pollEvery,
+		"повтор не дошёл до %d применённых операций за %s", m, waitTimeout)
 	rn2.waitSame(db)
 	rn2.waitQuiet()
+
 	assert.EqualValues(t, m, rn2.r.Applied())
 }
 
@@ -274,12 +273,15 @@ func TestIntegrationNoStartPoint(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
 	r := newIT(dstClient, Config{BatchSize: 1000, DB: db})
-	err := r.Run(ctx)
-	require.ErrorIs(t, err, ErrNoStartPoint)
 
+	err := r.Run(ctx)
+
+	require.ErrorIs(t, err, ErrNoStartPoint)
 	_, found := readLease(t, db)
 	require.True(t, found, "документ создан захватом аренды")
+
 	require.NoError(t, r.Release(ctx))
+
 	_, found = readLease(t, db)
 	assert.False(t, found, "документ без позиции удалён при снятии аренды")
 }
@@ -308,12 +310,14 @@ func TestIntegrationWriteError(t *testing.T) {
 
 	// пачка из одной операции: первый документ записан и закоммичен, второй — нет
 	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1, DB: db})
+
 	require.ErrorContains(t, err, "bulk write в "+db+".c")
 	assert.True(t, mongo.IsDuplicateKeyError(err), "%v", err)
 	assert.EqualValues(t, 1, r.Applied())
 
 	// с чекпойнта снова упираемся во второй документ: чекпойнт его не прошёл
 	r, err = runErr(t, Config{BatchSize: 1000, DB: db})
+
 	assert.True(t, mongo.IsDuplicateKeyError(err), "%v", err)
 	assert.EqualValues(t, 0, r.Applied())
 
@@ -323,5 +327,6 @@ func TestIntegrationWriteError(t *testing.T) {
 	rn := startOn(t, r)
 	rn.waitSame(db)
 	rn.waitQuiet()
+
 	assert.EqualValues(t, 1, rn.r.Applied())
 }

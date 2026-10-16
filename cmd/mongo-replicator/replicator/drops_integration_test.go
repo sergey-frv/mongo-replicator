@@ -35,6 +35,7 @@ func TestIntegrationDropDatabaseStops(t *testing.T) {
 
 	// порядок drop коллекций при dropDatabase произвольный
 	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000, DB: db, DstDB: dstDB})
+
 	var de *DropError
 	require.ErrorAs(t, err, &de)
 	assert.False(t, de.Database)
@@ -46,6 +47,7 @@ func TestIntegrationDropDatabaseStops(t *testing.T) {
 
 	// разрешение только a: при любом порядке остановка на b, b на цели цела
 	_, err = runErr(t, Config{BatchSize: 1000, DB: db, DstDB: dstDB, ApplyDrops: []string{db + ".a"}})
+
 	require.ErrorAs(t, err, &de)
 	assert.False(t, de.Database)
 	assert.Equal(t, db+".b", de.NS)
@@ -56,6 +58,7 @@ func TestIntegrationDropDatabaseStops(t *testing.T) {
 	// с разрешением обеих: обе удалены на цели, остановка на dropDatabase
 	// (a могла быть удалена прошлым запуском — тогда её разрешение не используется)
 	r, err = runErr(t, Config{BatchSize: 1000, DB: db, DstDB: dstDB, ApplyDrops: []string{db + ".a", db + ".b"}})
+
 	require.ErrorAs(t, err, &de)
 	assert.True(t, de.Database)
 	assert.Equal(t, db, de.NS)
@@ -67,6 +70,7 @@ func TestIntegrationDropDatabaseStops(t *testing.T) {
 
 	// чекпойнт стоит перед dropDatabase: рестарт останавливается на нём же
 	_, err = runErr(t, Config{BatchSize: 1000, DB: db, DstDB: dstDB})
+
 	require.ErrorAs(t, err, &de)
 	assert.True(t, de.Database)
 }
@@ -94,12 +98,12 @@ func TestIntegrationDropStops(t *testing.T) {
 	require.NoError(t, err)
 
 	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
+
 	var de *DropError
 	require.ErrorAs(t, err, &de)
 	assert.Equal(t, db+".gone", de.NS)
 	assert.False(t, de.Database)
 	assert.EqualValues(t, 5, r.Applied())
-
 	count := func(coll string) int64 {
 		n, countErr := dstClient.Database(db).Collection(coll).CountDocuments(ctx, bson.D{})
 		require.NoError(t, countErr)
@@ -109,6 +113,7 @@ func TestIntegrationDropStops(t *testing.T) {
 	assert.EqualValues(t, 2, count("keep"), "запись после drop не применена")
 
 	r, err = runErr(t, Config{BatchSize: 1000, DB: db})
+
 	require.ErrorAs(t, err, &de)
 	assert.Equal(t, db+".gone", de.NS)
 	assert.EqualValues(t, 0, r.Applied())
@@ -139,6 +144,7 @@ func TestIntegrationDropAbsentOnTarget(t *testing.T) {
 
 	rn.waitSame(db)
 	rn.waitQuiet()
+
 	assert.EqualValues(t, 2, rn.r.Applied())
 	d := rn.r.Status().LastDDL
 	require.NotNil(t, d)
@@ -161,7 +167,8 @@ func TestIntegrationRenameAbsentOnTargetStatus(t *testing.T) {
 	require.Eventually(t, func() bool {
 		d := rn.r.Status().LastDDL
 		return d != nil && d.Op == "rename"
-	}, waitTimeout, pollEvery)
+	}, waitTimeout, pollEvery, "rename не появился в статусе за %s", waitTimeout)
+
 	s := rn.r.Status()
 	assert.Equal(t, db+".a", s.LastDDL.NS)
 	assert.Equal(t, StateRunning, s.State, "ошибка цели проигнорирована")
@@ -179,12 +186,13 @@ func TestIntegrationDropViewFromDump(t *testing.T) {
 	}
 
 	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+
 	require.NoError(t, src.Collection("v").Drop(ctx))
 	_, err := src.Collection("c").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
-
 	rn.waitSame(db)
 	rn.waitQuiet()
+
 	names, err := dst.ListCollectionNames(ctx, bson.M{"name": "v"})
 	require.NoError(t, err)
 	assert.Empty(t, names, "view на цели должен быть удалён")
@@ -229,6 +237,7 @@ func TestIntegrationFailedOut(t *testing.T) {
 
 	rn.waitSame(db)
 	rn.waitQuiet()
+
 	tmp, err := dstClient.Database(db).ListCollectionNames(ctx, bson.M{"name": bson.M{"$regex": `^tmp\.agg_out\.`}})
 	require.NoError(t, err)
 	assert.Empty(t, tmp, "временная коллекция $out осталась на цели")
@@ -268,6 +277,7 @@ func TestIntegrationApplyDrop(t *testing.T) {
 	rn.waitSameDBs(db, dstDB)
 	rn.waitQuiet()
 	rn.stop()
+
 	assert.Empty(t, rn.r.applyDrops, "разрешение использовано")
 	assert.Contains(t, logs.String(), "drop применён по --apply-drop")
 	assert.False(t, dbExists(ctx, t, dstClient, db), "база источника %s появилась на цели", db)
@@ -276,6 +286,7 @@ func TestIntegrationApplyDrop(t *testing.T) {
 	runCtx, runCancel := context.WithTimeout(ctx, waitTimeout)
 	defer runCancel()
 	err = rn.r.Run(runCtx)
+
 	require.NoError(t, runCtx.Err(), "Run должен остановиться на drop до таймаута")
 	var de *DropError
 	require.ErrorAs(t, err, &de)

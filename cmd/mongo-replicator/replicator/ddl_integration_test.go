@@ -40,10 +40,12 @@ func TestIntegrationDDLError(t *testing.T) {
 
 	// DML перед DDL записан и закоммичен, сам DDL — нет
 	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
+
 	require.ErrorContains(t, err, "createIndexes "+db+".c")
 	assert.EqualValues(t, 1, r.Applied())
 
 	r, err = runErr(t, Config{BatchSize: 1000, DB: db})
+
 	require.ErrorContains(t, err, "createIndexes "+db+".c")
 	assert.EqualValues(t, 0, r.Applied())
 }
@@ -112,6 +114,7 @@ func TestIntegrationDDL(t *testing.T) {
 	// до rename ждём совпадения: update в a, прочитанный после rename, придёт
 	// с пустым fullDocument (известное ограничение updateLookup)
 	rn.waitSame(db)
+
 	assert.Equal(t, []string{"_id_", "a_code_u", "a_k_n", "a_status_p", "a_ttl"}, indexNames(ctx, t, dstClient, db, "a"),
 		"индексы источника приняты целью 8.0")
 
@@ -123,7 +126,6 @@ func TestIntegrationDDL(t *testing.T) {
 	require.NoError(t, err)
 	_, err = b.DeleteOne(ctx, bson.M{"_id": 2})
 	require.NoError(t, err)
-
 	rn.waitSame(db)
 
 	colls, err := collNames(ctx, dstClient, db)
@@ -210,6 +212,7 @@ func TestIntegrationCrossDBRenameOut(t *testing.T) {
 	renameNS(ctx, t, db+".out", other+".z")
 
 	r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
+
 	var de *DropError
 	require.ErrorAs(t, err, &de)
 	assert.Equal(t, db+".out", de.NS)
@@ -251,15 +254,14 @@ func TestIntegrationUnsupportedDDL(t *testing.T) {
 
 	rn.waitSame(db)
 	rn.waitQuiet()
-	assert.EqualValues(t, 3, rn.r.Applied())
 
+	assert.EqualValues(t, 3, rn.r.Applied())
 	// событие modify пропущено: на цели валидатора нет
 	specs, err := dstClient.Database(db).ListCollectionSpecifications(ctx, bson.M{"name": "c"})
 	require.NoError(t, err)
 	require.Len(t, specs, 1)
 	_, err = specs[0].Options.LookupErr("validator")
 	assert.Error(t, err, "collMod не должен переноситься: %s", specs[0].Options)
-
 	names, err := dstClient.Database(db).ListCollectionNames(ctx, bson.M{"name": "v"})
 	require.NoError(t, err)
 	assert.Empty(t, names, "view не должен создаваться")
@@ -288,7 +290,6 @@ func TestIntegrationRestartAfterDDL(t *testing.T) {
 	rn.waitSame(db)
 	rn.waitQuiet()
 	rn.stop()
-
 	// новая a с теми же _id: повтор rename поверх неё уничтожил бы b
 	const n = 3
 	for i := range n {
@@ -299,8 +300,8 @@ func TestIntegrationRestartAfterDDL(t *testing.T) {
 	rn2 := start(t, Config{BatchSize: 1000, DB: db})
 	rn2.waitSame(db)
 	rn2.waitQuiet()
-	assert.EqualValues(t, n, rn2.r.Applied())
 
+	assert.EqualValues(t, n, rn2.r.Applied())
 	colls, err := collNames(ctx, dstClient, db)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"a", "b"}, colls)

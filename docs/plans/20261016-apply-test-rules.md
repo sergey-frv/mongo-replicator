@@ -303,10 +303,13 @@
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/{dml,ddl,drops}_integration_test.go`
 
-- [ ] `dml_integration:266` — сообщение в `Eventually`; `drops_integration:161` — проверить условие на `t`
-- [ ] структура «дано → действие → проверка» и проверки по правилам во всех тестах файлов
-- [ ] мутации на каждый изменённый тест
-- [ ] `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
+- [x] `dml_integration:266` — сообщение в `Eventually`; `drops_integration:161` — проверить условие на `t`
+  - ➕ условие `drops_integration:161` без `t` (только `rn.r.Status()`), добавлено сообщение
+- [x] структура «дано → действие → проверка» и проверки по правилам во всех тестах файлов
+  - ➕ в `TestIntegrationDML`/`TestIntegrationTransaction` `waitQuiet` перенесён к `waitSame` (блок действия), проверки — после него
+- [x] мутации на каждый изменённый тест
+  - ➕ «код 48 не игнорируется» `TestIntegrationReplayIdempotent` не ловит: `create` существующей коллекции с теми же опциями на 8.0 проходит без ошибки, а ошибки 26/27 при повторе идут после DML и роняют тест в `waitSame`, не в `Eventually`. Для `Eventually` взята мутация счётчика `Applied`
+- [x] `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
 
 ### Task 6: Интеграционные базы, чекпойнт, статус
 
