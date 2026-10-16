@@ -255,7 +255,8 @@ func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
 	defer cancel()
 
 	r := newIT(dstClient, Config{BatchSize: 1000, DB: db})
-	require.NoError(t, r.acquireLease(ctx), "saveToken пишет только под арендой")
+	_, err := r.acquireLease(ctx)
+	require.NoError(t, err, "saveToken пишет только под арендой")
 	r.lastTS = bson.Timestamp{T: 1000, I: 3}
 	token, err := bson.Marshal(bson.M{"_data": "zz"})
 	require.NoError(t, err)

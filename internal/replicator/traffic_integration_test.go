@@ -173,6 +173,51 @@ func TestIntegrationStateFileContinues(t *testing.T) {
 	assert.Equal(t, []string{r2.cfg.StateFile}, files, "один файл, без переносов в сторону")
 }
 
+// Аренда истекла в паузе повтора, и базу успел забрать другой процесс с этой машины:
+// он дописал в общий файл свой трафик. Повторный Run того же репликатора захватывает
+// аренду заново и перечитывает файл — трафик другого процесса не затирается.
+func TestIntegrationStateFileLeaseRetaken(t *testing.T) {
+	db := prepare(t)
+	r := newIT(dstClient, withState(Config{StartTS: srcNow(t), BatchSize: 1000, DB: db}, t.TempDir()))
+	path := r.cfg.StateFile
+	// писатель переживает Run: остановить и при падении теста до startOn (после Release — no-op)
+	t.Cleanup(func() { r.stopState() })
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	runCtx, stopRun := context.WithCancel(ctx)
+	runDone := make(chan error, 1)
+	go func() { runDone <- r.Run(runCtx) }()
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		s, err := statefile.Load(path)
+		require.NoError(c, err)
+		assert.Equal(c, r.owner, s.Owner)
+	}, waitTimeout, pollEvery, "первая запись файла после захвата аренды")
+	stopRun()
+	require.ErrorIs(t, <-runDone, context.Canceled)
+	// писатель переживает Run; без продления аренда устаревает, и он перестаёт писать
+	require.Eventually(t, func() bool { return r.checkLease() != nil }, waitTimeout, pollEvery,
+		"аренда устарела без продления")
+	// другой процесс захватил истёкшую аренду, загрузил файл, добавил свой трафик и упал
+	other, err := statefile.Load(path)
+	require.NoError(t, err)
+	other.Owner = "other:1:00000000"
+	other.Traffic = other.Traffic.Add(traffic.Info{SrcIn: 1_000_000})
+	other.UpdatedAt = time.Now().UTC()
+	require.NoError(t, statefile.Write(path, other))
+	_, err = ckptOf(db).UpdateOne(ctx, bson.M{"_id": ckptID},
+		bson.M{"$set": bson.M{"owner": other.Owner, "lease_until": time.Now().Add(-time.Minute)}})
+	require.NoError(t, err)
+
+	startOn(t, r)
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		s, err := statefile.Load(path)
+		require.NoError(c, err)
+		assert.Equal(c, r.owner, s.Owner, "файл снова пишет этот процесс")
+		assert.GreaterOrEqual(c, s.Traffic.SrcIn, other.Traffic.SrcIn, "трафик другого процесса сохранён")
+	}, waitTimeout, pollEvery)
+}
+
 // Неверный --db (ErrDBMismatch): файл состояния базы цели не тронут — ни записи,
 // ни переноса в сторону как файла другой пары баз.
 func TestIntegrationStateFileDBMismatch(t *testing.T) {

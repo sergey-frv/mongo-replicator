@@ -69,8 +69,10 @@ type Replicator struct {
 
 	// файл состояния (Config.StateFile): читается один раз за процесс, пишет его
 	// горутина-писатель от загрузки до Release
-	stateLoaded bool          // загрузка была; повторный Run её не повторяет
+	stateLoaded bool          // загрузка была; повторный Run её не повторяет, пока аренда остаётся нашей
 	stateBase   traffic.Info  // накопленное прошлыми процессами
+	stateFrom   traffic.Info  // снимок счётчиков, от которого к stateBase прибавляется трафик процесса
+	stateSaved  traffic.Info  // снимок счётчиков в последней успешной записи файла
 	stateEvery  time.Duration // интервал записи
 	stateStop   chan struct{} // остановка писателя; nil — писатель не запущен
 	stateDone   chan struct{} // закрывается, когда писатель вышел
@@ -121,8 +123,12 @@ func (r *Replicator) Run(ctx context.Context) (retErr error) {
 	defer r.logProgress(ctx)
 
 	acquired := time.Now()
-	if err := r.acquireLease(ctx); err != nil {
+	ours, err := r.acquireLease(ctx)
+	if err != nil {
 		return err
+	}
+	if !ours {
+		r.retakeState()
 	}
 	r.leaseOK.Store(&acquired)
 	runCtx, cancel := context.WithCancelCause(ctx)
@@ -137,7 +143,7 @@ func (r *Replicator) Run(ctx context.Context) (retErr error) {
 		<-renewed
 	}()
 
-	err := r.stream(runCtx)
+	err = r.stream(runCtx)
 	// Run отменён арендой, а не вызывающим: причина важнее ошибки отменённой операции
 	if cause := context.Cause(runCtx); cause != nil && ctx.Err() == nil {
 		return cause

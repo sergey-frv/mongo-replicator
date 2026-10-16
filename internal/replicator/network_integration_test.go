@@ -404,7 +404,7 @@ func TestIntegrationNetDstHangLease(t *testing.T) {
 		if ok && st.Owner == r1Owner {
 			r1Until = st.LeaseUntil
 		}
-		err = r2.acquireLease(ctx)
+		_, err = r2.acquireLease(ctx)
 		if err == nil {
 			acquiredAt = time.Now()
 			return true

@@ -73,7 +73,9 @@ func (r *Replicator) leaseUntil() bson.M {
 // $expr в фильтре upsert сервер не принимает, поэтому в два шага: обновление
 // существующего документа, затем upsert для отсутствующего. При живой чужой аренде
 // upsert вставляет документ с тем же _id и получает E11000.
-func (r *Replicator) acquireLease(ctx context.Context) error {
+// ours — до захвата владельцем в документе был этот процесс: с его прошлого захвата
+// базой никто другой не владел (освобождённая, чужая истёкшая и новая аренда — false).
+func (r *Replicator) acquireLease(ctx context.Context) (ours bool, _ error) {
 	update := mongo.Pipeline{{{Key: "$set", Value: bson.M{"owner": r.owner, "lease_until": r.leaseUntil()}}}}
 	existing := bson.M{"_id": ckptID, "$or": bson.A{
 		bson.M{"owner": bson.M{"$exists": false}},
@@ -82,19 +84,24 @@ func (r *Replicator) acquireLease(ctx context.Context) error {
 	}}
 	free := bson.M{"_id": ckptID, "owner": bson.M{"$exists": false}}
 	for retried := false; ; retried = true {
-		res, err := r.ckpt().UpdateOne(ctx, existing, update)
-		if err != nil {
-			return fmt.Errorf("захват аренды: %w", err)
+		var prev struct {
+			Owner string `bson:"owner"`
 		}
-		if res.MatchedCount > 0 {
-			return nil
+		// findAndModify возвращает документ до изменения: прежний владелец — в том же запросе
+		err := r.ckpt().FindOneAndUpdate(ctx, existing, update,
+			options.FindOneAndUpdate().SetProjection(bson.M{"owner": 1})).Decode(&prev)
+		if err == nil {
+			return prev.Owner == r.owner, nil
+		}
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			return false, fmt.Errorf("захват аренды: %w", err)
 		}
 		_, err = r.ckpt().UpdateOne(ctx, free, update, options.UpdateOne().SetUpsert(true))
 		if err == nil {
-			return nil
+			return false, nil
 		}
 		if !mongo.IsDuplicateKeyError(err) {
-			return fmt.Errorf("захват аренды: %w", err)
+			return false, fmt.Errorf("захват аренды: %w", err)
 		}
 		var cur struct {
 			Owner      string    `bson:"owner"`
@@ -103,11 +110,11 @@ func (r *Replicator) acquireLease(ctx context.Context) error {
 		findErr := r.ckpt().FindOne(ctx, bson.M{"_id": ckptID}).Decode(&cur)
 		switch {
 		case findErr != nil && !errors.Is(findErr, mongo.ErrNoDocuments):
-			return fmt.Errorf("захват аренды: чтение владельца: %w", findErr)
+			return false, fmt.Errorf("захват аренды: чтение владельца: %w", findErr)
 		case cur.Owner != "":
-			return leaseHeldErr(r.cfg.DstDB, cur.Owner, cur.LeaseUntil)
+			return false, leaseHeldErr(r.cfg.DstDB, cur.Owner, cur.LeaseUntil)
 		case retried:
-			return fmt.Errorf("захват аренды: %w", err)
+			return false, fmt.Errorf("захват аренды: %w", err)
 		}
 		// владелец освободил аренду между запросами — ещё одна попытка
 	}

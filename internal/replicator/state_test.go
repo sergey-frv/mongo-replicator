@@ -142,6 +142,54 @@ func TestStartStateOnce(t *testing.T) {
 	assert.Equal(t, traffic.Info{}, r.stateBase)
 }
 
+// Аренду между повторами Run забирал другой процесс с этой машины и дописал в файл
+// свой трафик: после retakeState файл перечитывается, к нему прибавляется трафик
+// процесса только после его последней успешной записи.
+func TestStartStateRetaken(t *testing.T) {
+	tr := &traffic.Counters{}
+	r := newState(t, t.TempDir(), tr)
+	tr.SrcIn.Store(100)
+	r.startState()
+	// другой процесс загрузил наши 100 и добавил свои 500
+	require.NoError(t, statefile.Write(r.cfg.StateFile, statefile.State{DB: "src", DstDB: "app", Cluster: "h1:27017",
+		Owner: "other:1:00000000", Traffic: traffic.Info{SrcIn: 600}}))
+	tr.SrcIn.Store(107)
+
+	r.retakeState()
+	r.startState()
+	s, err := statefile.Load(r.cfg.StateFile)
+
+	require.NoError(t, err)
+	assert.Equal(t, traffic.Info{SrcIn: 607}, s.Traffic, "трафик другого процесса сохранён, наш не посчитан дважды")
+	assert.Equal(t, r.owner, s.Owner)
+	assert.NotNil(t, r.stateStop, "писатель перезапущен")
+}
+
+// Без загрузки retakeState ничего не меняет: загрузка и так впереди.
+func TestRetakeStateNotLoaded(t *testing.T) {
+	tr := &traffic.Counters{}
+	r := newState(t, t.TempDir(), tr)
+	r.stateSaved = traffic.Info{SrcIn: 5}
+
+	r.retakeState()
+
+	assert.False(t, r.stateLoaded)
+	assert.Equal(t, traffic.Info{}, r.stateFrom, "отсчёт трафика процесса не сдвинут")
+}
+
+// Неудачная запись не сдвигает снимок последней записи: в файле его нет, и после
+// retakeState этот трафик прибавится снова.
+func TestWriteStateFileFailKeepsSaved(t *testing.T) {
+	tr := &traffic.Counters{}
+	r := newState(t, t.TempDir(), tr)
+	r.cfg.StateFile = filepath.Join(t.TempDir(), "нет", "app.json")
+	tr.SrcIn.Store(5)
+
+	r.writeStateFile()
+
+	assert.Equal(t, traffic.Info{}, r.stateSaved)
+}
+
 func TestStartStateMovesAside(t *testing.T) {
 	for _, tc := range []struct {
 		name, content, reason string

@@ -16,8 +16,10 @@ import (
 const defaultStateEvery = 10 * time.Second
 
 // startState загружает накопленный трафик из файла состояния, сразу пишет файл
-// и запускает писателя. Один раз за процесс: второй процесс на ту же базу аренда
-// не пустит, а потеряв аренду, процесс завершается — пересчитывать базу незачем.
+// и запускает писателя. Один раз, пока аренда остаётся нашей: второй процесс на ту же
+// базу аренда не пустит. Но если между повторами Run аренду забирал другой процесс с
+// этой машины (наша истекла в паузе), он дописал в файл свой трафик — повторный захват
+// вызывает retakeState, и загрузка повторяется.
 // Писатель не привязан к Run и пишет и в паузах повторов, пока аренда не устарела
 // (checkLease): трафик растёт и тогда. С устаревшей арендой базу может забрать другой
 // процесс с этой машины, и запись затёрла бы его файл; пропуск ничего не теряет —
@@ -83,17 +85,33 @@ func (r *Replicator) loadStateBase() (traffic.Info, bool) {
 	return traffic.Info{}, true
 }
 
-// writeStateFile пишет в файл состояния накопленное: базу и счётчики процесса.
-// Ошибка — WARN: файл только для наблюдения, репликация продолжается.
+// writeStateFile пишет в файл состояния накопленное: базу и счётчики процесса
+// с момента загрузки базы. Ошибка — WARN: файл только для наблюдения, репликация продолжается.
 func (r *Replicator) writeStateFile() {
+	snap := r.cfg.Traffic.Snapshot()
 	s := statefile.State{
 		DB: r.cfg.DB, DstDB: r.cfg.DstDB, Cluster: r.cfg.Cluster, Owner: r.owner,
 		StartedAt: r.Status().Started.UTC(), UpdatedAt: time.Now().UTC(),
-		Traffic: r.stateBase.Add(r.cfg.Traffic.Snapshot()),
+		Traffic: r.stateBase.Add(snap.Sub(r.stateFrom)),
 	}
 	if err := statefile.Write(r.cfg.StateFile, s); err != nil {
 		log.Warn().Err(err).Msg("файл состояния не записан")
+		return
 	}
+	r.stateSaved = snap
+}
+
+// retakeState — аренду захватили не у себя: базой мог владеть другой процесс с этой
+// машины и дописать в файл свой трафик поверх нашего. Писатель останавливается, а
+// следующий startState загрузит файл заново и прибавит к нему трафик процесса только
+// после последней успешной записи — та уже вошла в файл, который загрузил другой процесс.
+func (r *Replicator) retakeState() {
+	if !r.stateLoaded {
+		return
+	}
+	r.stopState()
+	r.stateLoaded = false
+	r.stateFrom = r.stateSaved
 }
 
 // stopState останавливает писателя файла состояния; true — он был запущен.

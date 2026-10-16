@@ -85,6 +85,42 @@ func TestIntegrationLeaseExpired(t *testing.T) {
 	assert.Equal(t, rn.r.owner, st.Owner)
 }
 
+// acquireLease сообщает, была ли аренда нашей до захвата: только тогда базой с
+// прошлого захвата никто другой не владел (файл состояния не перечитывается).
+func TestIntegrationAcquireLeaseOurs(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	r := newIT(dstClient, Config{BatchSize: 1000, DB: db})
+	defer release(t, r)
+	set := func(fields bson.M) {
+		t.Helper()
+		_, err := ckptOf(db).UpdateOne(ctx, bson.M{"_id": ckptID}, fields)
+		require.NoError(t, err)
+	}
+	past := time.Now().Add(-time.Minute)
+
+	first, err := r.acquireLease(ctx)
+	require.NoError(t, err)
+	again, err := r.acquireLease(ctx)
+	require.NoError(t, err)
+	set(bson.M{"$set": bson.M{"lease_until": past}})
+	ownExpired, err := r.acquireLease(ctx)
+	require.NoError(t, err)
+	set(bson.M{"$set": bson.M{"owner": "crashed:1:deadbeef", "lease_until": past}})
+	foreignExpired, err := r.acquireLease(ctx)
+	require.NoError(t, err)
+	set(bson.M{"$unset": bson.M{"owner": "", "lease_until": ""}})
+	released, err := r.acquireLease(ctx)
+	require.NoError(t, err)
+
+	assert.False(t, first, "документа не было")
+	assert.True(t, again, "своя живая аренда")
+	assert.True(t, ownExpired, "своя истёкшая, никто не забирал")
+	assert.False(t, foreignExpired, "истёкшая аренда другого процесса")
+	assert.False(t, released, "аренду сняли (другой процесс завершился)")
+}
+
 // Release процесса, не получившего аренду, не удаляет документ владельца, который
 // ещё не сохранил позицию.
 func TestIntegrationLeaseHeldNoToken(t *testing.T) {
@@ -121,7 +157,8 @@ func TestIntegrationSaveTokenNotOwner(t *testing.T) {
 	_, found := readLease(t, db)
 	assert.False(t, found, "без захвата документ не создаётся")
 
-	require.NoError(t, r.acquireLease(ctx))
+	_, err = r.acquireLease(ctx)
+	require.NoError(t, err)
 	const intruder = "intruder:1:00000000"
 	_, err = ckptOf(db).UpdateOne(ctx,
 		bson.M{"_id": ckptID}, bson.M{"$set": bson.M{"owner": intruder}})

@@ -140,3 +140,14 @@ func TestTrafficSnapshotNil(t *testing.T) {
 
 	assert.Equal(t, Info{}, tr.Snapshot())
 }
+
+func TestInfoAddSub(t *testing.T) {
+	a := Info{SrcIn: 10, SrcOut: 20, DstIn: 30, DstOut: 40}
+	b := Info{SrcIn: 1, SrcOut: 2, DstIn: 3, DstOut: 4}
+
+	sum := a.Add(b)
+	diff := sum.Sub(b)
+
+	assert.Equal(t, Info{SrcIn: 11, SrcOut: 22, DstIn: 33, DstOut: 44}, sum)
+	assert.Equal(t, a, diff)
+}

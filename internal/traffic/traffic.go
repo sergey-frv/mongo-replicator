@@ -46,6 +46,13 @@ func (t Info) Add(o Info) Info {
 		DstIn: t.DstIn + o.DstIn, DstOut: t.DstOut + o.DstOut}
 }
 
+// Sub — разность счётчиков; o — более ранний снимок тех же Counters, поэтому
+// ни одно поле не уходит в минус.
+func (t Info) Sub(o Info) Info {
+	return Info{SrcIn: t.SrcIn - o.SrcIn, SrcOut: t.SrcOut - o.SrcOut,
+		DstIn: t.DstIn - o.DstIn, DstOut: t.DstOut - o.DstOut}
+}
+
 // countingDialer — как диалер драйвера по умолчанию (нулевой net.Dialer), но соединения считают байты.
 type countingDialer struct{ in, out *atomic.Uint64 }
 
