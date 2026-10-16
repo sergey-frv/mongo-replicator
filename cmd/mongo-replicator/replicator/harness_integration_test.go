@@ -149,24 +149,42 @@ func snake(name string) string {
 }
 
 func TestSnake(t *testing.T) {
-	assert.Equal(t, "integration_dml", snake("TestIntegrationDML"))
-	assert.Equal(t, "integration_ddl_restart", snake("TestIntegrationDDLRestart"))
-	assert.Equal(t, "integration_stop_on_cleanup_sub", snake("TestIntegrationStopOnCleanup/sub"))
+	cases := []struct{ name, in, want string }{
+		{"аббревиатура в конце", "TestIntegrationDML", "integration_dml"},
+		{"аббревиатура перед словом", "TestIntegrationDDLRestart", "integration_ddl_restart"},
+		{"подтест", "TestIntegrationStopOnCleanup/sub", "integration_stop_on_cleanup_sub"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := snake(c.in)
+
+			assert.Equal(t, c.want, got, "имя базы для %s", c.in)
+		})
+	}
 }
 
 // srcOpTime пишет no-op в oplog источника и возвращает его время:
 // на простаивающем кластере operationTime иначе двигается раз в 10 с.
 func srcOpTime(t *testing.T) bson.Timestamp {
 	t.Helper()
+	ts, err := appendSrcNote(t.Name())
+	require.NoError(t, err)
+	return ts
+}
+
+// appendSrcNote — srcOpTime без t, для условий Eventually: no-op с меткой name.
+func appendSrcNote(name string) (bson.Timestamp, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	raw, err := srcClient.Database("admin").RunCommand(ctx, bson.D{
 		{Key: "appendOplogNote", Value: 1},
-		{Key: "data", Value: bson.D{{Key: "it", Value: t.Name()}}},
+		{Key: "data", Value: bson.D{{Key: "it", Value: name}}},
 	}).Raw()
-	require.NoError(t, err)
+	if err != nil {
+		return bson.Timestamp{}, err
+	}
 	ts, i := raw.Lookup("operationTime").Timestamp()
-	return bson.Timestamp{T: ts, I: i}
+	return bson.Timestamp{T: ts, I: i}, nil
 }
 
 // srcNow возвращает StartTS для теста. StartTS округлён до секунды, а
@@ -175,15 +193,15 @@ func srcOpTime(t *testing.T) bson.Timestamp {
 // предыдущего теста, включая его cleanup-dropDatabase.
 func srcNow(t *testing.T) uint32 {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		ts := srcOpTime(t).T
-		if ts > lastSrcSec {
-			return ts
-		}
-		require.True(t, time.Now().Before(deadline), "время источника не двигается: %d", ts)
-		time.Sleep(100 * time.Millisecond)
-	}
+	name, last := t.Name(), lastSrcSec // условие идёт в своей горутине: глобальное копируем до вызова
+	var ts uint32
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		op, err := appendSrcNote(name)
+		require.NoError(c, err)
+		ts = op.T
+		assert.Greater(c, ts, last, "время источника не двигается: %d", ts)
+	}, 5*time.Second, 100*time.Millisecond, "время источника не ушло за секунду последней операции обвязки")
+	return ts
 }
 
 func dropDB(t *testing.T, db string) {
@@ -234,7 +252,7 @@ func release(t *testing.T, r *Replicator) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	assert.NoError(t, r.Release(ctx))
+	assert.NoError(t, r.Release(ctx), "снятие аренды")
 }
 
 // runner — репликатор, запущенный в горутине.
@@ -295,7 +313,7 @@ func (rn *runner) waitExit() error {
 	select {
 	case <-rn.done:
 	case <-time.After(waitTimeout):
-		rn.t.Fatalf("Run не вернулся за %s", waitTimeout)
+		require.FailNow(rn.t, fmt.Sprintf("Run не вернулся за %s", waitTimeout))
 	}
 	rn.selfExit = true
 	return rn.err
@@ -310,21 +328,18 @@ func (rn *runner) waitSame(db string) {
 // waitSameDBs ждёт совпадения базы srcDB источника и dstDB цели; если Run уже вернулся — падает сразу.
 func (rn *runner) waitSameDBs(srcDB, dstDB string) {
 	rn.t.Helper()
-	deadline := time.Now().Add(waitTimeout)
-	var diff string
-	for {
+	var exited bool
+	var exitErr error
+	require.EventuallyWithT(rn.t, func(c *assert.CollectT) {
+		// ранний выход Run прекращает ожидание и проверяется после него
 		if done, err := rn.exited(); done {
-			rn.t.Fatalf("Run вернулся раньше времени: %v", err)
-		}
-		var ok bool
-		if ok, diff = sameDBs(srcDB, dstDB); ok {
+			exited, exitErr = true, err
 			return
 		}
-		if time.Now().After(deadline) {
-			rn.t.Fatalf("база %s → %s не совпала за %s: %s", srcDB, dstDB, waitTimeout, diff)
-		}
-		time.Sleep(pollEvery)
-	}
+		ok, diff := sameDBs(srcDB, dstDB)
+		assert.True(c, ok, "база %s → %s не совпала: %s", srcDB, dstDB, diff)
+	}, waitTimeout, pollEvery, "база %s → %s не совпала за %s", srcDB, dstDB, waitTimeout)
+	require.False(rn.t, exited, "Run вернулся раньше времени: %v", exitErr)
 }
 
 // waitQuiet ждёт, пока чекпойнт и Applied перестанут меняться. Закрывает
@@ -334,17 +349,15 @@ func (rn *runner) waitQuiet() {
 	deadline := time.Now().Add(waitTimeout)
 	prevTok, prevN := rn.ckptToken(), rn.r.Applied()
 	for {
+		// окно устойчивости: чекпойнт и Applied не должны меняться весь интервал
 		time.Sleep(quietInterval)
-		if done, err := rn.exited(); done {
-			rn.t.Fatalf("Run вернулся раньше времени: %v", err)
-		}
+		done, err := rn.exited()
+		require.False(rn.t, done, "Run вернулся раньше времени: %v", err)
 		tok, n := rn.ckptToken(), rn.r.Applied()
 		if tok != nil && bytes.Equal(tok, prevTok) && n == prevN {
 			return
 		}
-		if time.Now().After(deadline) {
-			rn.t.Fatalf("чекпойнт не успокоился за %s", waitTimeout)
-		}
+		require.False(rn.t, time.Now().After(deadline), "чекпойнт не успокоился за %s", waitTimeout)
 		prevTok, prevN = tok, n
 	}
 }
@@ -519,14 +532,16 @@ func indexSig(spec bson.Raw) string {
 // cleanup-ом, даже если тест сам stop не вызвал.
 func TestIntegrationStopOnCleanup(t *testing.T) {
 	var rn *runner
+
 	t.Run("sub", func(t *testing.T) {
 		db := prepare(t)
 		rn = start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 	})
-	require.NotNil(t, rn)
+
+	require.NotNil(t, rn, "подтест не запустил репликатор")
 	done, err := rn.exited()
 	require.True(t, done, "репликатор продолжает работать после завершения подтеста")
-	require.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, err, context.Canceled, "Run должен завершиться отменой контекста")
 }
 
 // runErr выполняет Run нового репликатора синхронно и снимает аренду, как main:

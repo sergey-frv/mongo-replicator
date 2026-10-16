@@ -251,16 +251,18 @@
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/harness_integration_test.go`
 
-- [ ] `runner.waitSameDBs` → `require.EventuallyWithT` по образцу из Technical Details: дифф — в проверке на `c`, ранний выход `Run` — «прекратить ожидание и запомнить»
-- [ ] `runner.waitExit`, `waitQuiet`: `rn.t.Fatalf` → testify. В `waitQuiet` сон окна устойчивости остаётся, с комментарием
-- [ ] `srcNow` → `EventuallyWithT` без `t` в условии, `lastSrcSec` копируется до вызова; `populateProxies` не трогать
-- [ ] остальные хелперы и `TestSnake`/`TestIntegrationStopOnCleanup` — структура и проверки по правилам
-- [ ] мутации:
+- [x] `runner.waitSameDBs` → `require.EventuallyWithT` по образцу из Technical Details: дифф — в проверке на `c`, ранний выход `Run` — «прекратить ожидание и запомнить»
+- [x] `runner.waitExit`, `waitQuiet`: `rn.t.Fatalf` → testify. В `waitQuiet` сон окна устойчивости остаётся, с комментарием
+- [x] `srcNow` → `EventuallyWithT` без `t` в условии, `lastSrcSec` копируется до вызова; `populateProxies` не трогать
+  - ➕ запрос no-op вынесен в `appendSrcNote(name) (bson.Timestamp, error)`, `srcOpTime(t)` — обёртка над ним. `lastSrcSec` по-прежнему пишет только `dropDB`: `srcNow` его не обновлял и не обновляет
+- [x] остальные хелперы и `TestSnake`/`TestIntegrationStopOnCleanup` — структура и проверки по правилам
+  - ➕ `TestSnake` → таблица с подтестами по случаю (случаи отличаются только данными); верхний уровень `-list` не изменился
+- [x] мутации:
   - репликатор не применяет `update` → `waitSame` падает с диффом;
   - `Run` сразу возвращает ошибку → немедленное падение «Run вернулся раньше времени» (не через 30 с);
   - чекпойнт не сохраняется → `waitQuiet`/`ckptToken` падают;
   - плюс по мутации на каждый изменённый тест файла
-- [ ] `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
+- [x] `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
 
 ### Task 3: Сетевые тесты
 
