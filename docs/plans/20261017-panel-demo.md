@@ -121,12 +121,12 @@
 - [x] проверить сборку в контейнере (`docker compose run --rm --no-deps app go build -o /dev/null ./cmd/panel-demo`) и что `bin/` в `.gitignore`
 
 ### Task 4: Verify acceptance criteria
-- [ ] утилита и демо используют одни и те же `panel.Input`, `panel.SignalSelf`, `panel.Start` (`grep` — в `cmd/mongo-replicator` и `cmd/panel-demo` нет своих копий выбора ввода)
-- [ ] демо без терминала stdout — выход 2: `docker compose run --rm --no-deps -T app sh -c 'go build -o /tmp/pd ./cmd/panel-demo && /tmp/pd >/dev/null; echo "exit=$?"'` → `exit=2` (не `go run`: тот вернёт 1)
-- [ ] демо под псевдотерминалом рисует панель и по SIGINT печатает «остановлен по сигналу»: `make panel-demo`, затем `script -qec "timeout --foreground -s INT 4 ./bin/mongo-replicator-panel" /dev/null` (`--foreground` — иначе `timeout` уводит демо в свою группу, оно не на переднем плане и читает клавиатуру не будет: WARN «клавиатура не читается»); байт 0x1a не отправлять
-- [ ] run full test suite: `make test`
-- [ ] `make test-integration`
-- [ ] `make lint` без замечаний
+- [x] утилита и демо используют одни и те же `panel.Input`, `panel.SignalSelf`, `panel.Start` (`grep` — в `cmd/mongo-replicator` и `cmd/panel-demo` нет своих копий выбора ввода)
+- [x] демо без терминала stdout — выход 2: `docker compose run --rm --no-deps -T app sh -c 'go build -o /tmp/pd ./cmd/panel-demo && /tmp/pd >/dev/null; echo "exit=$?"'` → `exit=2` (не `go run`: тот вернёт 1)
+- [x] демо под псевдотерминалом рисует панель и по SIGINT печатает «остановлен по сигналу»: `make panel-demo`, затем `script -qec "timeout --foreground -s INT 4 ./bin/mongo-replicator-panel" /dev/null` (`--foreground` — иначе `timeout` уводит демо в свою группу, оно не на переднем плане и читает клавиатуру не будет: WARN «клавиатура не читается»); байт 0x1a не отправлять
+- [x] run full test suite: `make test`
+- [x] `make test-integration`
+- [x] `make lint` без замечаний
 
 ### Task 5: [Final] Update documentation
 - [ ] README, раздел «Панель статуса»: как посмотреть панель без кластеров — `make panel-demo && ./bin/mongo-replicator-panel`, что показывает сценарий, клавиши те же
