@@ -142,9 +142,9 @@
 - [x] `make lint` без замечаний
 
 ### Task 4: [Final] Update documentation
-- [ ] README, раздел «Панель статуса»: заменить абзац про чтение клавиатуры — по Technical Details (клавиши, `fg` и не `bg`, Ctrl+Z без управления заданиями, Ctrl+Z и аренда, `kill -INT/-QUIT` при зависании, `reset` после падения)
-- [ ] CLAUDE.md: заметка — панель в raw-режиме читает клавиатуру; `ISIG` выключен, поэтому Ctrl+C → `SIGINT` своему процессу, Ctrl+\ → `SIGQUIT` только после выхода панели, Ctrl+Z только при управлении заданиями; встроенный обработчик сигналов bubbletea выключен (останавливает `main`); ввод — `*os.File` (typed nil), `/dev/tty` через `os.OpenFile`, выбор ввода в `run`, тесты не пишут 0x1a и не открывают `/dev/tty`
-- [ ] move this plan to `docs/plans/completed/`
+- [x] README, раздел «Панель статуса»: заменить абзац про чтение клавиатуры — по Technical Details (клавиши, `fg` и не `bg`, Ctrl+Z без управления заданиями, Ctrl+Z и аренда, `kill -INT/-QUIT` при зависании, `reset` после падения)
+- [x] CLAUDE.md: заметка — панель в raw-режиме читает клавиатуру; `ISIG` выключен, поэтому Ctrl+C → `SIGINT` своему процессу, Ctrl+\ → `SIGQUIT` только после выхода панели, Ctrl+Z только при управлении заданиями; встроенный обработчик сигналов bubbletea выключен (останавливает `main`); ввод — `*os.File` (typed nil), `/dev/tty` через `os.OpenFile`, выбор ввода в `run`, тесты не пишут 0x1a и не открывают `/dev/tty`
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
