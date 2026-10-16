@@ -132,14 +132,14 @@
 - [x] `make test`, `make lint` — должно пройти
 
 ### Task 3: Verify acceptance criteria
-- [ ] набор текста и Enter не отображаются и не сбивают панель — автоматически: raw-режим во время панели (тест Task 1); вручную — Post-Completion
-- [ ] Ctrl+C останавливает утилиту прежним путём — автоматически: байт 0x03 → `SIGINT` (тест Task 1); остановка с итогом и снятием аренды — Post-Completion
-- [ ] Ctrl+\ — терминал восстановлен до `SIGQUIT` (тест Task 1)
-- [ ] после выхода (`stop` и `kill`) терминал восстановлен (тест Task 1)
-- [ ] `--progress plain`, запуск без терминала и с `in = nil` работают как раньше
-- [ ] run full test suite: `make test`
-- [ ] `make test-integration` (пакет `main` с тегом `integration` собирается и проходит)
-- [ ] `make lint` без замечаний
+- [x] набор текста и Enter не отображаются и не сбивают панель — автоматически: raw-режим во время панели (тест Task 1); вручную — Post-Completion
+- [x] Ctrl+C останавливает утилиту прежним путём — автоматически: байт 0x03 → `SIGINT` (тест Task 1); остановка с итогом и снятием аренды — Post-Completion
+- [x] Ctrl+\ — терминал восстановлен до `SIGQUIT` (тест Task 1)
+- [x] после выхода (`stop` и `kill`) терминал восстановлен (тест Task 1)
+- [x] `--progress plain`, запуск без терминала и с `in = nil` работают как раньше
+- [x] run full test suite: `make test`
+- [x] `make test-integration` (пакет `main` с тегом `integration` собирается и проходит)
+- [x] `make lint` без замечаний
 
 ### Task 4: [Final] Update documentation
 - [ ] README, раздел «Панель статуса»: заменить абзац про чтение клавиатуры — по Technical Details (клавиши, `fg` и не `bg`, Ctrl+Z без управления заданиями, Ctrl+Z и аренда, `kill -INT/-QUIT` при зависании, `reset` после падения)
