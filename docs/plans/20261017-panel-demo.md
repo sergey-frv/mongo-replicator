@@ -106,10 +106,11 @@
 - Create: `cmd/panel-demo/sim.go`
 - Create: `cmd/panel-demo/sim_test.go`
 
-- [ ] `sim.go` — мок-статус по Technical Details: формулы от `up`, без `rand`, `step` возвращает WARN и сам не логирует
-- [ ] `main.go` — по проверенному демо из scratchpad, через `panel.Input`/`panel.SignalSelf`; WARN из `step` — в лог после возврата `step` (`for _, w := range demo.step(now) { log.Warn().Msg(w) }`); doc-комментарий пакета: что показывает и какие клавиши работают
-- [ ] тесты `sim` — по ожиданиям из Technical Details; случаи «состояние по `up`» — таблицей (отличаются только данными); WARN — отдельными тестами
-- [ ] `make test`, `make lint` — должно пройти (`gosec` в `cmd/panel-demo` без замечаний)
+- [x] `sim.go` — мок-статус по Technical Details: формулы от `up`, без `rand`, `step` возвращает WARN и сам не логирует
+- [x] `main.go` — по проверенному демо из scratchpad, через `panel.Input`/`panel.SignalSelf`; WARN из `step` — в лог после возврата `step` (`for _, w := range demo.step(now) { log.Warn().Msg(w) }`); doc-комментарий пакета: что показывает и какие клавиши работают
+- [x] тесты `sim` — по ожиданиям из Technical Details; случаи «состояние по `up`» — таблицей (отличаются только данными); WARN — отдельными тестами
+- [x] `make test`, `make lint` — должно пройти (`gosec` в `cmd/panel-demo` без замечаний)
+- ➕ ⚠️ `uint64(ops)` при `ops := int(rate/5)+1` роняет range-анализ gosec v2.23.0 («5 not an Int», `//nolint` не спасает): `ops` и байтовый множитель `n` берутся из float отдельно (`int(perStep)+1`, `uint64(perStep)+1`); WARN периодический — с namespace в тексте (`urlshrinker.links: …`), поля zerolog из `step` не передаются
 
 ### Task 3: Сборка демо
 
