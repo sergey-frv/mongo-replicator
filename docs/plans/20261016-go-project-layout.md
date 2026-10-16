@@ -295,9 +295,9 @@ github.com/sergey-frv/mongo-replicator
 - Create: `cmd/mongo-replicator/{options,log,mask,errors}.go`
 - Modify: `cmd/mongo-replicator/main.go`
 
-- [ ] разложить объявления `main.go` по таблице, включая константы и переменные
-- [ ] проверки из Testing Strategy; `make test`, `make test-integration` (для `auth_integration_test.go`), `make lint`
-- [ ] коммит
+- [x] разложить объявления `main.go` по таблице, включая константы и переменные (`maxDBNameLen` вынесен из блока `const` в отдельную `const` в `options.go`; порядок объявлений внутри файлов — как в `main.go`)
+- [x] проверки из Testing Strategy; `make test`, `make test-integration` (для `auth_integration_test.go`), `make lint` (имена: юнит — 143, интеграционные — 204, совпадают; в сверке строк — только `maxDBNameLen` с `const`)
+- [x] коммит
 
 ### Task 8: Документация
 
