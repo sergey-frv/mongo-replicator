@@ -39,17 +39,20 @@ func TestIntegrationLagPosition(t *testing.T) {
 	own := insertAt(ctx, t, srcClient.Database(db).Collection("items"), int32(1))
 	rn.waitSame(db)
 	rn.waitQuiet()
+
 	assert.False(t, rn.ckptTime().Before(own), "чекпойнт %v позади записи %v", rn.ckptTime(), own)
-	n := rn.r.Applied()
 
 	// время источника для лага: ping с правами на одну базу
 	now, err := rn.r.srcTime(ctx)
+
 	require.NoError(t, err)
 	assert.False(t, now.Before(own), "время источника %v позади записи %v", now, own)
 
+	n := rn.r.Applied()
 	foreign := insertAt(ctx, t, srcClient.Database(other).Collection("c"), int32(1))
 	require.Eventually(t, func() bool { return !rn.ckptTime().Before(foreign) }, waitTimeout, pollEvery,
 		"применённая позиция не дошла до записи в другую базу %v", foreign)
+
 	assert.Equal(t, n, rn.r.Applied(), "событие другой базы применено")
 }
 
@@ -77,7 +80,7 @@ func TestIntegrationSteadyTrafficBoundedLag(t *testing.T) {
 				writeErr = err
 				return
 			}
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond) // темп нагрузки: вставка раз в 200 мс, чаще maxAwaitTime
 		}
 	}()
 	stopWrites := func() {
@@ -98,7 +101,7 @@ func TestIntegrationSteadyTrafficBoundedLag(t *testing.T) {
 	}, 5*time.Second, pollEvery, "при непрерывном потоке цель не получила ни одной пачки")
 
 	stopWrites()
-	require.NoError(t, writeErr)
+	require.NoError(t, writeErr, "запись на источник")
 	rn.waitSame(db)
 }
 
@@ -118,6 +121,7 @@ func TestIntegrationLargeUpdateEvent(t *testing.T) {
 		{Key: "b", Value: strings.Repeat("b", 8<<20)},
 	})
 	require.NoError(t, err)
+
 	_, err = big.UpdateOne(ctx, bson.M{"_id": int32(1)},
 		bson.D{{Key: "$set", Value: bson.D{{Key: "b", Value: strings.Repeat("c", 8<<20)}}}})
 	require.NoError(t, err)

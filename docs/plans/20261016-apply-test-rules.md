@@ -327,13 +327,16 @@
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/{lag,traffic,limitations}_integration_test.go`
 
-- [ ] сны с комментариями:
+- [x] сны с комментариями:
   - `StateFileRetryPause` (`traffic_integration:136`) — пауза повтора длиннее окна активности, сон **остаётся**;
   - писатель в `SteadyTrafficBoundedLag` — темп нагрузки
-- [ ] `Eventually` в `lag_integration:51,95`, `traffic_integration:234` — проверить условие на `t` и сообщение
-- [ ] `TestLimitation*` остаются с `t.Skip`, тела приводятся к правилам. Проверка: временно снять `t.Skip` — тест падает, как описано в README; вернуть строку вручную
-- [ ] мутации на каждый изменённый тест
-- [ ] `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
+  - ➕ писатель `SteadyTrafficBoundedLag` не заменён на `startWriter`: тесту нужен темп 200 мс (реже пачки, чаще `maxAwaitTime`), у `startWriter` — 20 мс
+- [x] `Eventually` в `lag_integration:51,95`, `traffic_integration:234` — проверить условие на `t` и сообщение
+  - ➕ во всех трёх условиях `t` нет, сообщения есть — без правок
+- [x] `TestLimitation*` остаются с `t.Skip`, тела приводятся к правилам. Проверка: временно снять `t.Skip` — тест падает, как описано в README; вернуть строку вручную
+  - ➕ тела — только пустые строки; без `t.Skip` оба падают на итоговой проверке `same` («документы различаются» в `b`)
+- [x] мутации на каждый изменённый тест
+- [x] `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
 
 ### Task 8: Юнит-тесты ядра — `replicator_test.go`
 

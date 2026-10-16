@@ -44,10 +44,11 @@ func TestIntegrationTraffic(t *testing.T) {
 	db := prepare(t)
 	r := newTrafficIT(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 	rn := startOn(t, r)
+
 	size := insertPadded(t, db, 20)
 	rn.waitSame(db)
-
 	got := r.cfg.Traffic.Snapshot()
+
 	assert.GreaterOrEqual(t, got.SrcIn, size, "поток отдал все документы")
 	assert.GreaterOrEqual(t, got.DstOut, size, "запись отправила все документы")
 	assert.Positive(t, got.SrcOut)
@@ -78,26 +79,26 @@ func TestIntegrationStateFile(t *testing.T) {
 	r := newTrafficIT(t, withState(Config{StartTS: srcNow(t), BatchSize: 1000, DB: db}, t.TempDir()))
 	r.stateEvery = time.Hour
 	rn := startOn(t, r)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
 	size := insertPadded(t, db, 20)
 	rn.waitSame(db)
 	rn.waitQuiet()
 	rn.stop()
-
 	s := readStateFile(t, r.cfg.StateFile)
+	now := r.cfg.Traffic.Snapshot()
+	raw, err := ckptOf(db).FindOne(ctx, bson.M{"_id": ckptID}).Raw()
+
+	require.NoError(t, err)
 	assert.Equal(t, db, s.DB)
 	assert.Equal(t, db, s.DstDB)
 	assert.Equal(t, r.cfg.Cluster, s.Cluster)
 	assert.Equal(t, r.owner, s.Owner)
 	assert.GreaterOrEqual(t, s.Traffic.SrcIn, size, "последняя запись — в Release")
 	assert.GreaterOrEqual(t, s.Traffic.DstOut, size, "последняя запись — в Release")
-	now := r.cfg.Traffic.Snapshot()
 	assert.LessOrEqual(t, s.Traffic.SrcIn, now.SrcIn, "в файле — не больше насчитанного")
 	assert.LessOrEqual(t, s.Traffic.DstOut, now.DstOut)
-
-	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
-	defer cancel()
-	raw, err := ckptOf(db).FindOne(ctx, bson.M{"_id": ckptID}).Raw()
-	require.NoError(t, err)
 	_, err = raw.LookupErr("traffic")
 	assert.Error(t, err, "в чекпойнте трафика нет")
 }
@@ -128,16 +129,19 @@ func TestIntegrationStateFileRetryPause(t *testing.T) {
 	// повтора Run в тесте нет: аренда, захваченная Run, должна остаться свежей всю паузу,
 	// как в main, где повтор раз в 5 с захватывает её заново при TTL 60 с
 	r.leaseTTL = time.Minute
+
 	runErr := r.Run(ctx)
 	require.True(t, mongo.IsDuplicateKeyError(runErr), "%v", runErr)
 	returned := time.Now()
 	defer release(t, r)
-
+	// длительность паузы повтора: дольше окна активности, чтобы свежесть файла
+	// доказывала запись писателя уже после возврата Run, а не запись до него
 	time.Sleep(2 * stateActiveFor)
 	s := readStateFile(t, r.cfg.StateFile)
-	assert.True(t, s.UpdatedAt.After(returned), "файл обновлён после возврата Run: %s", s.UpdatedAt)
 	mt, err := machineTraffic(dir, time.Now())
+
 	require.NoError(t, err)
+	assert.True(t, s.UpdatedAt.After(returned), "файл обновлён после возврата Run: %s", s.UpdatedAt)
 	assert.Equal(t, 1, mt.Processes)
 	assert.Equal(t, 1, mt.Active, "процесс в паузе повтора активен")
 }
@@ -154,21 +158,21 @@ func TestIntegrationStateFileContinues(t *testing.T) {
 	rn1.stop()
 	first := readStateFile(t, r1.cfg.StateFile).Traffic
 	require.Positive(t, first.SrcIn)
-
 	r2 := newTrafficIT(t, withState(Config{BatchSize: 1000, DB: db}, dir))
+
 	rn2 := startOn(t, r2)
 	rn2.waitQuiet()
 	rn2.stop()
-
 	s := readStateFile(t, r2.cfg.StateFile)
-	assert.Equal(t, r2.owner, s.Owner)
 	second := r2.cfg.Traffic.Snapshot()
+	files, err := filepath.Glob(filepath.Join(dir, "*"))
+
+	require.NoError(t, err)
+	assert.Equal(t, r2.owner, s.Owner)
 	assert.Greater(t, s.Traffic.SrcIn, first.SrcIn, "к прошлому значению прибавлен трафик второго процесса")
 	assert.LessOrEqual(t, s.Traffic.SrcIn, first.SrcIn+second.SrcIn)
 	assert.Greater(t, s.Traffic.DstOut, first.DstOut)
 	assert.LessOrEqual(t, s.Traffic.DstOut, first.DstOut+second.DstOut)
-	files, err := filepath.Glob(filepath.Join(dir, "*"))
-	require.NoError(t, err)
 	assert.Equal(t, []string{r2.cfg.StateFile}, files, "один файл, без переносов в сторону")
 }
 
@@ -185,13 +189,14 @@ func TestIntegrationStateFileDBMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = runErr(t, cfg)
+
 	require.ErrorIs(t, err, ErrDBMismatch)
 	after, err := os.ReadFile(cfg.StateFile)
 	require.NoError(t, err)
-	assert.Equal(t, string(before), string(after))
+	assert.Equal(t, string(before), string(after), "файл состояния не тронут")
 	files, err := filepath.Glob(filepath.Join(dir, "*"))
 	require.NoError(t, err)
-	assert.Equal(t, []string{cfg.StateFile}, files)
+	assert.Equal(t, []string{cfg.StateFile}, files, "без переносов в сторону")
 }
 
 // Сводка по машине: сумма файлов состояния каталога, active — свежие файлы.
@@ -202,8 +207,8 @@ func TestIntegrationMachineTraffic(t *testing.T) {
 	cleanDB(t, dbB)
 	dir := t.TempDir()
 	logs := captureLog(t)
-
 	startTS := srcNow(t)
+
 	rnA := startOn(t, newTrafficIT(t, withState(Config{StartTS: startTS, BatchSize: 1000, DB: dbA}, dir)))
 	rnB := startOn(t, newTrafficIT(t, withState(Config{StartTS: startTS, BatchSize: 1000, DB: dbB}, dir)))
 	insertPadded(t, dbA, 3)
@@ -212,8 +217,8 @@ func TestIntegrationMachineTraffic(t *testing.T) {
 	rnB.waitSame(dbB)
 	rnA.waitQuiet()
 	rnB.waitQuiet()
-
 	mt, err := machineTraffic(dir, time.Now())
+
 	require.NoError(t, err)
 	assert.Equal(t, 2, mt.Processes)
 	assert.Equal(t, 2, mt.Active, "оба процесса работают")
@@ -224,6 +229,7 @@ func TestIntegrationMachineTraffic(t *testing.T) {
 	a := readStateFile(t, rnA.r.cfg.StateFile).Traffic
 	b := readStateFile(t, rnB.r.cfg.StateFile).Traffic
 	mt, err = machineTraffic(dir, time.Now())
+
 	require.NoError(t, err)
 	assert.Equal(t, 2, mt.Processes)
 	assert.Equal(t, TrafficInfo{

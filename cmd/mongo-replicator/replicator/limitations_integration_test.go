@@ -37,6 +37,7 @@ func TestLimitationUpdateLookupAfterRename(t *testing.T) {
 	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
 	rn.waitQuiet()
 	ok, diff := same(db)
+
 	assert.True(t, ok, "на цели в b старая версия x: %s", diff)
 }
 
@@ -82,5 +83,6 @@ func TestLimitationRenameInCatchUpWindow(t *testing.T) {
 	rn := start(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
 	rn.waitQuiet()
 	ok, diff = same(db)
+
 	assert.True(t, ok, "документы 0..2 в b уничтожены повтором rename: %s", diff)
 }
