@@ -31,8 +31,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 	"golang.org/x/term"
 
-	"github.com/sergey-frv/mongo-replicator/cmd/mongo-replicator/replicator"
 	"github.com/sergey-frv/mongo-replicator/internal/panel"
+	"github.com/sergey-frv/mongo-replicator/internal/replicator"
 	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
