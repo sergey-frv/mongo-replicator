@@ -78,6 +78,7 @@ func TestIntegrationTwoProcessesOneTarget(t *testing.T) {
 	rnB.waitSame(dbB)
 	rnA.waitQuiet()
 	rnB.waitQuiet()
+
 	assert.EqualValues(t, 4, rnA.r.Applied(), "3 insert + update — только своей базы")
 	assert.EqualValues(t, 4, rnB.r.Applied(), "3 insert + delete — только своей базы")
 	assert.Equal(t, dbPair{src: dbA, dst: dbA}, rnA.ckptPair())
@@ -100,8 +101,8 @@ func TestIntegrationCheckpointInDstDB(t *testing.T) {
 	defer cancel()
 	// база прежнего формата могла остаться в контейнере от старых прогонов
 	require.NoError(t, dstClient.Database("_replicator").Drop(ctx))
-
 	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db, DstDB: dstDB})
+
 	_, err := srcClient.Database(db).Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
 	rn.waitSameDBs(db, dstDB)
@@ -146,10 +147,12 @@ func TestIntegrationCheckpointCollDropped(t *testing.T) {
 	require.NoError(t, ckptOf(db).Drop(ctx))
 	require.ErrorIs(t, rn.waitExit(), ErrLeaseLost)
 	rn.stop()
+
 	_, found := readLease(t, db)
 	assert.False(t, found, "ни продление, ни Release документ не пересоздают")
 
 	_, err = runErr(t, Config{BatchSize: 1000, DB: db})
+
 	require.ErrorIs(t, err, ErrNoStartPoint)
 	_, found = readLease(t, db)
 	assert.False(t, found, "документ без позиции удалён при снятии аренды")
@@ -166,6 +169,7 @@ func TestIntegrationCheckpointCollFiltered(t *testing.T) {
 	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 	src := srcClient.Database(db)
 	items, svc := src.Collection("items"), src.Collection(ckptColl)
+
 	for i := range 20 {
 		_, err := items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(i)}})
 		require.NoError(t, err)
@@ -222,10 +226,10 @@ func TestIntegrationRenameReserved(t *testing.T) {
 			renameColl(ctx, t, db, c.from, c.to)
 
 			r, err := runErr(t, Config{StartTS: startTS, BatchSize: 1000, DB: db})
+
 			require.ErrorIs(t, err, ErrReservedCollection)
-			if d := r.Status().LastDDL; d != nil {
-				assert.NotEqual(t, "rename", d.Op)
-			}
+			d := r.Status().LastDDL
+			assert.True(t, d == nil || d.Op != "rename", "rename попал в статус как применённый: %+v", d)
 			names, err := collNames(ctx, dstClient, db)
 			require.NoError(t, err)
 			assert.Equal(t, c.dst, names, "rename на цель не ушёл")
@@ -237,6 +241,7 @@ func TestIntegrationRenameReserved(t *testing.T) {
 			assert.NotNil(t, ck.Token, "DML перед rename закоммичен")
 
 			r, err = runErr(t, Config{BatchSize: 1000, DB: db})
+
 			require.ErrorIs(t, err, ErrReservedCollection)
 			assert.EqualValues(t, 0, r.Applied())
 		})
@@ -254,6 +259,7 @@ func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
 	r.lastTS = bson.Timestamp{T: 1000, I: 3}
 	token, err := bson.Marshal(bson.M{"_data": "zz"})
 	require.NoError(t, err)
+
 	require.NoError(t, r.saveToken(ctx, token))
 
 	assert.Equal(t, r.lastTS, r.appliedTS)
@@ -263,15 +269,19 @@ func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
 
 	// рестарт: событий ещё нет, lastTS пуст — позиция берётся из чекпойнта
 	// и пустой getMore с неразобранным токеном её не обнуляет
-	// Run берёт позицию из чекпойнта до открытия потока; сам поток с токеном-заглушкой не откроется
 	require.NoError(t, r.Release(ctx))
 	r2 := newIT(dstClient, Config{BatchSize: 1000, DB: db})
 	t.Cleanup(func() { release(t, r2) })
+
+	// Run берёт позицию из чекпойнта до открытия потока; сам поток с токеном-заглушкой не откроется
 	require.ErrorContains(t, r2.Run(ctx), "открытие change stream")
+
 	require.Equal(t, r.lastTS, r2.appliedTS)
+
 	token2, err := bson.Marshal(bson.M{"_data": "yy"})
 	require.NoError(t, err)
 	require.NoError(t, r2.saveToken(ctx, token2))
+
 	assert.Equal(t, r.lastTS, r2.appliedTS)
 	assert.Equal(t, r.lastTS, (&runner{t: t, r: r2}).ckptTime())
 }

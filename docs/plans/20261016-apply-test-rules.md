@@ -316,10 +316,11 @@
 **Files:**
 - Modify: `cmd/mongo-replicator/replicator/{dbs,checkpoint,status}_integration_test.go`
 
-- [ ] `TestIntegrationRenameReserved`: условная проверка `LastDDL` → безусловная (Technical Details → Таблицы)
-- [ ] структура и проверки по правилам во всех тестах файлов
-- [ ] мутации на каждый изменённый тест
-- [ ] `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
+- [x] `TestIntegrationRenameReserved`: условная проверка `LastDDL` → безусловная (Technical Details → Таблицы)
+- [x] структура и проверки по правилам во всех тестах файлов
+  - ➕ проверки в файлах уже на testify; правки — блоки пустыми строками, в `TestIntegrationSaveTokenUnparsedTime` комментарий о `Run` перенесён к вызову `Run`
+- [x] мутации на каждый изменённый тест
+- [x] `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
 
 ### Task 7: Интеграционные лаг, трафик, ограничения
 

@@ -144,6 +144,7 @@ func TestIntegrationSingleDBResume(t *testing.T) {
 	rn.waitSame(db)
 	rn.waitQuiet()
 	rn.stop()
+
 	assert.Equal(t, dbPair{src: db, dst: db}, rn.ckptPair())
 
 	const n = 2
@@ -156,6 +157,7 @@ func TestIntegrationSingleDBResume(t *testing.T) {
 	rn2 := start(t, Config{BatchSize: 1000, DB: db})
 	rn2.waitSame(db)
 	rn2.waitQuiet()
+
 	assert.EqualValues(t, n, rn2.r.Applied())
 	assert.Equal(t, dbPair{src: db, dst: db}, rn2.ckptPair())
 }
@@ -167,14 +169,17 @@ func TestIntegrationDBMismatch(t *testing.T) {
 	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a"})
 
 	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_b", DstDB: "it_mismatch_a"})
+
 	require.ErrorIs(t, err, ErrDBMismatch)
 	assert.ErrorContains(t, err, `"it_mismatch_a" → "it_mismatch_a"`)
 
 	// у другой базы цели свой чекпойнт, а его нет
 	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_b"})
+
 	require.ErrorIs(t, err, ErrNoStartPoint)
 
 	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
+
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrDBMismatch)
 	assert.ErrorContains(t, err, "открытие change stream", "чекпойнт прочитан, сервер отверг токен-заглушку")
@@ -186,12 +191,15 @@ func TestIntegrationDstDBMismatch(t *testing.T) {
 	writeCkpt(t, dbPair{src: "it_mismatch_a", dst: "it_mismatch_a2"})
 
 	_, err := runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a", DstDB: "it_mismatch_a3"})
+
 	require.ErrorIs(t, err, ErrNoStartPoint)
 
 	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a"})
+
 	require.ErrorIs(t, err, ErrNoStartPoint, "без --dst-db цель — база источника")
 
 	_, err = runErr(t, Config{BatchSize: 1000, DB: "it_mismatch_a", DstDB: "it_mismatch_a2"})
+
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrDBMismatch)
 	assert.ErrorContains(t, err, "открытие change stream", "чекпойнт прочитан, сервер отверг токен-заглушку")

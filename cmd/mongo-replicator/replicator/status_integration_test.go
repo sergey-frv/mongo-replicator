@@ -60,6 +60,7 @@ func TestIntegrationStatus(t *testing.T) {
 	rn.stop()
 	rn.r.lastLog = time.Now().Add(-20 * time.Second)
 	rn.r.logProgress(ctx)
+
 	s = rn.r.Status()
 	assert.GreaterOrEqual(t, s.Lag, time.Duration(0), "позиция сохранена, источник доступен")
 	assert.False(t, s.AppliedAt.IsZero())
@@ -86,7 +87,9 @@ func TestIntegrationStatusRetry(t *testing.T) {
 	}
 
 	r := newIT(dstClient, Config{StartTS: startTS, BatchSize: 1, DB: db})
+
 	runErr := r.Run(ctx)
+
 	require.True(t, mongo.IsDuplicateKeyError(runErr), "%v", runErr)
 	s := r.Status()
 	assert.Equal(t, StateStopped, s.State)
@@ -94,6 +97,7 @@ func TestIntegrationStatusRetry(t *testing.T) {
 
 	// как цикл повторов main
 	r.SetRetry(runErr)
+
 	s = r.Status()
 	assert.Equal(t, StateRetry, s.State)
 	assert.Equal(t, 1, s.Retry)
@@ -102,12 +106,14 @@ func TestIntegrationStatusRetry(t *testing.T) {
 	require.NoError(t, dstC.Indexes().DropOne(ctx, "c_code_u"))
 	rn := startOn(t, r)
 	rn.waitSame(db)
+
 	s = r.Status()
 	assert.Equal(t, StateRunning, s.State)
 	assert.Zero(t, s.Retry)
 	assert.Empty(t, s.LastErr)
 
 	rn.stop()
+
 	s = r.Status()
 	assert.Equal(t, StateStopped, s.State)
 	assert.Empty(t, s.LastErr, "остановка отменой — не ошибка")
