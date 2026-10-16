@@ -33,23 +33,30 @@ func TestMaskURI(t *testing.T) {
 
 func TestLogURI(t *testing.T) {
 	const hidden = "(скрыт: в нём может быть пароль)"
-	assert.Equal(t, "mongodb://u:xxxxx@h1/", logURI("mongodb://u:Secret@h1/"))
-	assert.Equal(t, "mongodb://u@h1:27017/", logURI("mongodb://u@h1:27017/"))
-	assert.Equal(t, "garbage", logURI("garbage"))
-	assert.Equal(t, hidden, logURI("mongodb://u:Secret/x@h1/"), "неэкранированный / в пароле")
-	assert.Equal(t, hidden, logURI("mongodb:u:Secret@h1/"), "без ://")
-	assert.Equal(t, hidden, logURI("mongodb:u:Secret@h1://bad"), ":// после пароля")
-	assert.Equal(t, hidden, logURI("mongodb:u:Secret@h1://x:y@h2/"), ":// после пароля и userinfo за ним")
-	assert.Equal(t, hidden, logURI("mongodb://u:prefix@x/Secret@h/?connectTimeoutMS=bad"),
-		"неэкранированные @ и / в пароле: maskURI маскирует только начало")
-	assert.Equal(t, hidden, logURI("mongodb://u@x:Secret@h1/"), "неэкранированный @ в имени")
-	assert.Equal(t, "mongodb://h1/?authSource=a@b", logURI("mongodb://h1/?authSource=a@b"), "@ в query без пароля")
-	assert.Equal(t, "mongodb://u:xxxxx@h1/?tls=true&tlsCertificateKeyFilePassword=xxxxx",
-		logURI("mongodb://u:Secret@h1/?tls=true&tlsCertificateKeyFilePassword=Secret"), "пароль и секрет в query")
-	assert.Equal(t, "mongodb:h1/?tlsCertificateKeyFilePassword=xxxxx",
-		logURI("mongodb:h1/?tlsCertificateKeyFilePassword=Secret"), "секрет в query без ://")
-	assert.Equal(t, "mongodb://u:xxxxx@h1/?tlsCertificateKeyFilePassword=xxxxx",
-		logURI("mongodb://u:Secret@h1/?tlsCertificateKeyFilePassword=alpha?Secret"), "? в значении секрета")
+	cases := []struct{ name, in, want string }{
+		{"пароль маскируется", "mongodb://u:Secret@h1/", "mongodb://u:xxxxx@h1/"},
+		{"только user", "mongodb://u@h1:27017/", "mongodb://u@h1:27017/"},
+		{"не URI", "garbage", "garbage"},
+		{"неэкранированный / в пароле", "mongodb://u:Secret/x@h1/", hidden},
+		{"без ://", "mongodb:u:Secret@h1/", hidden},
+		{":// после пароля", "mongodb:u:Secret@h1://bad", hidden},
+		{":// после пароля и userinfo за ним", "mongodb:u:Secret@h1://x:y@h2/", hidden},
+		// maskURI маскирует только начало пароля
+		{"неэкранированные @ и / в пароле", "mongodb://u:prefix@x/Secret@h/?connectTimeoutMS=bad", hidden},
+		{"неэкранированный @ в имени", "mongodb://u@x:Secret@h1/", hidden},
+		{"@ в query без пароля", "mongodb://h1/?authSource=a@b", "mongodb://h1/?authSource=a@b"},
+		{"пароль и секрет в query", "mongodb://u:Secret@h1/?tls=true&tlsCertificateKeyFilePassword=Secret",
+			"mongodb://u:xxxxx@h1/?tls=true&tlsCertificateKeyFilePassword=xxxxx"},
+		{"секрет в query без ://", "mongodb:h1/?tlsCertificateKeyFilePassword=Secret",
+			"mongodb:h1/?tlsCertificateKeyFilePassword=xxxxx"},
+		{"? в значении секрета", "mongodb://u:Secret@h1/?tlsCertificateKeyFilePassword=alpha?Secret",
+			"mongodb://u:xxxxx@h1/?tlsCertificateKeyFilePassword=xxxxx"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, logURI(c.in))
+		})
+	}
 }
 
 func TestMaskOptions(t *testing.T) {

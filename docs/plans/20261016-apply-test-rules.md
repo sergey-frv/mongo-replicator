@@ -397,10 +397,16 @@
 **Files:**
 - Modify: `cmd/mongo-replicator/{options,mask}_test.go`
 
-- [ ] `TestStateDir`: случай «`XDG_STATE_HOME` не задан» — отдельный тест
-- [ ] таблицы, структура и проверки во всех тестах файлов
-- [ ] мутации на каждый изменённый тест
-- [ ] `make test`, `make lint`, охранная проверка; коммит с журналом мутаций
+- [x] `TestStateDir`: случай «`XDG_STATE_HOME` не задан» — отдельный тест
+  - ➕ `TestStateDirNoXDG`
+- [x] таблицы, структура и проверки во всех тестах файлов
+  - ➕ env случая таблицы задаёт хелпер `setEnv` (было — цикл в теле каждого подтеста)
+  - ➕ ошибки `--progress` → `TestParseOptsProgressErrors`; в `TestParseOptsProgress` флаг и env — строки таблицы
+  - ➕ `--dst-db` из `TestParseOptsDBName` → `TestParseOptsDstDBName`, имена — общая таблица `badDBNames`
+  - ➕ вложенные циклы уровней в `TestParseOptsLog`/`TestParseOptsLogErrors` → строки таблиц (в `TestParseOptsLog` уровней добавлена проверка `LogFile`, в `TestParseOptsLogErrors` — `isHelp`)
+  - ➕ `TestStateDirIsFile` → таблица (путь — файл, родитель — файл); `TestLogURI` → таблица
+- [x] мутации на каждый изменённый тест
+- [x] `make test`, `make lint`, охранная проверка; коммит с журналом мутаций
 
 ### Task 12: Юнит-тесты `main`: учётные данные и авторизация
 
