@@ -19,10 +19,10 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/term"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	mongoopts "go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
+	"golang.org/x/term"
 
 	"github.com/sergey-frv/mongo-replicator/internal/panel"
 	"github.com/sergey-frv/mongo-replicator/internal/replicator"
@@ -204,21 +204,19 @@ func panelInput(stdin *os.File, openTTY func() (*os.File, error),
 	isForeground func(*os.File) bool,
 ) (in *os.File, closeIn func()) {
 	noop := func() {}
-	if term.IsTerminal(int(stdin.Fd())) { //nolint:gosec // дескриптор stdin помещается в int
-		if !isForeground(stdin) {
+	in, closeIn = stdin, noop
+	if !term.IsTerminal(int(stdin.Fd())) { //nolint:gosec // дескриптор stdin помещается в int
+		tty, err := openTTY()
+		if err != nil {
 			return nil, noop
 		}
-		return stdin, noop
+		in, closeIn = tty, func() { _ = tty.Close() }
 	}
-	tty, err := openTTY()
-	if err != nil {
+	if !isForeground(in) {
+		closeIn()
 		return nil, noop
 	}
-	if !isForeground(tty) {
-		_ = tty.Close()
-		return nil, noop
-	}
-	return tty, func() { _ = tty.Close() }
+	return in, closeIn
 }
 
 // openTTY открывает управляющий терминал процесса. Не tea.OpenTTY: тот возвращает
