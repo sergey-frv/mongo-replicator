@@ -103,7 +103,7 @@ func populateProxies(api string) (src, dst *toxiproxy.Proxy, err error) {
 		if time.Now().After(deadline) {
 			return nil, nil, err
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond) // повтор до готовности API Toxiproxy: из TestMain, t для Eventually нет
 	}
 	// прокси из Populate не помечены созданными: их Enable/Disable пытаются создать
 	// прокси заново (409), поэтому берём их через Proxy

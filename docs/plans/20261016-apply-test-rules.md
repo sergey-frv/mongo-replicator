@@ -436,13 +436,18 @@
 - [x] коммит
 
 ### Task 14: Verify acceptance criteria
-- [ ] в тестах нет `t.Fatal*`/`t.Error*`, кроме обоснованных и отмеченных в плане: `grep -nE '(\bt|\.t)\.(Fatal|Fatalf|Error|Errorf)\(' -r cmd --include='*_test.go'`
-- [ ] каждый оставшийся `time.Sleep` законного вида и с комментарием: `grep -n 'time\.Sleep' -r cmd --include='*_test.go'`
-- [ ] в условиях `Eventually`/`Never` нет `t` (просмотр каждого вызова из `grep -nE 'Eventually|Never\(' -r cmd --include='*_test.go'`), у каждого есть сообщение
-- [ ] список тестов отличается от эталона только запланированными изменениями
-- [ ] журналы мутаций есть в коммитах Task 2–12 для каждого изменённого теста; ⚠️-тесты перечислены в плане
-- [ ] `git diff --stat` от начала работ — только `*_test.go`, `CLAUDE.md` и этот план
-- [ ] `make test`, `make test-integration`, `make lint`
+- [x] в тестах нет `t.Fatal*`/`t.Error*`, кроме обоснованных и отмеченных в плане: `grep -nE '(\bt|\.t)\.(Fatal|Fatalf|Error|Errorf)\(' -r cmd --include='*_test.go'`
+  - ➕ вызовов не осталось
+- [x] каждый оставшийся `time.Sleep` законного вида и с комментарием: `grep -n 'time\.Sleep' -r cmd --include='*_test.go'`
+  - ➕ у повтора в `populateProxies` не было комментария — добавлен
+- [x] в условиях `Eventually`/`Never` нет `t` (просмотр каждого вызова из `grep -nE 'Eventually|Never\(' -r cmd --include='*_test.go'`), у каждого есть сообщение
+  - ➕ `TestIntegrationLagPosition`: в условии был `rn.ckptTime()` (`require` с `rn.t`), пропущен в Task 7 → `EventuallyWithT` с `loadCheckpoint` и `require.NoError(c, err)`. Мутация: `replicator.go:357` токен пустого getMore не сохраняется → FAIL: «применённая позиция {…}» / «применённая позиция не дошла до записи в другую базу»
+- [x] список тестов отличается от эталона только запланированными изменениями
+  - ➕ отличия юнит- и интеграционного списков — только ➕-тесты Task 8–12 (`TestDecodeAndModel`, `TestCheckNS`, `TestStopped` разбиты; добавлены `TestApplyDDLRenameChecksLease`, `TestCheckDBsSame`, `TestLogMachineNoDir`, `TestNotPermanent`, `TestRenderPanelStopped`, `TestParseOptsDstDBName`, `TestParseOptsProgressErrors`, `TestStateDirNoXDG`, `TestClientOptionsNoUser`, `TestClientOptionsNoPasswordLeakErrors`)
+- [x] журналы мутаций есть в коммитах Task 2–12 для каждого изменённого теста; ⚠️-тесты перечислены в плане
+  - ➕ сверка скриптом: каждая функция, изменённая в коммите (без учёта пробелов), названа в его журнале (в Task 3 — короткими именами `NetSrcDown` и т. п.); единственный ⚠️ журналов — `TestLogMachineNoDir`, в плане есть
+- [x] `git diff --stat` от начала работ — только `*_test.go`, `CLAUDE.md` и этот план
+- [x] `make test`, `make test-integration`, `make lint`
 
 ### Task 15: [Final] Update documentation
 - [ ] README.md — только если ссылается на переименованные хелперы или тесты
