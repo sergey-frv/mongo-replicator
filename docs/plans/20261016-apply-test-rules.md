@@ -290,12 +290,13 @@
 - Modify: `cmd/mongo-replicator/replicator/lease_test.go`
 - Modify: `cmd/mongo-replicator/replicator/lease_integration_test.go`
 
-- [ ] таймауты `select` → `require.FailNow`
-- [ ] комментарии к снам: `lease_integration:200` — длительность долгого DDL, `:212` — серверное время аренды
-- [ ] ➕ `TestIntegrationLeaseLost` (`:149`): `readLease(t, …)` внутри `Eventually` → условие без `t` (`EventuallyWithT` с чтением чекпойнта и `require.NoError(c, err)`), плюс сообщение
-- [ ] таблицы и структура тестов по правилам
-- [ ] мутации на каждый изменённый тест, например: продление не останавливается при 2/3 TTL; `checkLease` не проверяет срок
-- [ ] `make test`, `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
+- [x] таймауты `select` → `require.FailNow`
+- [x] комментарии к снам: `lease_integration:200` — длительность долгого DDL, `:212` — серверное время аренды
+- [x] ➕ `TestIntegrationLeaseLost` (`:149`): `readLease(t, …)` внутри `Eventually` → условие без `t` (`EventuallyWithT` с чтением чекпойнта и `require.NoError(c, err)`), плюс сообщение
+  - ➕ условие — `findLease` из Task 3, владелец копируется в локальную переменную до вызова
+- [x] таблицы и структура тестов по правилам
+- [x] мутации на каждый изменённый тест, например: продление не останавливается при 2/3 TTL; `checkLease` не проверяет срок
+- [x] `make test`, `make test-integration`, `make lint`, охранная проверка; коммит с журналом мутаций
 
 ### Task 5: Интеграционные DML, DDL, удаления
 

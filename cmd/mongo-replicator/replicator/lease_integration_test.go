@@ -32,10 +32,11 @@ func TestIntegrationLeaseHeld(t *testing.T) {
 	require.NoError(t, err)
 	rnA.waitSame(db)
 	rnA.waitQuiet()
-
 	before, err := os.ReadFile(rnA.r.cfg.StateFile)
 	require.NoError(t, err)
+
 	_, err = runErr(t, withState(Config{BatchSize: 1000, DB: db}, dir))
+
 	require.ErrorIs(t, err, ErrLeaseHeld)
 	assert.ErrorContains(t, err, rnA.r.owner)
 	after, err := os.ReadFile(rnA.r.cfg.StateFile)
@@ -48,6 +49,7 @@ func TestIntegrationLeaseHeld(t *testing.T) {
 	assert.Equal(t, rnA.r.owner, st.Owner, "неудачный захват и Release второго не трогают аренду первого")
 
 	rnA.stop()
+
 	st, found := readLease(t, db)
 	require.True(t, found, "документ с позицией остаётся")
 	assert.Empty(t, st.Owner, "аренда снята")
@@ -59,6 +61,7 @@ func TestIntegrationLeaseHeld(t *testing.T) {
 	_, err = items.InsertOne(ctx, bson.D{{Key: "_id", Value: int32(2)}})
 	require.NoError(t, err)
 	rnB.waitSame(db)
+
 	st, _ = readLease(t, db)
 	assert.Equal(t, rnB.r.owner, st.Owner)
 }
@@ -77,6 +80,7 @@ func TestIntegrationLeaseExpired(t *testing.T) {
 	_, err = srcClient.Database(db).Collection("items").InsertOne(ctx, bson.D{{Key: "_id", Value: int32(1)}})
 	require.NoError(t, err)
 	rn.waitSame(db)
+
 	st, _ := readLease(t, db)
 	assert.Equal(t, rn.r.owner, st.Owner)
 }
@@ -94,6 +98,7 @@ func TestIntegrationLeaseHeldNoToken(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = runErr(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
+
 	require.ErrorIs(t, err, ErrLeaseHeld)
 	st, found := readLease(t, db)
 	require.True(t, found, "документ владельца не удалён")
@@ -108,9 +113,11 @@ func TestIntegrationSaveTokenNotOwner(t *testing.T) {
 	defer cancel()
 	token, err := bson.Marshal(bson.M{"_data": "00"})
 	require.NoError(t, err)
-
 	r := newIT(dstClient, Config{BatchSize: 1000, DB: db})
-	require.ErrorIs(t, r.saveToken(ctx, token), ErrLeaseLost)
+
+	err = r.saveToken(ctx, token)
+
+	require.ErrorIs(t, err, ErrLeaseLost, "без захвата аренды")
 	_, found := readLease(t, db)
 	assert.False(t, found, "без захвата документ не создаётся")
 
@@ -119,7 +126,10 @@ func TestIntegrationSaveTokenNotOwner(t *testing.T) {
 	_, err = ckptOf(db).UpdateOne(ctx,
 		bson.M{"_id": ckptID}, bson.M{"$set": bson.M{"owner": intruder}})
 	require.NoError(t, err)
-	require.ErrorIs(t, r.saveToken(ctx, token), ErrLeaseLost)
+
+	err = r.saveToken(ctx, token)
+
+	require.ErrorIs(t, err, ErrLeaseLost, "аренду забрали")
 	st, _ := readLease(t, db)
 	assert.Equal(t, intruder, st.Owner)
 	assert.Nil(t, st.Token, "чужой документ не сдвинут")
@@ -134,7 +144,9 @@ func TestIntegrationLeaseExpiringStopsWrites(t *testing.T) {
 	db := prepare(t)
 	r := newIT(dstClient, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
 	r.leaseRenew = time.Hour // продление не придёт: срабатывает проверка перед записью
+
 	rn := startOn(t, r)
+
 	require.ErrorIs(t, rn.waitExit(), errLeaseExpiring)
 }
 
@@ -146,10 +158,12 @@ func TestIntegrationLeaseLost(t *testing.T) {
 	defer cancel()
 
 	rn := start(t, Config{StartTS: srcNow(t), BatchSize: 1000, DB: db})
-	require.Eventually(t, func() bool {
-		st, _ := readLease(t, db)
-		return st.Owner == rn.r.owner
-	}, waitTimeout, pollEvery)
+	owner := rn.r.owner
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		st, _, err := findLease(db)
+		require.NoError(c, err)
+		assert.Equal(c, owner, st.Owner, "владелец аренды")
+	}, waitTimeout, pollEvery, "репликатор не захватил аренду за %s", waitTimeout)
 
 	const intruder = "intruder:1:00000000"
 	_, err := ckptOf(db).UpdateOne(ctx,
@@ -158,6 +172,7 @@ func TestIntegrationLeaseLost(t *testing.T) {
 
 	require.ErrorIs(t, rn.waitExit(), ErrLeaseLost)
 	rn.stop()
+
 	st, _ := readLease(t, db)
 	assert.Equal(t, intruder, st.Owner)
 }
@@ -174,11 +189,14 @@ func TestIntegrationLeaseRerun(t *testing.T) {
 	r := newIT(dstClient, Config{BatchSize: 1000, DB: db})
 	r.leaseTTL = time.Minute // не истечёт между запусками
 	t.Cleanup(func() { release(t, r) })
+
 	require.ErrorContains(t, r.Run(ctx), "открытие change stream")
+
 	st, _ := readLease(t, db)
 	assert.Equal(t, r.owner, st.Owner, "аренда остаётся за репликатором и после возврата Run")
 
 	_, err := runErr(t, Config{BatchSize: 1000, DB: db})
+
 	require.ErrorIs(t, err, ErrLeaseHeld)
 
 	require.ErrorContains(t, r.Run(ctx), "открытие change stream", "своя аренда захватывается снова")
@@ -197,6 +215,8 @@ func TestIntegrationLeaseRenewDuringLongDDL(t *testing.T) {
 	r.ddlHook = func() {
 		once.Do(func() {
 			close(inDDL)
+			// длительность действия: DDL держит основной цикл три срока аренды —
+			// хватает на проверку продления и попытку захвата вторым процессом
 			time.Sleep(3 * itLeaseTTL)
 		})
 	}
@@ -205,17 +225,20 @@ func TestIntegrationLeaseRenewDuringLongDDL(t *testing.T) {
 	select {
 	case <-inDDL:
 	case <-ctx.Done():
-		t.Fatal("DDL не дошёл до применения")
+		require.FailNow(t, "DDL не дошёл до применения")
 	}
-
 	before, _ := readLease(t, db)
-	time.Sleep(itLeaseTTL + itLeaseRenew) // без продления аренда уже истекла бы
+
+	// серверное время аренды: без продления за этот интервал она уже истекла бы
+	time.Sleep(itLeaseTTL + itLeaseRenew)
+
 	after, _ := readLease(t, db)
 	assert.Equal(t, r.owner, after.Owner)
 	assert.True(t, after.LeaseUntil.After(before.LeaseUntil), "аренда продлевается: %v → %v",
 		before.LeaseUntil, after.LeaseUntil)
 
 	_, err := runErr(t, Config{BatchSize: 1000, DB: db})
+
 	require.ErrorIs(t, err, ErrLeaseHeld)
 
 	// DDL завершился, репликация продолжается
