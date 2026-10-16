@@ -69,9 +69,20 @@ func TestFlagGiven(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, flagGiven(c.args, "src"))
+			assert.Equal(t, c.want, flagGiven(c.args, "src"), "--src передан")
 		})
 	}
+}
+
+func TestClientOptionsNoUser(t *testing.T) {
+	p := &fakePrompter{terminal: true}
+
+	opts, warn, err := clientOptions(srcSide("mongodb://h1:27017/?replicaSet=rs8", true), p)
+
+	require.NoError(t, err)
+	assert.Empty(t, p.prompts, "prompter не должен вызываться")
+	assert.False(t, warn, "WARN о пароле во флаге")
+	assert.Nil(t, opts.Auth, "без авторизации")
 }
 
 func TestClientOptionsNoPrompt(t *testing.T) {
@@ -83,7 +94,6 @@ func TestClientOptionsNoPrompt(t *testing.T) {
 		password string
 		warn     bool
 	}{
-		{"нет пользователя", "mongodb://h1:27017/?replicaSet=rs8", true, "", "", false},
 		{"X509", "mongodb://CN=client@h1/?authMechanism=MONGODB-X509&tls=true", false, "CN=client", "", false},
 		{"x509 в нижнем регистре", "mongodb://CN=client@h1/?authMechanism=mongodb-x509&tls=true", false, "CN=client", "", false},
 		{"пароль в URI флагом", "mongodb://repl:s3cret@h1:27017/?authSource=admin", true, "repl", "s3cret", true},
@@ -92,17 +102,15 @@ func TestClientOptionsNoPrompt(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			p := &fakePrompter{terminal: true}
+
 			opts, warn, err := clientOptions(srcSide(c.uri, c.fromFlag), p)
+
 			require.NoError(t, err)
 			assert.Empty(t, p.prompts, "prompter не должен вызываться")
-			assert.Equal(t, c.warn, warn)
-			if c.user == "" {
-				assert.Nil(t, opts.Auth)
-				return
-			}
-			require.NotNil(t, opts.Auth)
-			assert.Equal(t, c.user, opts.Auth.Username)
-			assert.Equal(t, c.password, opts.Auth.Password)
+			assert.Equal(t, c.warn, warn, "WARN о пароле во флаге")
+			require.NotNil(t, opts.Auth, "учётные данные из URI")
+			assert.Equal(t, c.user, opts.Auth.Username, "пользователь")
+			assert.Equal(t, c.password, opts.Auth.Password, "пароль")
 		})
 	}
 }
@@ -119,17 +127,20 @@ func TestClientOptionsPrompt(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			p := &fakePrompter{terminal: true, answers: []string{"t3rm-pass"}}
+
 			opts, warn, err := clientOptions(srcSide(c.uri, c.fromFlag), p)
+
 			require.NoError(t, err)
-			assert.False(t, warn)
-			require.Len(t, p.prompts, 1)
-			assert.Contains(t, p.prompts[0], "repl@h1:27017")
-			assert.Contains(t, p.prompts[0], "источник")
-			assert.NotContains(t, p.prompts[0], "t3rm-pass")
-			assert.Equal(t, "repl", opts.Auth.Username)
-			assert.Equal(t, "t3rm-pass", opts.Auth.Password)
-			assert.True(t, opts.Auth.PasswordSet)
-			assert.Equal(t, "admin", opts.Auth.AuthSource)
+			assert.False(t, warn, "пароль из терминала — без WARN")
+			require.Len(t, p.prompts, 1, "один запрос пароля")
+			assert.Contains(t, p.prompts[0], "repl@h1:27017", "приглашение называет пользователя и хост")
+			assert.Contains(t, p.prompts[0], "источник", "приглашение называет сторону")
+			assert.NotContains(t, p.prompts[0], "t3rm-pass", "пароля нет в приглашении")
+			require.NotNil(t, opts.Auth, "учётные данные из URI")
+			assert.Equal(t, "repl", opts.Auth.Username, "пользователь")
+			assert.Equal(t, "t3rm-pass", opts.Auth.Password, "пароль из терминала")
+			assert.True(t, opts.Auth.PasswordSet, "пароль задан")
+			assert.Equal(t, "admin", opts.Auth.AuthSource, "authSource из URI")
 		})
 	}
 }
@@ -151,10 +162,11 @@ func TestClientOptionsPromptErrors(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			opts, _, err := clientOptions(c.s, c.p)
+
 			require.Error(t, err)
-			assert.Nil(t, opts)
+			assert.Nil(t, opts, "без опций при ошибке")
 			for _, w := range c.want {
-				assert.Contains(t, err.Error(), w)
+				assert.Contains(t, err.Error(), w, "подсказка оператору")
 			}
 		})
 	}
@@ -191,15 +203,17 @@ func TestClientOptionsURIErrors(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			p := &fakePrompter{terminal: true, answers: []string{"x"}}
+
 			opts, _, err := clientOptions(srcSide(c.uri, true), p)
+
 			require.Error(t, err)
-			assert.Nil(t, opts)
+			assert.Nil(t, opts, "без опций при ошибке")
 			assert.Empty(t, p.prompts, "до запроса пароля")
 			for _, w := range c.want {
-				assert.Contains(t, err.Error(), w)
+				assert.Contains(t, err.Error(), w, "подсказка оператору")
 			}
 			for _, w := range c.notWant {
-				assert.NotContains(t, err.Error(), w)
+				assert.NotContains(t, err.Error(), w, "лишнее в тексте ошибки")
 			}
 		})
 	}
@@ -209,19 +223,31 @@ func TestClientOptionsURIErrors(t *testing.T) {
 func TestURIErrorDNS(t *testing.T) {
 	dnsErr := &net.DNSError{Err: "no such host", Name: "_mongodb._tcp.cluster.example.com", IsNotFound: true}
 	wrapped := fmt.Errorf("error parsing uri: see https://pkg.go.dev/x: %w", dnsErr)
+	cases := []struct {
+		name    string
+		uri     string
+		want    []string
+		notWant []string
+	}{
+		{"пароль маскируется", "mongodb+srv://repl:Secret@cluster.example.com/?authSource=admin",
+			[]string{"источник", "mongodb+srv://repl:xxxxx@cluster.example.com/", "no such host", "_mongodb._tcp.cluster.example.com"},
+			[]string{"Secret"}},
+		{"@ и / в пароле, URI не выводится", "mongodb+srv://repl:pre@x/Secret@cluster.example.com/",
+			[]string{"no such host"}, []string{"Secret", "pre"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := uriError(srcSide(c.uri, false), wrapped)
 
-	err := uriError(srcSide("mongodb+srv://repl:Secret@cluster.example.com/?authSource=admin", false), wrapped)
-	assert.Contains(t, err.Error(), "источник")
-	assert.Contains(t, err.Error(), "mongodb+srv://repl:xxxxx@cluster.example.com/")
-	assert.Contains(t, err.Error(), "no such host")
-	assert.Contains(t, err.Error(), "_mongodb._tcp.cluster.example.com")
-	assert.NotContains(t, err.Error(), "Secret")
-	assert.ErrorIs(t, err, dnsErr)
-
-	err = uriError(srcSide("mongodb+srv://repl:pre@x/Secret@cluster.example.com/", false), wrapped)
-	assert.Contains(t, err.Error(), "no such host")
-	assert.NotContains(t, err.Error(), "Secret")
-	assert.NotContains(t, err.Error(), "pre")
+			require.ErrorIs(t, err, dnsErr, "ошибка DNS сохраняется")
+			for _, w := range c.want {
+				assert.Contains(t, err.Error(), w, "подсказка оператору")
+			}
+			for _, w := range c.notWant {
+				assert.NotContains(t, err.Error(), w, "пароля нет в тексте ошибки")
+			}
+		})
+	}
 }
 
 // TestClientOptionsNoPasswordLeak: пароль не встречается ни в приглашении, ни в ошибках.
@@ -234,6 +260,25 @@ func TestClientOptionsNoPasswordLeak(t *testing.T) {
 	}{
 		{"из терминала", "mongodb://repl@h1/", &fakePrompter{terminal: true, answers: []string{pwd}}},
 		{"из URI", "mongodb://repl:" + pwd + "@h1/", &fakePrompter{terminal: true}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, _, err := clientOptions(srcSide(c.uri, true), c.p)
+
+			require.NoError(t, err)
+			assertNoPassword(t, c.p.prompts, pwd)
+		})
+	}
+}
+
+// TestClientOptionsNoPasswordLeakErrors: пароль не встречается ни в приглашении, ни в тексте ошибки.
+func TestClientOptionsNoPasswordLeakErrors(t *testing.T) {
+	const pwd = "Leak3dP4ss"
+	cases := []struct {
+		name string
+		uri  string
+		p    *fakePrompter
+	}{
 		{"кривой URI с паролем", "mongodb://repl:" + pwd + "%zz@h1/", &fakePrompter{terminal: true}},
 		{"неэкранированный / в пароле", "mongodb://repl:" + pwd + "/x@h1/", &fakePrompter{terminal: true}},
 		{"без ://", "mongodb:repl:" + pwd + "@h1/", &fakePrompter{terminal: true}},
@@ -245,14 +290,20 @@ func TestClientOptionsNoPasswordLeak(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			_, _, err := clientOptions(srcSide(c.uri, true), c.p)
-			if err != nil {
-				assert.NotContains(t, err.Error(), pwd)
-				assert.NotContains(t, err.Error(), pwd[:4], "и части пароля")
-			}
-			for _, pr := range c.p.prompts {
-				assert.NotContains(t, pr, pwd)
-			}
+
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), pwd, "пароля нет в тексте ошибки")
+			assert.NotContains(t, err.Error(), pwd[:4], "и части пароля")
+			assertNoPassword(t, c.p.prompts, pwd)
 		})
+	}
+}
+
+// assertNoPassword проверяет, что пароля нет ни в одном приглашении.
+func assertNoPassword(t *testing.T, prompts []string, pwd string) {
+	t.Helper()
+	for _, pr := range prompts {
+		assert.NotContains(t, pr, pwd, "пароля нет в приглашении")
 	}
 }
 
@@ -276,114 +327,146 @@ func TestPrepareClientsBothPrompted(t *testing.T) {
 	// одинаковый пользователь на обеих сторонах — всё равно два запроса
 	p := &fakePrompter{terminal: true, answers: []string{"src-pass", "dst-pass"}}
 	w := &warnRecorder{p: p}
+
 	srcOpts, dstOpts, err := prepareClients(
 		srcSide("mongodb://repl@s1:27017/?authSource=admin", false),
 		dstSide("mongodb://repl@d1:27017/?authSource=admin", false), p, w.onWarn)
+
 	require.NoError(t, err)
-	require.Len(t, p.prompts, 2)
-	assert.Contains(t, p.prompts[0], "repl@s1:27017")
-	assert.Contains(t, p.prompts[0], "источник")
-	assert.Contains(t, p.prompts[1], "repl@d1:27017")
-	assert.Contains(t, p.prompts[1], "цель")
-	assert.Equal(t, "src-pass", srcOpts.Auth.Password)
-	assert.Equal(t, "dst-pass", dstOpts.Auth.Password)
-	assert.Empty(t, w.sides)
+	require.Len(t, p.prompts, 2, "запрос пароля на каждую сторону")
+	assert.Contains(t, p.prompts[0], "repl@s1:27017", "первый запрос — хост источника")
+	assert.Contains(t, p.prompts[0], "источник", "первый запрос — источник")
+	assert.Contains(t, p.prompts[1], "repl@d1:27017", "второй запрос — хост цели")
+	assert.Contains(t, p.prompts[1], "цель", "второй запрос — цель")
+	assert.Equal(t, "src-pass", srcOpts.Auth.Password, "пароль источника")
+	assert.Equal(t, "dst-pass", dstOpts.Auth.Password, "пароль цели")
+	assert.Empty(t, w.sides, "пароли из терминала — без WARN")
 }
 
 func TestPrepareClientsMixed(t *testing.T) {
 	// источник — пароль в URI из окружения, цель — из терминала
 	p := &fakePrompter{terminal: true, answers: []string{"dst-pass"}}
 	w := &warnRecorder{p: p}
+
 	srcOpts, dstOpts, err := prepareClients(
 		srcSide("mongodb://repl:src-pass@s1/", false),
 		dstSide("mongodb://repl@d1/", false), p, w.onWarn)
+
 	require.NoError(t, err)
-	require.Len(t, p.prompts, 1)
-	assert.Contains(t, p.prompts[0], "цель")
-	assert.Equal(t, "src-pass", srcOpts.Auth.Password)
-	assert.Equal(t, "dst-pass", dstOpts.Auth.Password)
+	require.Len(t, p.prompts, 1, "запрос пароля только для цели")
+	assert.Contains(t, p.prompts[0], "цель", "запрос — цель")
+	assert.Equal(t, "src-pass", srcOpts.Auth.Password, "пароль источника из URI")
+	assert.Equal(t, "dst-pass", dstOpts.Auth.Password, "пароль цели из терминала")
 	assert.Empty(t, w.sides, "пароль из окружения — без WARN")
 }
 
 func TestPrepareClientsWarnBeforeDstPrompt(t *testing.T) {
 	p := &fakePrompter{terminal: true, answers: []string{"dst-pass"}}
 	w := &warnRecorder{p: p}
+
 	_, dstOpts, err := prepareClients(
 		srcSide("mongodb://repl:src-pass@s1/", true),
 		dstSide("mongodb://repl@d1/", false), p, w.onWarn)
+
 	require.NoError(t, err)
-	assert.Equal(t, []string{"источник"}, w.sides)
+	assert.Equal(t, []string{"источник"}, w.sides, "WARN только для источника")
 	assert.Equal(t, []int{0}, w.at, "WARN источника — до запроса пароля цели")
-	assert.Equal(t, "dst-pass", dstOpts.Auth.Password)
+	assert.Equal(t, "dst-pass", dstOpts.Auth.Password, "пароль цели из терминала")
 }
 
 func TestPrepareClientsWarnBothSides(t *testing.T) {
 	p := &fakePrompter{terminal: true}
 	w := &warnRecorder{p: p}
+
 	_, _, err := prepareClients(
 		srcSide("mongodb://repl:a@s1/", true),
 		dstSide("mongodb://repl:b@d1/", true), p, w.onWarn)
+
 	require.NoError(t, err)
-	assert.Equal(t, []string{"источник", "цель"}, w.sides)
-	assert.Empty(t, p.prompts)
+	assert.Equal(t, []string{"источник", "цель"}, w.sides, "WARN для обеих сторон")
+	assert.Empty(t, p.prompts, "пароли из URI — без запроса")
 }
 
 func TestPrepareClientsErrors(t *testing.T) {
 	t.Run("ошибка источника — цель не запрашивается", func(t *testing.T) {
 		p := &fakePrompter{terminal: true, answers: []string{""}}
 		w := &warnRecorder{p: p}
+
 		srcOpts, dstOpts, err := prepareClients(
 			srcSide("mongodb://repl@s1/", false),
 			dstSide("mongodb://repl@d1/", false), p, w.onWarn)
+
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "источник")
-		assert.Nil(t, srcOpts)
-		assert.Nil(t, dstOpts)
-		require.Len(t, p.prompts, 1)
-		assert.Contains(t, p.prompts[0], "источник")
+		assert.Contains(t, err.Error(), "источник", "ошибка называет сторону")
+		assert.Nil(t, srcOpts, "без опций источника")
+		assert.Nil(t, dstOpts, "без опций цели")
+		require.Len(t, p.prompts, 1, "один запрос пароля")
+		assert.Contains(t, p.prompts[0], "источник", "запрос — источник")
 	})
 	t.Run("ошибка URI цели — до запроса пароля источника", func(t *testing.T) {
 		p := &fakePrompter{terminal: true, answers: []string{"src-pass"}}
 		w := &warnRecorder{p: p}
+
 		srcOpts, dstOpts, err := prepareClients(
 			srcSide("mongodb://repl:a@s1/", true),
 			dstSide("mongodb://h1/?connectTimeoutMS=abc", false), p, w.onWarn)
+
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "цель")
-		assert.Nil(t, srcOpts)
-		assert.Nil(t, dstOpts)
-		assert.Empty(t, p.prompts)
-		assert.Empty(t, w.sides)
+		assert.Contains(t, err.Error(), "цель", "ошибка называет сторону")
+		assert.Nil(t, srcOpts, "без опций источника")
+		assert.Nil(t, dstOpts, "без опций цели")
+		assert.Empty(t, p.prompts, "пароль не запрашивался")
+		assert.Empty(t, w.sides, "WARN не выводился")
 	})
 	t.Run("ошибка пароля цели", func(t *testing.T) {
 		p := &fakePrompter{terminal: true, answers: []string{"src-pass", ""}}
 		w := &warnRecorder{p: p}
+
 		srcOpts, dstOpts, err := prepareClients(
 			srcSide("mongodb://repl@s1/", false),
 			dstSide("mongodb://repl@d1/", false), p, w.onWarn)
+
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "цель")
-		assert.Nil(t, srcOpts)
-		assert.Nil(t, dstOpts)
-		assert.Len(t, p.prompts, 2)
+		assert.Contains(t, err.Error(), "цель", "ошибка называет сторону")
+		assert.Nil(t, srcOpts, "без опций источника")
+		assert.Nil(t, dstOpts, "без опций цели")
+		assert.Len(t, p.prompts, 2, "запрос пароля на каждую сторону")
 	})
 }
 
 func TestMayHavePassword(t *testing.T) {
-	assert.True(t, mayHavePassword("mongodb://repl:a/b@h1/"))
-	assert.True(t, mayHavePassword("mongodb://repl:a@h1/"))
-	assert.False(t, mayHavePassword("mongodb://repl@h1:27017/"))
-	assert.False(t, mayHavePassword("mongodb://h1:27017/?replicaSet=rs8"))
-	assert.True(t, mayHavePassword("mongodb:repl:a@h1/"), "без :// — проверяется вся строка")
-	assert.True(t, mayHavePassword("mongodb:repl:a@h1://bad"), ":// не в начале — не схема")
-	assert.True(t, mayHavePassword("mongodb://repl:a://b@h1/"), ":// в пароле")
-	assert.False(t, mayHavePassword("mongodb:h1/"))
-	assert.False(t, mayHavePassword("garbage"))
+	cases := []struct {
+		name string
+		uri  string
+		want bool
+	}{
+		{"/ в пароле", "mongodb://repl:a/b@h1/", true},
+		{"пароль", "mongodb://repl:a@h1/", true},
+		{"только пользователь", "mongodb://repl@h1:27017/", false},
+		{"без пользователя", "mongodb://h1:27017/?replicaSet=rs8", false},
+		{"без :// — проверяется вся строка", "mongodb:repl:a@h1/", true},
+		{":// не в начале — не схема", "mongodb:repl:a@h1://bad", true},
+		{":// в пароле", "mongodb://repl:a://b@h1/", true},
+		{"без :// и без пользователя", "mongodb:h1/", false},
+		{"не URI", "garbage", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, mayHavePassword(c.uri), "в URI может быть пароль")
+		})
+	}
 }
 
 func TestMechanism(t *testing.T) {
-	assert.Equal(t, "SCRAM-SHA-256", mechanism("mongodb://u@h/?authMechanism=scram-sha-256&authSource=admin"))
-	assert.Equal(t, "PLAIN", mechanism("mongodb://u@h/?authSource=$external&AUTHMECHANISM=PLAIN"))
-	assert.Equal(t, "", mechanism("mongodb://u@h/?authMechanismProperties=SERVICE_NAME:x"))
-	assert.Equal(t, "", mechanism("mongodb://u@h/"))
+	cases := []struct{ name, uri, want string }{
+		{"нижний регистр значения", "mongodb://u@h/?authMechanism=scram-sha-256&authSource=admin", "SCRAM-SHA-256"},
+		{"верхний регистр ключа", "mongodb://u@h/?authSource=$external&AUTHMECHANISM=PLAIN", "PLAIN"},
+		{"только authMechanismProperties", "mongodb://u@h/?authMechanismProperties=SERVICE_NAME:x", ""},
+		{"не задан", "mongodb://u@h/", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, mechanism(c.uri), "authMechanism")
+		})
+	}
 }

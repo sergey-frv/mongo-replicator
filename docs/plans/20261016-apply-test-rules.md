@@ -414,11 +414,16 @@
 - Modify: `cmd/mongo-replicator/credentials_test.go`
 - Modify: `cmd/mongo-replicator/auth_integration_test.go`
 
-- [ ] `TestClientOptionsNoPrompt` → тест без пользователя и таблица с пользователем
-- [ ] `TestClientOptionsNoPasswordLeak` → таблицы «с ошибкой» и «без ошибки» (исход фиксируется по текущему поведению)
-- [ ] таблицы, структура и проверки во всех тестах файлов
-- [ ] мутации на каждый изменённый тест, например: пароль попадает в текст ошибки разбора URI; prompter вызывается при пароле в URI
-- [ ] `make test`, `make test-integration` (для `auth_integration_test.go`, пакет `./cmd/mongo-replicator/`), `make lint`, охранная проверка; коммит с журналом мутаций
+- [x] `TestClientOptionsNoPrompt` → тест без пользователя и таблица с пользователем
+  - ➕ `TestClientOptionsNoUser`; в `TestClientOptionsNoPrompt` остались случаи с пользователем
+- [x] `TestClientOptionsNoPasswordLeak` → таблицы «с ошибкой» и «без ошибки» (исход фиксируется по текущему поведению)
+  - ➕ `TestClientOptionsNoPasswordLeak` (без ошибки: из терминала, из URI) и `TestClientOptionsNoPasswordLeakErrors` (остальные 7 случаев); пароль в приглашениях проверяет `assertNoPassword`
+- [x] таблицы, структура и проверки во всех тестах файлов
+  - ➕ `TestURIErrorDNS`, `TestMayHavePassword`, `TestMechanism` → таблицы; в `TestURIErrorDNS` `ErrorIs` — для обоих случаев
+  - ➕ в `TestClientOptionsPrompt`/`TestClientOptionsNoPrompt` перед полями `opts.Auth` — `require.NotNil`
+  - ➕ `TestIntegrationPromptedPasswordAuth`: замыкание `try` → хелпер `promptAndConnect`, создание пользователя → `createUser` (удаление — `t.Cleanup`)
+- [x] мутации на каждый изменённый тест, например: пароль попадает в текст ошибки разбора URI; prompter вызывается при пароле в URI
+- [x] `make test`, `make test-integration` (для `auth_integration_test.go`, пакет `./cmd/mongo-replicator/`), `make lint`, охранная проверка; коммит с журналом мутаций
 
 ### Task 13: Правила в `CLAUDE.md`
 
