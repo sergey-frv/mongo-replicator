@@ -48,6 +48,8 @@ func TestRenderPanel(t *testing.T) {
 	prev.SrcIn -= 420 * KiB
 	prev.DstOut -= 390 * KiB
 
+	lines := panelLines(st, at, prev, at.Add(-time.Second))
+
 	assert.Equal(t, []string{
 		"urlshrinker → urlshrinker_v2 · с запуска 2ч14м · лаг 1с (применено до 12:01:33)",
 		"операции: 1 284 551 всего · 312/с · пачка 12:01:34: 48 (ins 30 · upd 15 · del 3) в links, clicks",
@@ -55,7 +57,7 @@ func TestRenderPanel(t *testing.T) {
 		"трафик процесса: источник ↓ 3.1 GiB 420 KiB/с ↑ 12 MiB · цель ↓ 40 MiB ↑ 2.9 GiB 390 KiB/с",
 		"на машине (3, активно 2, на 12:01): источник ↓ 12.4 GiB ↑ 300 MiB · цель ↓ 200 MiB ↑ 11.9 GiB",
 		"состояние: работает",
-	}, panelLines(st, at, prev, at.Add(-time.Second)))
+	}, lines)
 }
 
 func TestRenderPanelMinimal(t *testing.T) {
@@ -63,12 +65,15 @@ func TestRenderPanelMinimal(t *testing.T) {
 	// без пачки, DDL и сводки, лаг неизвестен, предыдущего снимка нет — без скоростей
 	st := replicator.Status{DB: "a", DstDB: "b", Started: at.Add(-5 * time.Second), Rate: 0.3, Lag: -1,
 		Traffic: replicator.TrafficInfo{SrcIn: 512, SrcOut: 1536}, State: replicator.StateStarting}
+
+	lines := panelLines(st, at, replicator.TrafficInfo{}, time.Time{})
+
 	assert.Equal(t, []string{
 		"a → b · с запуска 5с · лаг неизвестен",
 		"операции: 0 всего · 0.3/с",
 		"трафик процесса: источник ↓ 512 B ↑ 1.5 KiB · цель ↓ 0 B ↑ 0 B",
 		"состояние: запуск",
-	}, panelLines(st, at, replicator.TrafficInfo{}, time.Time{}))
+	}, lines)
 }
 
 func TestRenderPanelRetry(t *testing.T) {
@@ -77,17 +82,27 @@ func TestRenderPanelRetry(t *testing.T) {
 		LastBatch: &replicator.BatchInfo{At: clock(11, 59, 0), Ops: replicator.OpCounts{Rep: 2},
 			Colls: []string{"x", "y", "z"}, More: 2},
 		State: replicator.StateRetry, Retry: 2, LastErr: "connection refused"}
+
 	lines := panelLines(st, at, replicator.TrafficInfo{}, time.Time{})
-	assert.Equal(t, "a → a · с запуска 3м5с · лаг 0с", lines[0])
-	assert.Equal(t, "операции: 0 всего · 0/с · пачка 11:59:00: 2 (rep 2) в x, y, z и ещё 2", lines[1])
-	assert.Equal(t, "состояние: повтор 2: connection refused", lines[len(lines)-1])
-
 	raw := renderPanel(st, at, replicator.TrafficInfo{}, time.Time{})
-	assert.Contains(t, raw, retryStyle.Render("повтор 2"))
-	assert.Contains(t, raw, errStyle.Render("connection refused"))
 
-	st.State, st.LastErr = replicator.StateStopped, "аренду забрал другой процесс"
-	lines = panelLines(st, at, replicator.TrafficInfo{}, time.Time{})
+	assert.Equal(t, []string{
+		"a → a · с запуска 3м5с · лаг 0с",
+		"операции: 0 всего · 0/с · пачка 11:59:00: 2 (rep 2) в x, y, z и ещё 2",
+		"трафик процесса: источник ↓ 0 B ↑ 0 B · цель ↓ 0 B ↑ 0 B",
+		"состояние: повтор 2: connection refused",
+	}, lines)
+	assert.Contains(t, raw, retryStyle.Render("повтор 2"), "повтор выделен")
+	assert.Contains(t, raw, errStyle.Render("connection refused"), "ошибка выделена")
+}
+
+func TestRenderPanelStopped(t *testing.T) {
+	at := clock(12, 0, 0)
+	st := replicator.Status{DB: "a", DstDB: "a", Started: at.Add(-time.Minute), Lag: 0,
+		State: replicator.StateStopped, LastErr: "аренду забрал другой процесс"}
+
+	lines := panelLines(st, at, replicator.TrafficInfo{}, time.Time{})
+
 	assert.Equal(t, "состояние: остановлен: аренду забрал другой процесс", lines[len(lines)-1])
 }
 
@@ -163,7 +178,7 @@ func writeTimeout(t *testing.T, w teaWriter, s string) {
 	case err := <-res:
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
-		t.Fatal("запись в teaWriter заблокировалась")
+		require.FailNow(t, "запись в teaWriter заблокировалась")
 	}
 }
 
@@ -180,27 +195,46 @@ func TestTeaWriterAfterExit(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("программа не завершилась")
+		require.FailNow(t, "программа не завершилась")
 	}
 
 	// Run вернулся, но done писатель ещё не видит: Send после выхода — no-op
 	writeTimeout(t, teaWriter{p: p, done: make(chan struct{}), fallback: &fallback}, "до done\n")
-	assert.Empty(t, fallback.String())
-
+	beforeDone := fallback.String()
 	writeTimeout(t, teaWriter{p: p, done: done, fallback: &fallback}, "после done\n")
-	assert.Equal(t, "после done\n", fallback.String())
+
+	assert.Empty(t, beforeDone, "до done запись не уходит в fallback")
+	assert.Equal(t, "после done\n", fallback.String(), "после done запись уходит в fallback")
+}
+
+// assertInOrder — строки lines есть в s после after, каждая — после предыдущей
+func assertInOrder(t *testing.T, s, after string, lines []string) {
+	t.Helper()
+	_, rest, ok := strings.Cut(s, after)
+	if !assert.True(t, ok, "нет %q", after) {
+		return
+	}
+	for _, line := range lines {
+		if _, rest, ok = strings.Cut(rest, line); !assert.True(t, ok, "%s — после предыдущей", line) {
+			return
+		}
+	}
 }
 
 func TestStartPanel(t *testing.T) {
 	var out bytes.Buffer
+	lines := make([]string, 0, 20)
+	for i := range 20 {
+		lines = append(lines, fmt.Sprintf("WRN строка %02d", i))
+	}
 	console, stop, kill := startPanel(func() replicator.Status {
 		return replicator.Status{DB: "src", DstDB: "dst", Lag: -1, State: replicator.StateStopped}
 	}, &out, tea.WithWindowSize(120, 10)) // вывод не терминал: без размера панель не рисуется
-	writeTimeout(t, console.(teaWriter), "WRN над панелью\n")
-	for i := range 20 {
-		writeTimeout(t, console.(teaWriter), fmt.Sprintf("WRN строка %02d\n", i))
-	}
 
+	writeTimeout(t, console.(teaWriter), "WRN над панелью\n")
+	for _, line := range lines {
+		writeTimeout(t, console.(teaWriter), line+"\n")
+	}
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -210,19 +244,14 @@ func TestStartPanel(t *testing.T) {
 	select {
 	case <-stopped:
 	case <-time.After(5 * time.Second):
-		t.Fatal("панель не остановилась")
+		require.FailNow(t, "панель не остановилась")
 	}
 	writeTimeout(t, console.(teaWriter), "после панели\n")
+
 	s := out.String()
 	assert.Contains(t, s, "WRN над панелью")
 	// строки перед stop — все и по порядку: печать не обгоняет друг друга и выход
-	_, rest, _ := strings.Cut(s, "WRN над панелью")
-	for i := range 20 {
-		line := fmt.Sprintf("WRN строка %02d", i)
-		k := strings.Index(rest, line)
-		require.GreaterOrEqual(t, k, 0, "%s — после предыдущей", line)
-		rest = rest[k+len(line):]
-	}
+	assertInOrder(t, s, "WRN над панелью", lines)
 	assert.Contains(t, s, "src → dst", "финальная панель")
 	assert.Contains(t, s, "после панели\n")
 }

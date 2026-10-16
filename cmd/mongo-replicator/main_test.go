@@ -28,11 +28,12 @@ func TestWithPanelRestoresConsoleLog(t *testing.T) {
 			stdout := captureStdout(t)
 			stop, kill := withPanel(options{LogLevel: "info", LogFileLevel: "info"},
 				func() replicator.Status { return replicator.Status{Lag: -1} }, nil)
+
 			log.Info().Msg("INFO под панелью")
 			finish(stop, kill)
 			log.Info().Msg("INFO после панели")
-
 			out, err := os.ReadFile(stdout.Name())
+
 			require.NoError(t, err)
 			assert.NotContains(t, string(out), "INFO под панелью")
 			assert.Contains(t, string(out), "INFO после панели")
@@ -50,15 +51,17 @@ func TestReplicateSetsRetry(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = dst.Disconnect(context.Background()) })
 	r := replicator.New(nil, dst, replicator.Config{DB: "d"})
-
 	ctx, cancel := context.WithCancel(context.Background())
+
 	done := make(chan error, 1)
 	go func() { done <- replicate(ctx, r) }()
 	require.Eventually(t, func() bool { return r.Status().State == replicator.StateRetry },
 		5*time.Second, 10*time.Millisecond, "захват аренды без цели — временная ошибка")
 	s := r.Status()
-	assert.Equal(t, 1, s.Retry)
-	assert.NotEmpty(t, s.LastErr)
 	cancel()
-	require.NoError(t, <-done)
+	err = <-done
+
+	assert.Equal(t, 1, s.Retry, "повтор отмечен в статусе")
+	assert.NotEmpty(t, s.LastErr, "ошибка повтора в статусе")
+	require.NoError(t, err, "отмена контекста — не ошибка")
 }

@@ -52,10 +52,11 @@ var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 func TestNewLoggerConsoleText(t *testing.T) {
 	var cons bytes.Buffer
 	l := newLogger(&cons, true, zerolog.InfoLevel, nil, zerolog.InfoLevel)
+
 	l.Info().Str("k", "v").Msg("привет")
 	l.Error().Err(errors.New("сломалось")).Msg("ошибка")
-
 	out := ansi.ReplaceAllString(cons.String(), "")
+
 	assert.Contains(t, out, "INF")
 	assert.Contains(t, out, "привет")
 	assert.Contains(t, out, "k=v")
@@ -71,10 +72,11 @@ func TestNewLoggerConsoleText(t *testing.T) {
 func TestNewLoggerConsoleJSON(t *testing.T) {
 	var cons bytes.Buffer
 	l := newLogger(&cons, false, zerolog.InfoLevel, nil, zerolog.InfoLevel)
+
 	l.Info().Msg("привет")
 	l.Error().Err(errors.New("сломалось")).Msg("ошибка")
-
 	lines := jsonLines(t, cons.String())
+
 	require.Len(t, lines, 2)
 	assert.Equal(t, "привет", lines[0]["m"])
 	assert.Equal(t, "info", lines[0]["l"])
@@ -86,10 +88,11 @@ func TestNewLoggerConsoleJSON(t *testing.T) {
 func TestNewLoggerFileJSON(t *testing.T) {
 	var cons, file bytes.Buffer
 	l := newLogger(&cons, true, zerolog.InfoLevel, &file, zerolog.InfoLevel)
+
 	l.Info().Msg("привет")
 	l.Warn().Err(errors.New("сломалось")).Msg("ошибка")
-
 	lines := jsonLines(t, file.String())
+
 	require.Len(t, lines, 2)
 	assert.Equal(t, "привет", lines[0]["m"])
 	assert.Equal(t, "info", lines[0]["l"])
@@ -115,9 +118,11 @@ func TestNewLoggerLevels(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			var cons, file bytes.Buffer
 			l := newLogger(&cons, false, c.consLvl, &file, c.fileLv)
+
 			l.Debug().Msg("debug")
 			l.Info().Msg("info")
 			l.Warn().Msg("warn")
+
 			assert.Equal(t, c.want.cons, messages(t, cons.String()))
 			assert.Equal(t, c.want.file, messages(t, file.String()))
 		})
@@ -127,11 +132,13 @@ func TestNewLoggerLevels(t *testing.T) {
 func TestNewLoggerNoFile(t *testing.T) {
 	var cons bytes.Buffer
 	l := newLogger(&cons, false, zerolog.WarnLevel, nil, zerolog.DebugLevel)
+
 	require.NotPanics(t, func() {
 		l.Debug().Msg("debug")
 		l.Info().Msg("info")
 		l.Warn().Msg("warn")
 	})
+
 	assert.Equal(t, []string{"warn"}, messages(t, cons.String()))
 }
 
@@ -153,7 +160,9 @@ func TestSetupLogNoDir(t *testing.T) {
 	restoreLogger(t)
 	captureStdout(t)
 	opts := options{LogLevel: "info", LogFile: filepath.Join(t.TempDir(), "нет", "r.log"), LogFileLevel: "info"}
+
 	f, err := setupLog(opts)
+
 	require.Error(t, err)
 	assert.Nil(t, f)
 }
@@ -166,8 +175,8 @@ func TestSetupLogCreateMode(t *testing.T) {
 	f, err := setupLog(options{LogLevel: "info", LogFile: path, LogFileLevel: "info"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = f.Close() })
-
 	fi, err := os.Stat(path)
+
 	require.NoError(t, err)
 	// umask может только снять биты: прочим — ничего, группе — не больше чтения
 	assert.Zero(t, fi.Mode().Perm()&^0o640, "права %o", fi.Mode().Perm())
@@ -185,9 +194,11 @@ func TestSetupLogAppend(t *testing.T) {
 	require.NotNil(t, f)
 	t.Cleanup(func() { _ = f.Close() })
 	log.Debug().Msg("отладка")
-
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
+	cons, err := os.ReadFile(stdout.Name())
+	require.NoError(t, err)
+
 	require.True(t, strings.HasPrefix(string(data), old), "старое содержимое затёрто: %q", data)
 	lines := jsonLines(t, strings.TrimPrefix(string(data), old))
 	require.Len(t, lines, 2)
@@ -196,11 +207,7 @@ func TestSetupLogAppend(t *testing.T) {
 	assert.Equal(t, path, lines[0]["file"])
 	assert.Equal(t, "debug", lines[0]["file_level"])
 	assert.Equal(t, "отладка", lines[1]["m"])
-
-	// консоль warn: ни «лог», ни DEBUG в stdout не попали
-	cons, err := os.ReadFile(stdout.Name())
-	require.NoError(t, err)
-	assert.Empty(t, cons)
+	assert.Empty(t, cons, "консоль warn: ни «лог», ни DEBUG в stdout не попали")
 }
 
 func TestSetupLogNoFile(t *testing.T) {
@@ -210,19 +217,19 @@ func TestSetupLogNoFile(t *testing.T) {
 	t.Chdir(dir)
 	// typed-nil *os.File в MultiLevelWriter не роняет консоль, а только зовёт ErrorHandler
 	savedHandler := zerolog.ErrorHandler
-	zerolog.ErrorHandler = func(err error) { t.Errorf("запись лога: %v", err) }
+	// обработчик зовётся из пишущей горутины — только assert
+	zerolog.ErrorHandler = func(err error) { assert.NoError(t, err, "запись лога") }
 	t.Cleanup(func() { zerolog.ErrorHandler = savedHandler })
 
 	f, err := setupLog(options{LogLevel: "info", LogFileLevel: "info"})
+	entries, readDirErr := os.ReadDir(dir)
+	cons, readErr := os.ReadFile(stdout.Name())
+
 	require.NoError(t, err)
 	assert.Nil(t, f)
-
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
+	require.NoError(t, readDirErr)
 	assert.Empty(t, entries, "файл лога создан без --log-file")
-
-	cons, err := os.ReadFile(stdout.Name())
-	require.NoError(t, err)
+	require.NoError(t, readErr)
 	lines := jsonLines(t, string(cons))
 	require.Len(t, lines, 1)
 	assert.Equal(t, "лог", lines[0]["m"])

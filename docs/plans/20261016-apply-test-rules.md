@@ -381,12 +381,16 @@
 **Files:**
 - Modify: `cmd/mongo-replicator/{errors,progress,log,main}_test.go`
 
-- [ ] `TestPermanent` → две таблицы
-- [ ] `progress_test.go`: таймауты `select` → `require.FailNow`; `log_test.go`: `ErrorHandler` → `assert.NoError`
-- [ ] `TestWithPanelRestoresConsoleLog` остаётся таблицей; `main_test:57` — проверить условие `Eventually` на `t`
-- [ ] таблицы, структура и проверки во всех тестах файлов
-- [ ] мутации на каждый изменённый тест
-- [ ] `make test`, `make lint`, охранная проверка; коммит с журналом мутаций
+- [x] `TestPermanent` → две таблицы
+  - ➕ `TestPermanent` (перманентные с подсказкой) и `TestNotPermanent` (временные, подсказки нет)
+- [x] `progress_test.go`: таймауты `select` → `require.FailNow`; `log_test.go`: `ErrorHandler` → `assert.NoError`
+- [x] `TestWithPanelRestoresConsoleLog` остаётся таблицей; `main_test:57` — проверить условие `Eventually` на `t`
+  - ➕ в условии `t` нет, сообщение есть; в `TestReplicateSetsRetry` проверки собраны после `cancel` и `<-done`, у них появились сообщения
+- [x] таблицы, структура и проверки во всех тестах файлов
+  - ➕ хвост `TestRenderPanelRetry` (остановка с ошибкой) → `TestRenderPanelStopped`; в `TestRenderPanelRetry` строки панели сравниваются целиком (было — первая, вторая и последняя)
+  - ➕ проверка порядка строк в `TestStartPanel` → хелпер `assertInOrder`, строки — один список для записи и проверки
+- [x] мутации на каждый изменённый тест
+- [x] `make test`, `make lint`, охранная проверка; коммит с журналом мутаций
 
 ### Task 11: Юнит-тесты `main`: опции и маскирование
 

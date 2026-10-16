@@ -16,7 +16,7 @@ func TestPermanent(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
-		hint string // подстрока подсказки; "" — ошибка временная
+		hint string // подстрока подсказки
 	}{
 		{"history lost", fmt.Errorf("run: %w", mongo.CommandError{Code: 286}), "выпала из oplog"},
 		{"событие больше 16 МБ", fmt.Errorf("change stream: %w", mongo.CommandError{Code: 10334}), "больше 16 МБ"},
@@ -30,17 +30,31 @@ func TestPermanent(t *testing.T) {
 		{"база в другом регистре", fmt.Errorf("bulk write: %w", mongo.CommandError{Code: 13297}), "--dst-db"},
 		{"drop коллекции", fmt.Errorf("run: %w", &replicator.DropError{NS: "db.c"}), "--apply-drop db.c"},
 		{"dropDatabase", fmt.Errorf("run: %w", &replicator.DropError{NS: "db", Database: true}), "<dst-db>._replicator_checkpoint"},
-		{"обычная ошибка", errors.New("boom"), ""},
-		{"отмена", context.Canceled, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.hint != "", permanent(c.err))
-			if c.hint == "" {
-				assert.Empty(t, hint(c.err))
-			} else {
-				assert.Contains(t, hint(c.err), c.hint)
-			}
+			isPermanent, h := permanent(c.err), hint(c.err)
+
+			assert.True(t, isPermanent, "ошибка перманентная")
+			assert.Contains(t, h, c.hint, "подсказка оператору")
+		})
+	}
+}
+
+func TestNotPermanent(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"обычная ошибка", errors.New("boom")},
+		{"отмена", context.Canceled},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			isPermanent, h := permanent(c.err), hint(c.err)
+
+			assert.False(t, isPermanent, "ошибка временная")
+			assert.Empty(t, h, "у временной ошибки подсказки нет")
 		})
 	}
 }
