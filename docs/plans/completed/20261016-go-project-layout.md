@@ -326,8 +326,8 @@ github.com/sergey-frv/mongo-replicator
 - [x] `git diff 8023706 -- Makefile` пустой
 
 ### Task 10: [Final] Update documentation
-- [ ] README.md и CLAUDE.md обновлены (Task 8)
-- [ ] move this plan to `docs/plans/completed/`
+- [x] README.md и CLAUDE.md обновлены (Task 8)
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems - no checkboxes, informational only*
