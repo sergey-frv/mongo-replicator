@@ -257,3 +257,20 @@ func TestSaveRetriesReports(t *testing.T) {
 	assert.FileExists(t, v.files.defects)
 	assert.FileExists(t, v.files.position)
 }
+
+// В --ids запись по таймеру не трогает отчёты: файл --ids мог быть прошлым
+// отчётом .ids, и отчёт без ключей очереди затёр бы их до конца перепроверки.
+func TestSaveIDsKeepsReports(t *testing.T) {
+	dir := t.TempDir()
+	v := unitVerifier(Config{IDs: filepath.Join(dir, "p.ids.defects.json")})
+	v.files = paths{defects: v.cfg.IDs, unverified: filepath.Join(dir, "p.ids.unverified.json")}
+	require.NoError(t, writeReport(v.files.defects, report{{NS: "db.items", ID: json.RawMessage(`{"$numberInt":"1"}`), Reason: "нет на цели"}}))
+	v.addDefect("db.items", rawID(t, int32(2)), nil, rawDoc(t, bson.D{{Key: "_id", Value: int32(2)}}))
+
+	v.save()
+
+	got, err := readReport(v.files.defects)
+	require.NoError(t, err)
+	assert.Equal(t, []string{`{"$numberInt":"1"}`}, []string{string(got[0].ID)}, "файл --ids до записи в конце runIDs")
+	assert.NoFileExists(t, v.files.unverified)
+}

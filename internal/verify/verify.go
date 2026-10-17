@@ -638,8 +638,13 @@ func idString(id bson.RawValue) string {
 
 // save пишет отчёты, затем файл позиции: позиция не должна учитывать записи,
 // которых нет в отчётах (иначе после kill они остались бы только в счётчиках,
-// и --ids их не перепроверил бы).
+// и --ids их не перепроверил бы). В --ids не пишет ничего: у неё нет файла
+// позиции, а отчёт без ключей очереди затёр бы файл --ids (прошлый отчёт .ids),
+// и после kill они пропали бы; отчёты --ids пишет runIDs в конце.
 func (v *Verifier) save() {
+	if v.cfg.IDs != "" {
+		return
+	}
 	if v.writeReports() {
 		v.savePosition()
 	}
@@ -648,7 +653,7 @@ func (v *Verifier) save() {
 // savePosition пишет файл позиции; ошибка — WARN: потеря позиции значит
 // повторный просмотр, а не потерю расхождений.
 func (v *Verifier) savePosition() {
-	if v.files.position == "" || v.cfg.IDs != "" {
+	if v.files.position == "" {
 		return
 	}
 	p := &position{
