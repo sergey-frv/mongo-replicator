@@ -416,7 +416,7 @@ func TestSparklineShift(t *testing.T) {
 func TestSparkColumns(t *testing.T) {
 	s := seriesOf(numbers(62)...)
 
-	cols := sparkColumns(s, sparkCols)
+	cols := sparkColumns(s)
 
 	assert.Equal(t, []float64{5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35, 38, 41, 44, 47, 50, 53, 56, 59, 61.5}, cols,
 		"колонка точек 1–3 неполна после вытеснения и не показывается, правая — две точки")

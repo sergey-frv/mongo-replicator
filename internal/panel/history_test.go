@@ -89,13 +89,26 @@ func TestCatchUpHoldsBetweenThresholds(t *testing.T) {
 }
 
 func TestCatchUpExit(t *testing.T) {
-	var c catchUp
-	c.update(2*time.Minute, clock(12, 0, 0))
+	cases := []struct {
+		name   string
+		lag    time.Duration
+		active bool
+		points int
+	}{
+		{"ниже 10 с", 9 * time.Second, false, 0},
+		{"10 с", 10 * time.Second, true, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var c catchUp
+			c.update(2*time.Minute, clock(12, 0, 0))
 
-	c.update(9*time.Second, clock(12, 0, 10))
+			c.update(tc.lag, clock(12, 0, 10))
 
-	assert.False(t, c.active)
-	assert.Empty(t, c.points)
+			assert.Equal(t, tc.active, c.active)
+			assert.Len(t, c.points, tc.points)
+		})
+	}
 }
 
 func TestCatchUpReenter(t *testing.T) {
@@ -179,7 +192,29 @@ func TestCatchUpEstimate(t *testing.T) {
 
 	c.update(100*time.Second, clock(12, 0, 10))
 
-	assert.Equal(t, "~50с до 0", c.estimate(), "лаг падает на 2 с в секунду")
+	assert.Equal(t, "~50с до 0", c.estimate(clock(12, 0, 10)), "лаг падает на 2 с в секунду")
+}
+
+func TestCatchUpEstimateLagFlat(t *testing.T) {
+	cases := []struct {
+		name string
+		at   time.Time
+		want string
+	}{
+		{"30 с без изменений", clock(12, 0, 40), "~50с до 0"},
+		{"дольше 30 с", clock(12, 0, 41), "лаг не снижается"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var c catchUp
+			c.update(2*time.Minute, clock(12, 0, 0))
+			c.update(100*time.Second, clock(12, 0, 10))
+
+			c.update(100*time.Second, tc.at)
+
+			assert.Equal(t, tc.want, c.estimate(tc.at), "лаг 1м40с с 12:00:10")
+		})
+	}
 }
 
 func TestCatchUpEstimateOnePoint(t *testing.T) {
@@ -187,7 +222,7 @@ func TestCatchUpEstimateOnePoint(t *testing.T) {
 
 	c.update(2*time.Minute, clock(12, 0, 0))
 
-	assert.Empty(t, c.estimate())
+	assert.Empty(t, c.estimate(clock(12, 0, 0)))
 }
 
 func TestCatchUpEstimateLagRising(t *testing.T) {
@@ -196,7 +231,7 @@ func TestCatchUpEstimateLagRising(t *testing.T) {
 
 	c.update(130*time.Second, clock(12, 0, 10))
 
-	assert.Equal(t, "лаг не снижается", c.estimate())
+	assert.Equal(t, "лаг не снижается", c.estimate(clock(12, 0, 10)))
 }
 
 func TestCatchUpEstimateBeyond99Days(t *testing.T) {
@@ -205,5 +240,5 @@ func TestCatchUpEstimateBeyond99Days(t *testing.T) {
 
 	c.update(100*24*time.Hour-time.Second, clock(12, 0, 10))
 
-	assert.Equal(t, "лаг не снижается", c.estimate(), "оценка ~1000 дней")
+	assert.Equal(t, "лаг не снижается", c.estimate(clock(12, 0, 10)), "оценка ~1000 дней")
 }

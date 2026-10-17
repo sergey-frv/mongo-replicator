@@ -91,6 +91,36 @@ func TestPanelTickPoints(t *testing.T) {
 	assert.Equal(t, []float64{100, 1000}, m.dstOut.values(), "цель")
 }
 
+func TestPanelTickPerSecond(t *testing.T) {
+	m := newPanel(statusSeq(
+		replicator.Status{},
+		replicator.Status{Applied: 10, Traffic: traffic.Info{SrcIn: 1000, DstOut: 500}},
+		replicator.Status{Applied: 30, Traffic: traffic.Info{SrcIn: 3000, DstOut: 600}},
+	))
+
+	m.Update(tickMsg(clock(12, 0, 0)))
+	m.Update(tickMsg(clock(12, 0, 2)))
+
+	assert.Equal(t, []float64{10}, m.rate.values(), "скорость за 2 с между тиками")
+	assert.Equal(t, []float64{1000}, m.srcIn.values(), "источник за 2 с между тиками")
+	assert.Equal(t, []float64{50}, m.dstOut.values(), "цель за 2 с между тиками")
+}
+
+func TestPanelTickSameTimeNoPoint(t *testing.T) {
+	m := newPanel(statusSeq(
+		replicator.Status{},
+		replicator.Status{Applied: 10, Traffic: traffic.Info{SrcIn: 1000, DstOut: 500}},
+		replicator.Status{Applied: 30, Traffic: traffic.Info{SrcIn: 3000, DstOut: 600}},
+	))
+
+	m.Update(tickMsg(clock(12, 0, 0)))
+	m.Update(tickMsg(clock(12, 0, 0)))
+
+	assert.Empty(t, m.rate.values(), "скорость")
+	assert.Empty(t, m.srcIn.values(), "источник")
+	assert.Empty(t, m.dstOut.values(), "цель")
+}
+
 func TestPanelTickCountersDecrease(t *testing.T) {
 	m := newPanel(statusSeq(
 		replicator.Status{},

@@ -72,20 +72,25 @@ func (c *catchUp) update(lag time.Duration, at time.Time) {
 
 // frac — доля пройденного догона по последней точке, 0–1
 func (c *catchUp) frac() float64 {
-	if !c.active || c.start <= 0 {
+	if !c.active {
 		return 0
 	}
 	f := 1 - float64(c.points[len(c.points)-1].lag)/float64(c.start)
 	return min(max(f, 0), 1)
 }
 
-// estimate — оценка времени до нулевого лага по первой и последней точке окна:
-// «~1м0с до 0», «лаг не снижается» или пусто, пока точек меньше двух.
-func (c *catchUp) estimate() string {
+// estimate — оценка в at времени до нулевого лага по первой и последней точке окна:
+// «~1м0с до 0», «лаг не снижается» или пусто, пока точек меньше двух. Лаг, который не
+// менялся дольше catchUpWindow (три обновления), не снижается: наклон по старым точкам
+// показал бы прежнюю оценку.
+func (c *catchUp) estimate(at time.Time) string {
 	if !c.active || len(c.points) < 2 {
 		return ""
 	}
 	first, last := c.points[0], c.points[len(c.points)-1]
+	if at.Sub(last.at) > catchUpWindow {
+		return "лаг не снижается"
+	}
 	dt := last.at.Sub(first.at).Seconds()
 	if dt <= 0 {
 		return ""

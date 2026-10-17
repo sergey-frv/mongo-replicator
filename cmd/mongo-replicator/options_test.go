@@ -236,7 +236,7 @@ func TestParseOptsNoClearInvalid(t *testing.T) {
 
 	_, err := parseOpts([]string{"--src", "s", "--dst", "d", "--db", "db"})
 
-	require.Error(t, err)
+	require.ErrorContains(t, err, "--no-clear", "NO_CLEAR=yes")
 	assert.False(t, isHelp(err), "ошибка — не --help")
 }
 

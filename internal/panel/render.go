@@ -116,7 +116,7 @@ func lagLine(v view, width int) string {
 	if st.State == replicator.StateRunning && v.catchUp.active {
 		frac := v.catchUp.frac()
 		extra := valueStyle.Render(fmt.Sprintf("%d%%", int(math.Round(frac*100))))
-		if e := v.catchUp.estimate(); e != "" {
+		if e := v.catchUp.estimate(v.at); e != "" {
 			extra += labelStyle.Render(" · " + e)
 		}
 		return row("лаг", value, barStyle.Render(progressBar(frac, barCols)), extra, width)
@@ -145,7 +145,7 @@ func lagStyle(lag time.Duration) lipgloss.Style {
 func rateLine(v view, width int) string {
 	value := valueStyle.Render(fmtFloat(v.st.Rate)) + labelStyle.Render("/с")
 	extra := ""
-	if cols := sparkColumns(v.rate, sparkCols); len(cols) > 0 {
+	if cols := sparkColumns(v.rate); len(cols) > 0 {
 		lo, hi := cols[0], cols[0]
 		for _, c := range cols {
 			lo, hi = min(lo, c), max(hi, c)
@@ -250,16 +250,16 @@ const (
 var sparkLevels = []rune("▁▂▃▄▅▆▇█")
 
 // sparkColumns — средние точек s по колонкам графика, от старых к новым, не больше
-// cols. Колонка — sparkPer точек по абсолютному номеру (count), поэтому полные колонки
+// sparkCols. Колонка — sparkPer точек по абсолютному номеру (count), поэтому полные колонки
 // при новой точке не пересчитываются, а сдвигаются; правая колонка может быть неполной.
-func sparkColumns(s series, cols int) []float64 {
+func sparkColumns(s series) []float64 {
 	vals := s.values()
 	if len(vals) == 0 {
 		return nil
 	}
 	first := s.count - len(vals) // абсолютный номер vals[0]
 	last := (s.count - 1) / sparkPer
-	from := max(first/sparkPer, last-cols+1)
+	from := max(first/sparkPer, last-sparkCols+1)
 	sums := make([]float64, last-from+1)
 	ns := make([]int, len(sums))
 	for i, v := range vals {
@@ -279,7 +279,7 @@ func sparkColumns(s series, cols int) []float64 {
 // sparkline — график s в sparkCols колонках: высота столбика — среднее колонки относительно
 // наибольшего среднего; колонки без точек (слева, пока данных меньше минуты) — пробелы.
 func sparkline(s series) string {
-	avgs := sparkColumns(s, sparkCols)
+	avgs := sparkColumns(s)
 	top := 0.0
 	for _, v := range avgs {
 		top = max(top, v)
@@ -291,7 +291,7 @@ func sparkline(s series) string {
 		if top > 0 {
 			idx = int(math.Round(v / top * float64(len(sparkLevels)-1)))
 		}
-		b.WriteRune(sparkLevels[min(max(idx, 0), len(sparkLevels)-1)])
+		b.WriteRune(sparkLevels[idx])
 	}
 	return b.String()
 }

@@ -6,7 +6,7 @@ cmd/mongo-replicator/   package main — CLI: опции, учётные дан�
 internal/replicator/    ядро: *Replicator (поток, запись, DDL, чекпойнт, аренда, статус)
 internal/statefile/     файл состояния на машине: путь, чтение/запись, сводка
 internal/traffic/       счётчики байт клиентов (диалер)
-internal/panel/         панель статуса (bubbletea), выбор ввода (`Input`), `SignalSelf`
+internal/panel/         панель статуса (bubbletea; отрисовка — `render.go`, история — `history.go`), выбор ввода (`Input`), `SignalSelf`, `ClearScreen`
 cmd/panel-demo/         package main — демо панели на мок-данных, без кластеров
 ```
 Зависимости — в одну сторону: `traffic ← statefile ← replicator ← panel ← main, panel-demo`.
