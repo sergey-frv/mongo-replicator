@@ -14,7 +14,6 @@ import (
 	"golang.org/x/term"
 
 	"github.com/sergey-frv/mongo-replicator/internal/replicator"
-	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
 // defaultWidth — ширина окна, пока bubbletea не сообщил размер
@@ -25,14 +24,19 @@ type (
 	finalMsg struct{} // репликация закончилась: последний снимок и выход
 )
 
-// panel — модель панели статуса. Снимок берётся раз в секунду, скорости трафика —
-// по разнице с предыдущим снимком.
+// panel — модель панели статуса. Снимок берётся раз в секунду (время — от тика), точки
+// графиков — разница с предыдущим снимком за секунду; история графиков и догона копится
+// здесь, а не в репликаторе.
 type panel struct {
 	status func() replicator.Status
 	st     replicator.Status
 	at     time.Time // когда снят st
-	prev   traffic.Info
+	prevSt replicator.Status
 	prevAt time.Time // нулевое — предыдущего снимка нет
+	width  int       // ширина окна из tea.WindowSizeMsg
+
+	rate, srcIn, dstOut series // операций в секунду, байт в секунду источника ↓ и цели ↑
+	catchUp             catchUp
 
 	sendSignal func(os.Signal) // сигнал своему процессу (клавиши Ctrl+C, Ctrl+\)
 	jobControl func() bool     // есть ли управление заданиями (можно ли Ctrl+Z)
@@ -40,7 +44,7 @@ type panel struct {
 }
 
 func newPanel(status func() replicator.Status) *panel {
-	return &panel{status: status, st: status(), at: time.Now(), jobControl: jobControl}
+	return &panel{status: status, st: status(), at: time.Now(), width: defaultWidth, jobControl: jobControl}
 }
 
 func tick() tea.Cmd {
@@ -49,9 +53,29 @@ func tick() tea.Cmd {
 
 func (m *panel) Init() tea.Cmd { return tick() }
 
-func (m *panel) snapshot() {
-	m.prev, m.prevAt = m.st.Traffic, m.at
-	m.st, m.at = m.status(), time.Now()
+func (m *panel) snapshot(at time.Time) {
+	m.prevSt, m.prevAt = m.st, m.at
+	m.st, m.at = m.status(), at
+}
+
+// addPoints добавляет в графики разницу с предыдущим снимком за секунду. Счётчик,
+// который уменьшился (новый процесс, сброс), даёт 0.
+func (m *panel) addPoints() {
+	dt := m.at.Sub(m.prevAt).Seconds()
+	if dt <= 0 {
+		return
+	}
+	m.rate.push(float64(max(m.st.Applied-m.prevSt.Applied, 0)) / dt)
+	m.srcIn.push(perSec(m.st.Traffic.SrcIn, m.prevSt.Traffic.SrcIn, dt))
+	m.dstOut.push(perSec(m.st.Traffic.DstOut, m.prevSt.Traffic.DstOut, dt))
+}
+
+// perSec — прирост счётчика за секунду; сравнение до вычитания: uint64 не уходит в минус
+func perSec(cur, prev uint64, dt float64) float64 {
+	if cur < prev {
+		return 0
+	}
+	return float64(cur-prev) / dt
 }
 
 func (m *panel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -59,12 +83,21 @@ func (m *panel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		cmd := m.key(msg)
 		return m, cmd
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
 	case tickMsg:
-		m.snapshot()
+		// первый тик — без точки: предыдущий снимок снят в newPanel по time.Now, а не по
+		// тику, и разница за неполную секунду — шум
+		first := m.prevAt.IsZero()
+		m.snapshot(time.Time(msg))
+		if !first {
+			m.addPoints()
+		}
+		m.catchUp.update(m.st.Lag, m.at)
 		return m, tick()
 	case finalMsg:
 		// репликация закончилась: скорость за доли секунды с последнего тика — шум
-		m.snapshot()
+		m.snapshot(time.Now())
 		m.prevAt = time.Time{}
 		return m, tea.Quit
 	}
@@ -101,7 +134,9 @@ func (m *panel) key(k tea.KeyPressMsg) tea.Cmd {
 // View завершается переводом строки: при выходе рендерер стирает экран от последней
 // строки кадра, без него пропала бы строка состояния.
 func (m *panel) View() tea.View {
-	v := tea.NewView(renderPanel(view{st: m.st, at: m.at}, defaultWidth) + "\n")
+	v := tea.NewView(renderPanel(view{
+		st: m.st, at: m.at, rate: m.rate, srcIn: m.srcIn, dstOut: m.dstOut, catchUp: m.catchUp,
+	}, m.width) + "\n")
 	v.KeyboardEnhancements.ReportAlternateKeys = true // BaseCode для key
 	return v
 }

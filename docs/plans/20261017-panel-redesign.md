@@ -196,12 +196,13 @@
 - Modify: `internal/panel/panel.go`
 - Modify: `internal/panel/panel_test.go`
 
-- [ ] `snapshot(at time.Time)`: `tickMsg` передаёт `time.Time(msg)`, `finalMsg` — `time.Now()`; `prevSt` вместо `prev traffic.Info`; первый тик после `newPanel` без точки
-- [ ] поля `width`, три `series`, `catchUp`; `tea.WindowSizeMsg` → `width`; тик — точки и `catchUp.update(st.Lag, at)`; `finalMsg` — без точки
-- [ ] `View`: `renderPanel(view{…}, width)` (по умолчанию 80)
-- [ ] тесты `Update` с явными временами (`tickMsg(clock(…))`): `WindowSizeMsg` запоминает ширину; первый тик точку не добавляет; два тика через 1 с — по одной точке с литеральными значениями; `finalMsg` точку не добавляет; лаг из статуса включает догон
-- [ ] существующие `TestPanelUpdate`, `TestPanelKeys`, `TestStartPanel` — без изменения смысла (в `TestStartPanel` сравнивать фрагменты без серий пробелов: рендерер может их заменять)
-- [ ] `make test`, `make lint` — должно пройти
+- [x] `snapshot(at time.Time)`: `tickMsg` передаёт `time.Time(msg)`, `finalMsg` — `time.Now()`; `prevSt` вместо `prev traffic.Info`; первый тик после `newPanel` без точки
+- [x] поля `width`, три `series`, `catchUp`; `tea.WindowSizeMsg` → `width`; тик — точки и `catchUp.update(st.Lag, at)`; `finalMsg` — без точки
+- [x] `View`: `renderPanel(view{…}, width)` (по умолчанию 80)
+- [x] тесты `Update` с явными временами (`tickMsg(clock(…))`): `WindowSizeMsg` запоминает ширину; первый тик точку не добавляет; два тика через 1 с — по одной точке с литеральными значениями; `finalMsg` точку не добавляет; лаг из статуса включает догон
+- [x] существующие `TestPanelUpdate`, `TestPanelKeys`, `TestStartPanel` — без изменения смысла (в `TestStartPanel` сравнивать фрагменты без серий пробелов: рендерер может их заменять)
+- [x] `make test`, `make lint` — должно пройти
+- ➕ первый тик без точки — по `prevAt` до снимка (`first := m.prevAt.IsZero()`): `newPanel` ставит `at = time.Now()` для «с запуска», после первого тика `prevAt` уже не нулевое; точки — `addPoints`/`perSec`; добавлен тест `TestPanelTickCountersDecrease` (счётчик уменьшился — 0), хелпер `statusSeq`
 
 ### Task 6: Очистка экрана перед стартом панели
 

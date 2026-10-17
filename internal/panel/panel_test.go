@@ -23,19 +23,117 @@ func TestPanelUpdate(t *testing.T) {
 		n++
 		return replicator.Status{Applied: int64(n), Traffic: traffic.Info{SrcIn: uint64(n)}}
 	})
-	assert.True(t, m.prevAt.IsZero(), "до первого тика скоростей нет")
+	assert.True(t, m.prevAt.IsZero(), "до первого тика предыдущего снимка нет")
 
-	_, cmd := m.Update(tickMsg(time.Now()))
+	_, cmd := m.Update(tickMsg(clock(12, 0, 0)))
 	require.NotNil(t, cmd, "тик планирует следующий")
 	assert.Equal(t, int64(2), m.st.Applied)
-	assert.Equal(t, uint64(1), m.prev.SrcIn)
+	assert.Equal(t, clock(12, 0, 0), m.at, "время снимка — от тика")
+	assert.Equal(t, uint64(1), m.prevSt.Traffic.SrcIn)
 	assert.False(t, m.prevAt.IsZero())
 
 	_, cmd = m.Update(finalMsg{})
 	assert.Equal(t, int64(3), m.st.Applied, "финальный снимок")
-	assert.True(t, m.prevAt.IsZero(), "в финальной панели скоростей нет")
+	assert.True(t, m.prevAt.IsZero(), "в финальной панели предыдущего снимка нет")
 	require.NotNil(t, cmd)
 	assert.IsType(t, tea.QuitMsg{}, cmd())
+}
+
+// statusSeq — статусы по очереди на каждый вызов (первый — снимок newPanel), дальше — последний
+func statusSeq(sts ...replicator.Status) func() replicator.Status {
+	return func() replicator.Status {
+		st := sts[0]
+		if len(sts) > 1 {
+			sts = sts[1:]
+		}
+		return st
+	}
+}
+
+func TestPanelWindowSize(t *testing.T) {
+	m := newPanel(statusSeq(replicator.Status{DB: "src", DstDB: "dst", Lag: -1}))
+	before := m.width
+
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
+
+	assert.Equal(t, 80, before, "до сообщения — ширина по умолчанию")
+	assert.Equal(t, 40, m.width)
+	assertWithin(t, 40, strings.Split(ansi.ReplaceAllString(m.View().Content, ""), "\n"))
+}
+
+func TestPanelFirstTickNoPoint(t *testing.T) {
+	m := newPanel(statusSeq(
+		replicator.Status{},
+		replicator.Status{Applied: 100, Traffic: traffic.Info{SrcIn: 1000, DstOut: 500}},
+	))
+
+	m.Update(tickMsg(clock(12, 0, 0)))
+
+	assert.Empty(t, m.rate.values(), "скорость")
+	assert.Empty(t, m.srcIn.values(), "источник")
+	assert.Empty(t, m.dstOut.values(), "цель")
+}
+
+func TestPanelTickPoints(t *testing.T) {
+	m := newPanel(statusSeq(
+		replicator.Status{},
+		replicator.Status{Applied: 10, Traffic: traffic.Info{SrcIn: 1000, DstOut: 500}},
+		replicator.Status{Applied: 30, Traffic: traffic.Info{SrcIn: 3000, DstOut: 600}},
+		replicator.Status{Applied: 35, Traffic: traffic.Info{SrcIn: 3000, DstOut: 1600}},
+	))
+
+	m.Update(tickMsg(clock(12, 0, 0)))
+	m.Update(tickMsg(clock(12, 0, 1)))
+	m.Update(tickMsg(clock(12, 0, 2)))
+
+	assert.Equal(t, []float64{20, 5}, m.rate.values(), "скорость")
+	assert.Equal(t, []float64{2000, 0}, m.srcIn.values(), "источник")
+	assert.Equal(t, []float64{100, 1000}, m.dstOut.values(), "цель")
+}
+
+func TestPanelTickCountersDecrease(t *testing.T) {
+	m := newPanel(statusSeq(
+		replicator.Status{},
+		replicator.Status{Applied: 30, Traffic: traffic.Info{SrcIn: 3000, DstOut: 600}},
+		replicator.Status{Applied: 5, Traffic: traffic.Info{SrcIn: 100, DstOut: 50}},
+	))
+
+	m.Update(tickMsg(clock(12, 0, 0)))
+	m.Update(tickMsg(clock(12, 0, 1)))
+
+	assert.Equal(t, []float64{0}, m.rate.values(), "скорость")
+	assert.Equal(t, []float64{0}, m.srcIn.values(), "источник")
+	assert.Equal(t, []float64{0}, m.dstOut.values(), "цель")
+}
+
+func TestPanelFinalNoPoint(t *testing.T) {
+	m := newPanel(statusSeq(
+		replicator.Status{},
+		replicator.Status{Applied: 10, Traffic: traffic.Info{SrcIn: 1000, DstOut: 500}},
+		replicator.Status{Applied: 30, Traffic: traffic.Info{SrcIn: 3000, DstOut: 600}},
+		replicator.Status{Applied: 90, Traffic: traffic.Info{SrcIn: 9000, DstOut: 900}},
+	))
+	m.Update(tickMsg(clock(12, 0, 0)))
+	m.Update(tickMsg(clock(12, 0, 1)))
+
+	m.Update(finalMsg{})
+
+	assert.Equal(t, []float64{20}, m.rate.values(), "скорость")
+	assert.Equal(t, []float64{2000}, m.srcIn.values(), "источник")
+	assert.Equal(t, []float64{100}, m.dstOut.values(), "цель")
+}
+
+func TestPanelTickCatchUp(t *testing.T) {
+	m := newPanel(statusSeq(
+		replicator.Status{Lag: -1, State: replicator.StateStarting},
+		replicator.Status{Lag: 2 * time.Minute, State: replicator.StateRunning},
+	))
+
+	m.Update(tickMsg(clock(12, 0, 0)))
+
+	assert.True(t, m.catchUp.active, "лаг 2м0с из статуса включает догон")
+	assert.True(t, strings.HasPrefix(ansi.ReplaceAllString(m.View().Content, ""), "◐ догоняет"),
+		"шапка панели при догоне")
 }
 
 // cmdMsg — сообщение команды, nil — команды нет
