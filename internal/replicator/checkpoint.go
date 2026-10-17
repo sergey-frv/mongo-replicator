@@ -22,6 +22,10 @@ const (
 	ckptID   = "checkpoint"
 )
 
+// CheckpointColl — служебная коллекция чекпойнта в базе цели: в схеме базы
+// её нет, сверка её пропускает.
+const CheckpointColl = ckptColl
+
 // ckpt читает чекпойнт только с primary, не наследуя read preference из URI цели:
 // устаревший токен с отстающей secondary повторил бы rename с dropTarget поверх
 // уже применённого состояния и уничтожил бы целевую коллекцию.

@@ -276,12 +276,15 @@ mongo-replicator verify [опции сверки]
 - Create: `internal/verify/schema_integration_test.go`
 - Create: `internal/verify/harness_integration_test.go`
 
-- [ ] чтение `listCollections`/`listIndexes` обеих сторон, нормализация по Technical Details (служебные поля, версионные поля, порядок полей), сравнение, список расхождений с причинами
-- [ ] «известное ограничение» для коллекций из множества `created`
-- [ ] обвязка интеграционных тестов пакета (`harness_integration_test.go`): `TestMain` с клиентами `IT_SRC_URI`/`IT_DST_URI`, имя базы `it_` + `snake(t.Name())`, удаление баз в cleanup, запись чекпойнта вручную (`writeCkpt`), чтение текущего времени источника (`srcNow`) по правилам `Eventually`
-- [ ] юнит-тесты нормализации и сравнения на литералах документов (в том числе разный порядок полей, служебные и версионные поля)
-- [ ] интеграционные: одинаковая схема → без расхождений; нет индекса на цели; другой validator; лишняя коллекция на цели; view; коллекция из `created` с другими опциями → известное ограничение
-- [ ] `make test`, `make test-integration`, `make lint` — зелёные
+- [x] чтение `listCollections`/`listIndexes` обеих сторон, нормализация по Technical Details (служебные поля, версионные поля, порядок полей), сравнение, список расхождений с причинами
+- [x] «известное ограничение» для коллекций из множества `created`
+- [x] обвязка интеграционных тестов пакета (`harness_integration_test.go`): `TestMain` с клиентами `IT_SRC_URI`/`IT_DST_URI`, имя базы `it_` + `snake(t.Name())`, удаление баз в cleanup, запись чекпойнта вручную (`writeCkpt`), чтение текущего времени источника (`srcNow`) по правилам `Eventually`
+- [x] юнит-тесты нормализации и сравнения на литералах документов (в том числе разный порядок полей, служебные и версионные поля)
+- [x] интеграционные: одинаковая схема → без расхождений; нет индекса на цели; другой validator; лишняя коллекция на цели; view; коллекция из `created` с другими опциями → известное ограничение
+- [x] `make test`, `make test-integration`, `make lint` — зелёные
+- ➕ API для Task 7: `checkSchema(ctx, src, dst, srcDB, dstDB, created map[string]bool) ([]SchemaDiff, error)`, `SchemaDiff{NS, Reason, Known}` (ns — источника, порядок по имени); `replicator.CheckpointColl` — экспорт имени служебной коллекции; обвязка: `prepare`, `srcNow(t) bson.Timestamp`, `writeCkpt(t, db, at)` (одноимённая пара, позиция из `clusterTime`), `appendSrcNote` для условий `Eventually`
+- ➕ `info` коллекции сравнивается вместе с опциями (поля `info.*`), `idIndex` — нет (индекс `_id_` есть в `listIndexes`); из `collation` убирается `version` (версия ICU); у коллекции из `created` известное ограничение — и расхождение типа, и view, которого нет на цели (репликатор view не создаёт); индексы такой коллекции — дефект
+- ⚠️ числа сравниваются с типом: если `copy-schema.js` (mongosh) запишет ключ индекса или `expireAfterSeconds` другим числовым типом, `--schema-only` покажет расхождение — разобрать в Task 9
 
 ### Task 7: Цикл сверки (`Verifier.Run`)
 
