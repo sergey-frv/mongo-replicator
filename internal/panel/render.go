@@ -144,14 +144,14 @@ func lagStyle(lag time.Duration) lipgloss.Style {
 // rateLine — скорость: число — Status.Rate (за интервал прогресса, не скачет от пачек),
 // график — по разнице Applied между тиками, диапазон — по средним колонок графика.
 func rateLine(v view, width int) string {
-	value := valueStyle.Render(fmtFloat(v.st.Rate)) + labelStyle.Render("/с")
+	value := valueStyle.Render(fmtRate(v.st.Rate)) + labelStyle.Render("/с")
 	extra := ""
 	if cols := sparkColumns(v.rate); len(cols) > 0 {
 		lo, hi := cols[0], cols[0]
 		for _, c := range cols {
 			lo, hi = min(lo, c), max(hi, c)
 		}
-		extra = fmtFloat(lo) + "–" + fmtFloat(hi) + labelStyle.Render("/с")
+		extra = fmtRate(lo) + "–" + fmtRate(hi) + labelStyle.Render("/с")
 	}
 	return row("скорость", value, framed(sparkline(v.rate), rateStyle), extra, width)
 }
@@ -366,6 +366,14 @@ func fmtBytes(n uint64) string {
 // fmtFloat — число с одним знаком после точки, без «.0».
 func fmtFloat(v float64) string {
 	return strings.TrimSuffix(strconv.FormatFloat(v, 'f', 1, 64), ".0")
+}
+
+// fmtRate — скорость операций: от 10/с целое с группами разрядов (8 803), ниже — один знак (9.9).
+func fmtRate(v float64) string {
+	if v >= 10 {
+		return fmtCount(int64(math.Round(v)))
+	}
+	return fmtFloat(v)
 }
 
 // fmtCount — целое с группами разрядов через пробел: 1 284 551.

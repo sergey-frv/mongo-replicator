@@ -86,6 +86,17 @@ func TestRenderPanel(t *testing.T) {
 	}, lines)
 }
 
+func TestRenderPanelRateThousands(t *testing.T) {
+	v := workingView()
+	v.st.Rate = 12000
+	v.rate = seriesOf(8802, 8803, 8802.5, 12000)
+
+	lines := panelLines(v, 100)
+
+	assert.Equal(t, "  скорость   12 000/с       ▏                  ▆█▕ 8 803–12 000/с", lines[3],
+		"число и диапазон — целые с группами разрядов, без дробей средних колонок")
+}
+
 func TestRenderPanelStarting(t *testing.T) {
 	at := clock(12, 0, 5)
 	// лаг неизвестен, точек графиков ещё нет, без пачки, DDL и сводки
@@ -415,6 +426,12 @@ func TestFmtDuration(t *testing.T) {
 func TestFmtCount(t *testing.T) {
 	for n, want := range map[int64]string{0: "0", 999: "999", 1000: "1 000", 1284551: "1 284 551"} {
 		assert.Equal(t, want, fmtCount(n), "%d", n)
+	}
+}
+
+func TestFmtRate(t *testing.T) {
+	for v, want := range map[float64]string{0: "0", 0.4: "0.4", 9.94: "9.9", 10: "10", 8802.5: "8 803", 12000: "12 000"} {
+		assert.Equal(t, want, fmtRate(v), "%v", v)
 	}
 }
 
