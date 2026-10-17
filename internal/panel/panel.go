@@ -16,8 +16,12 @@ import (
 	"github.com/sergey-frv/mongo-replicator/internal/replicator"
 )
 
-// defaultWidth — ширина окна, пока bubbletea не сообщил размер
-const defaultWidth = 80
+// defaultWidth, defaultHeight — размер окна, пока bubbletea не сообщил размер, и без
+// терминала; высота панели в строчном режиме — по её тексту
+const (
+	defaultWidth  = 80
+	defaultHeight = 24
+)
 
 type (
 	tickMsg  time.Time
@@ -96,7 +100,8 @@ func (m *panel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.catchUp.update(m.st.Lag, m.at)
 		return m, tick()
 	case finalMsg:
-		// репликация закончилась: скорость за доли секунды с последнего тика — шум
+		// репликация закончилась: тик, обработанный до выхода, точки не добавит — разница
+		// с финальным снимком за доли секунды — шум
 		m.snapshot(time.Now())
 		m.prevAt = time.Time{}
 		return m, tea.Quit
@@ -180,7 +185,11 @@ func Start(status func() replicator.Status, out io.Writer, in *os.File, sendSign
 	if in != nil {
 		input = tea.WithInput(in)
 	}
-	opts := append([]tea.ProgramOption{input, tea.WithoutSignalHandler(), tea.WithOutput(out)}, extra...)
+	// размер по умолчанию: без терминала (--progress tty в файл) bubbletea оставил бы 0×0
+	// и не рисовал бы панель; у терминала его заменяет настоящий размер
+	opts := append([]tea.ProgramOption{
+		input, tea.WithoutSignalHandler(), tea.WithOutput(out), tea.WithWindowSize(defaultWidth, defaultHeight),
+	}, extra...)
 	m := newPanel(status)
 	m.sendSignal = sendSignal
 	p := tea.NewProgram(m, opts...)

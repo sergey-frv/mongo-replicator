@@ -165,6 +165,17 @@ func TestRenderPanelCatchUpTail(t *testing.T) {
 		"лаг 57 с от стартовых 28 ч — не 100%, пока догон идёт")
 }
 
+func TestRenderPanelCatchUpFloat(t *testing.T) {
+	v := workingView()
+	v.st.Lag = 48 * time.Second
+	v.catchUp = catchUpOf(v.at, 60*time.Second, 48*time.Second)
+
+	lines := panelLines(v, 100)
+
+	assert.Equal(t, "  лаг        48с            ████░░░░░░░░░░░░░░░░ 20% · ~40с до 0", lines[2],
+		"доля 1-48/60 = 0.19999999999999996 — 20%, не 19%")
+}
+
 func TestRenderPanelRetryDuringCatchUp(t *testing.T) {
 	v := workingView()
 	v.st.Lag = 21 * time.Hour
@@ -510,6 +521,7 @@ func TestProgressBar(t *testing.T) {
 		{0, "░░░░░░░░░░░░░░░░░░░░"},
 		{0.2, "████░░░░░░░░░░░░░░░░"},
 		{0.58, "███████████░░░░░░░░░"},
+		{0.19999999999999996, "████░░░░░░░░░░░░░░░░"}, // 1-48/60 в float: без поправки — 3 клетки
 		{1, "████████████████████"},
 		{-0.5, "░░░░░░░░░░░░░░░░░░░░"},
 		{1.5, "████████████████████"},

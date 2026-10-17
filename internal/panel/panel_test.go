@@ -34,7 +34,6 @@ func TestPanelUpdate(t *testing.T) {
 
 	_, cmd = m.Update(finalMsg{})
 	assert.Equal(t, int64(3), m.st.Applied, "финальный снимок")
-	assert.True(t, m.prevAt.IsZero(), "в финальной панели предыдущего снимка нет")
 	require.NotNil(t, cmd)
 	assert.IsType(t, tea.QuitMsg{}, cmd())
 }
@@ -147,6 +146,7 @@ func TestPanelFinalNoPoint(t *testing.T) {
 	m.Update(tickMsg(clock(12, 0, 1)))
 
 	m.Update(finalMsg{})
+	m.Update(tickMsg(time.Now().Add(time.Second))) // тик до выхода, через секунду после финального снимка
 
 	assert.Equal(t, []float64{20}, m.rate.values(), "скорость")
 	assert.Equal(t, []float64{2000}, m.srcIn.values(), "источник")
@@ -280,7 +280,7 @@ func TestStartPanel(t *testing.T) {
 	}
 	console, stop, kill := Start(func() replicator.Status {
 		return replicator.Status{DB: "src", DstDB: "dst", Lag: -1, State: replicator.StateStopped}
-	}, &out, nil, nil, tea.WithWindowSize(120, 10)) // вывод не терминал: без размера панель не рисуется
+	}, &out, nil, nil) // вывод не терминал: размер — по умолчанию
 
 	writeTimeout(t, console.(teaWriter), "WRN над панелью\n")
 	for _, line := range lines {
