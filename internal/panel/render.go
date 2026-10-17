@@ -107,7 +107,10 @@ func blockLine(name string, width int) string {
 }
 
 // lagLine — лаг; при догоне (только в работе и с известным лагом) — полоса, процент и
-// оценка, иначе — до какого времени источника всё применено.
+// оценка, иначе — до какого времени источника всё применено. Доля догона — не больше 99%:
+// на хвосте лаг ещё секунды, а от стартового лага в часы это уже округлилось бы до 100%;
+// конец догона — исчезновение полосы. Процент — вниз, +1e-9 — поправка на погрешность
+// float (0.58*100 = 57.99999999999999).
 func lagLine(v view, width int) string {
 	st := v.st
 	if st.Lag < 0 {
@@ -115,8 +118,8 @@ func lagLine(v view, width int) string {
 	}
 	value := lagStyle(st.Lag).Render(fmtDuration(st.Lag))
 	if st.State == replicator.StateRunning && v.catchUp.active {
-		frac := v.catchUp.frac()
-		extra := valueStyle.Render(fmt.Sprintf("%d%%", int(math.Round(frac*100))))
+		frac := min(v.catchUp.frac(), 0.99)
+		extra := valueStyle.Render(fmt.Sprintf("%d%%", int(math.Floor(frac*100+1e-9))))
 		if e := v.catchUp.estimate(v.at); e != "" {
 			extra += labelStyle.Render(" · " + e)
 		}
@@ -307,9 +310,11 @@ func sparkline(s series) string {
 	return b.String()
 }
 
-// progressBar — полоса из cols колонок, заполненная на долю frac (ограничена 0–1)
+// progressBar — полоса из cols колонок, заполненная на долю frac (ограничена 0–1). Число
+// клеток — вниз (+1e-9 — поправка на погрешность float): клетка заполняется, только когда
+// доля её покрыла.
 func progressBar(frac float64, cols int) string {
-	n := int(math.Round(min(max(frac, 0), 1) * float64(cols)))
+	n := int(math.Floor(min(max(frac, 0), 1)*float64(cols) + 1e-9))
 	return strings.Repeat("█", n) + strings.Repeat("░", cols-n)
 }
 

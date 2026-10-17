@@ -127,7 +127,7 @@ func TestRenderPanelCatchUp(t *testing.T) {
 	assert.Equal(t, []string{
 		"◐ догоняет  urlshrinker → urlshrinker_v2   с запуска 25м0с",
 		"── репликация " + strings.Repeat("─", 86),
-		"  лаг        21ч0м          ████████████░░░░░░░░ 58% · ~7с до 0",
+		"  лаг        21ч0м          ███████████░░░░░░░░░ 58% · ~7с до 0",
 		"  скорость   19/с           ▏▁▂▂▂▃▃▃▄▄▄▅▅▆▆▆▇▇▇██▕ 2–59/с",
 	}, lines[:4])
 }
@@ -140,6 +140,17 @@ func TestRenderPanelCatchUpNoEstimate(t *testing.T) {
 	lines := panelLines(v, 100)
 
 	assert.Equal(t, "  лаг        2д2ч           ░░░░░░░░░░░░░░░░░░░░ 0%", lines[2], "одна точка догона — только процент")
+}
+
+func TestRenderPanelCatchUpTail(t *testing.T) {
+	v := workingView()
+	v.st.Lag = 57 * time.Second
+	v.catchUp = catchUpOf(v.at, 28*time.Hour, 57*time.Second)
+
+	lines := panelLines(v, 100)
+
+	assert.Equal(t, "  лаг        57с            ███████████████████░ 99% · ~0с до 0", lines[2],
+		"лаг 57 с от стартовых 28 ч — не 100%, пока догон идёт")
 }
 
 func TestRenderPanelRetryDuringCatchUp(t *testing.T) {
@@ -354,8 +365,8 @@ func TestRenderPanelNarrowCatchUp(t *testing.T) {
 		width int
 		want  string
 	}{
-		{80, "  лаг        21ч0м          ████████████░░░░░░░░ 58% · ~7с до 0"},
-		{60, "  лаг        21ч0м          ████████████░░░░░░░░ 58% · ~7с …"},
+		{80, "  лаг        21ч0м          ███████████░░░░░░░░░ 58% · ~7с до 0"},
+		{60, "  лаг        21ч0м          ███████████░░░░░░░░░ 58% · ~7с …"},
 		{40, "  лаг        21ч0м          58% · ~7с д…"},
 	} {
 		t.Run(strconv.Itoa(tc.width), func(t *testing.T) {
@@ -479,7 +490,8 @@ func TestProgressBar(t *testing.T) {
 		want string
 	}{
 		{0, "░░░░░░░░░░░░░░░░░░░░"},
-		{0.58, "████████████░░░░░░░░"},
+		{0.2, "████░░░░░░░░░░░░░░░░"},
+		{0.58, "███████████░░░░░░░░░"},
 		{1, "████████████████████"},
 		{-0.5, "░░░░░░░░░░░░░░░░░░░░"},
 		{1.5, "████████████████████"},
