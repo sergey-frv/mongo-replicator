@@ -159,7 +159,7 @@ func captureStdout(t *testing.T) *os.File {
 func TestSetupLogNoDir(t *testing.T) {
 	restoreLogger(t)
 	captureStdout(t)
-	opts := options{LogLevel: "info", LogFile: filepath.Join(t.TempDir(), "нет", "r.log"), LogFileLevel: "info"}
+	opts := commonOptions{LogLevel: "info", LogFile: filepath.Join(t.TempDir(), "нет", "r.log"), LogFileLevel: "info"}
 
 	f, err := setupLog(opts)
 
@@ -172,7 +172,7 @@ func TestSetupLogCreateMode(t *testing.T) {
 	captureStdout(t)
 	path := filepath.Join(t.TempDir(), "r.log")
 
-	f, err := setupLog(options{LogLevel: "info", LogFile: path, LogFileLevel: "info"})
+	f, err := setupLog(commonOptions{LogLevel: "info", LogFile: path, LogFileLevel: "info"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = f.Close() })
 	fi, err := os.Stat(path)
@@ -189,7 +189,7 @@ func TestSetupLogAppend(t *testing.T) {
 	const old = "старая строка\n"
 	require.NoError(t, os.WriteFile(path, []byte(old), 0o600))
 
-	f, err := setupLog(options{LogLevel: "warn", LogFile: path, LogFileLevel: "debug"})
+	f, err := setupLog(commonOptions{LogLevel: "warn", LogFile: path, LogFileLevel: "debug"})
 	require.NoError(t, err)
 	require.NotNil(t, f)
 	t.Cleanup(func() { _ = f.Close() })
@@ -221,7 +221,7 @@ func TestSetupLogNoFile(t *testing.T) {
 	zerolog.ErrorHandler = func(err error) { assert.NoError(t, err, "запись лога") }
 	t.Cleanup(func() { zerolog.ErrorHandler = savedHandler })
 
-	f, err := setupLog(options{LogLevel: "info", LogFileLevel: "info"})
+	f, err := setupLog(commonOptions{LogLevel: "info", LogFileLevel: "info"})
 	entries, readDirErr := os.ReadDir(dir)
 	cons, readErr := os.ReadFile(stdout.Name())
 

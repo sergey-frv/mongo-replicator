@@ -39,21 +39,68 @@ const (
 )
 
 func main() {
-	opts, err := parseOpts(os.Args[1:])
-	if err != nil {
-		if isHelp(err) {
-			fmt.Fprintln(os.Stdout, err)
-			os.Exit(0)
-		}
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+	args := os.Args[1:]
+	if len(args) > 0 && args[0] == verifyCmd {
+		mainVerify(args[1:])
 	}
+	opts, err := parseOpts(args)
+	exitOnOptsErr(err)
 	// до первой строки лога: строки запуска остаются над панелью
 	if clearBeforePanel(progressMode(opts.Progress, stdoutTTY(), os.Getenv("TERM")), opts.NoClear) {
 		panel.ClearScreen(os.Stdout)
 	}
 
-	logFile, err := setupLog(opts)
+	logFile := startLog(&opts.commonOptions)
+	if len(opts.ApplyDrops) > 0 {
+		log.Warn().Strs("apply_drop", opts.ApplyDrops).
+			Msgf("разрешены drop: %s (уберите из APPLY_DROP после применения)", strings.Join(opts.ApplyDrops, ", "))
+	}
+	masked := opts
+	masked.Src, masked.Dst = logURI(opts.Src), logURI(opts.Dst)
+	log.Debug().Any("options", masked).Send()
+
+	srcOpts, dstOpts := clientOpts(opts.commonOptions, args)
+	os.Exit(run(opts, srcOpts, dstOpts, logFile))
+}
+
+// mainVerify — main формы сверки; args — без ведущего verify. Не возвращается.
+func mainVerify(args []string) {
+	opts, err := parseVerifyOpts(args)
+	exitOnOptsErr(err)
+
+	logFile := startLog(&opts.commonOptions)
+	masked := opts
+	masked.Src, masked.Dst = logURI(opts.Src), logURI(opts.Dst)
+	log.Debug().Any("options", masked).Send()
+
+	srcOpts, dstOpts := clientOpts(opts.commonOptions, args)
+	os.Exit(runVerify(opts, srcOpts, dstOpts, logFile))
+}
+
+// runVerify сверяет цель с источником. Возвращает код выхода.
+func runVerify(_ verifyOptions, _, _ *mongoopts.ClientOptions, _ *os.File) int {
+	log.Error().Msg("сверка ещё не реализована")
+	return 1
+}
+
+// exitOnOptsErr завершает процесс при ошибке разбора опций: --help — справка и код 0,
+// остальное — код 2.
+func exitOnOptsErr(err error) {
+	if err == nil {
+		return
+	}
+	if isHelp(err) {
+		fmt.Fprintln(os.Stdout, err)
+		os.Exit(0)
+	}
+	fmt.Fprintln(os.Stderr, err)
+	os.Exit(2)
+}
+
+// startLog настраивает лог, пишет ревизию и создаёт каталог состояния (opts.StateDir —
+// разрешённый путь). Возвращает файл лога (nil без --log-file); при ошибке — выход с кодом 2.
+func startLog(opts *commonOptions) *os.File {
+	logFile, err := setupLog(*opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
@@ -64,15 +111,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if len(opts.ApplyDrops) > 0 {
-		log.Warn().Strs("apply_drop", opts.ApplyDrops).
-			Msgf("разрешены drop: %s (уберите из APPLY_DROP после применения)", strings.Join(opts.ApplyDrops, ", "))
-	}
-	masked := opts
-	masked.Src, masked.Dst = logURI(opts.Src), logURI(opts.Dst)
-	log.Debug().Any("options", masked).Send()
+	return logFile
+}
 
-	args := os.Args[1:]
+// clientOpts разбирает URI и находит пароли (prepareClients); args — аргументы формы,
+// по ним видно, передан ли URI флагом. При ошибке — выход с кодом 2.
+func clientOpts(opts commonOptions, args []string) (srcOpts, dstOpts *mongoopts.ClientOptions) {
 	srcOpts, dstOpts, err := prepareClients(
 		side{name: "источник", uri: opts.Src, envName: "SRC_URI", fromFlag: flagGiven(args, "src")},
 		side{name: "цель", uri: opts.Dst, envName: "DST_URI", fromFlag: flagGiven(args, "dst")},
@@ -86,14 +130,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-
-	os.Exit(run(opts, srcOpts, dstOpts, logFile))
+	return srcOpts, dstOpts
 }
 
 // run подключается к кластерам и крутит репликацию с ретраями. Возвращает код выхода.
 // srcOpts/dstOpts — разобранные URI с найденными паролями (prepareClients);
 // logFile — файл лога из setupLog (nil без --log-file): с ним логгер пересобирается под панель.
-func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions, logFile *os.File) int {
+func run(opts runOptions, srcOpts, dstOpts *mongoopts.ClientOptions, logFile *os.File) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -136,7 +179,7 @@ func run(opts options, srcOpts, dstOpts *mongoopts.ClientOptions, logFile *os.Fi
 	stopPanel := func() {}
 	if progressMode(opts.Progress, stdoutTTY(), os.Getenv("TERM")) == progressTTY {
 		in, closeIn := panel.Input(os.Stdin)
-		stopP, killP := withPanel(opts, r.Status, logFile, in)
+		stopP, killP := withPanel(opts.commonOptions, r.Status, logFile, in)
 		stopPanel = func() { stopP(); closeIn() }
 		// после Release в порядке объявления, значит раньше него: паника в основной
 		// горутине не оставит терминал под панелью
@@ -186,7 +229,7 @@ func replicate(ctx context.Context, r *replicator.Replicator) error {
 // её выхода и возвращает обычный консольный лог (иначе итог INFO отфильтруется);
 // kill — то же без финальной панели. in — терминал для клавиш панели (panel.Input)
 // или nil: тогда панель клавиатуру не читает.
-func withPanel(opts options, status func() replicator.Status, logFile, in *os.File) (stop, kill func()) {
+func withPanel(opts commonOptions, status func() replicator.Status, logFile, in *os.File) (stop, kill func()) {
 	if logFile == nil {
 		log.Warn().Msg("полный лог не пишется: добавьте --log-file")
 	}

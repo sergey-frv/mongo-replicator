@@ -202,13 +202,14 @@ mongo-replicator verify [опции сверки]
 - Modify: `cmd/mongo-replicator/log.go`
 - Modify: `cmd/mongo-replicator/credentials.go`
 
-- [ ] `commonOptions` (встраивается), `runOptions`, `verifyOptions` по таблице из Technical Details; общие проверки — одна функция для обеих форм; `setupLog` и `withPanel` принимают то, что им нужно (общие опции / опции запуска)
-- [ ] разбор: режим по первому аргументу `verify`; `parseOpts` (запуск) отвергает любой позиционный аргумент с подсказкой «`verify` должна быть первым аргументом»; `parseVerifyOpts` (сверка); `--help` у каждой формы своя справка
-- [ ] проверки сверки: `--rate >= 1`, `--sample` в `(0, 1]`, взаимоисключения `--ids`/`--schema-only`/`--since`/`--until-caught-up`/`--sample` (код `2`); `flagGiven` смотрит аргументы без ведущего `verify`
-- [ ] `main` разветвляется по режиму; поведение запуска репликатора не меняется (существующие тесты остаются зелёными)
-- [ ] тесты `parseVerifyOpts`: успешные формы, env `VERIFY_*`, каждое взаимоисключение, опции репликации в `verify` (`--start-ts`, `--apply-drop`, `--progress`) → ошибка
-- [ ] тесты `parseOpts`: `--log-level debug verify` и `-- verify` → ошибка с подсказкой; `verify --help` и `--help` → `isHelp(err)` и разные тексты справки
-- [ ] `make test`, `make lint` — зелёные
+- [x] `commonOptions` (встраивается), `runOptions`, `verifyOptions` по таблице из Technical Details; общие проверки — одна функция для обеих форм; `setupLog` и `withPanel` принимают то, что им нужно (общие опции / опции запуска)
+- [x] разбор: режим по первому аргументу `verify`; `parseOpts` (запуск) отвергает любой позиционный аргумент с подсказкой «`verify` должна быть первым аргументом»; `parseVerifyOpts` (сверка); `--help` у каждой формы своя справка
+- [x] проверки сверки: `--rate >= 1`, `--sample` в `(0, 1]`, взаимоисключения `--ids`/`--schema-only`/`--since`/`--until-caught-up`/`--sample` (код `2`); `flagGiven` смотрит аргументы без ведущего `verify`
+- [x] `main` разветвляется по режиму; поведение запуска репликатора не меняется (существующие тесты остаются зелёными)
+- [x] тесты `parseVerifyOpts`: успешные формы, env `VERIFY_*`, каждое взаимоисключение, опции репликации в `verify` (`--start-ts`, `--apply-drop`, `--progress`) → ошибка
+- [x] тесты `parseOpts`: `--log-level debug verify` и `-- verify` → ошибка с подсказкой; `verify --help` и `--help` → `isHelp(err)` и разные тексты справки
+- [x] `make test`, `make lint` — зелёные
+- ➕ `runVerify` пока заглушка в `main.go` (ERROR «сверка ещё не реализована», код `1`); в Task 8 переезжает в `verify.go`
 
 ### Task 3: Вердикт, выборка и дифф (`internal/verify`)
 

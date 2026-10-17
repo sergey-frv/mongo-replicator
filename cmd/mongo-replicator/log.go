@@ -48,7 +48,7 @@ func newLogger(console io.Writer, consoleTTY bool, consoleLevel zerolog.Level,
 // setupLog открывает файл (если задан), определяет TTY stdout, ставит log.Logger
 // и пишет строку «лог». Возвращает открытый файл (nil без --log-file).
 // Запись без буфера: os.Exit и сигналы ничего не теряют, Sync не нужен.
-func setupLog(opts options) (*os.File, error) {
+func setupLog(opts commonOptions) (*os.File, error) {
 	var f *os.File
 	if opts.LogFile != "" {
 		var err error
