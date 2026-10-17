@@ -406,10 +406,12 @@ mongo-replicator verify [опции сверки]
 - ➕ по итогам проверки в runbook: `stream_lag`/`ckpt_lag` — в миллисекундах; `checked` включает повторы горячих ключей; WARN `коллекция создана без опций источника` / `view не создаётся автоматически` при повторе `create` из окна после `START_TS` ожидаемы (коллекции уже создал `copy-schema.js`)
 
 ### Task 11: Verify acceptance criteria
-- [ ] все требования Overview реализованы: `verify` не пишет на цель и не берёт аренду (по коду — только `find`/`watch`/`listCollections`/`listIndexes` и чтение чекпойнта)
-- [ ] остановка `verify` не влияет на работающий репликатор (сквозной тест из Task 7 или ручная проверка на compose)
-- [ ] граничные случаи: горячий документ, ABA, события с одним `clusterTime`, rename в окне, drop в окне, отсутствие чекпойнта, позиция чужой пары, занятый файл позиции
-- [ ] `make test`, `make test-integration`, `make test-copy-schema`, `make lint` — зелёные
+- [x] все требования Overview реализованы: `verify` не пишет на цель и не берёт аренду (по коду — только `find`/`watch`/`listCollections`/`listIndexes` и чтение чекпойнта)
+- [x] остановка `verify` не влияет на работающий репликатор (сквозной тест из Task 7 или ручная проверка на compose)
+- [x] граничные случаи: горячий документ, ABA, события с одним `clusterTime`, rename в окне, drop в окне, отсутствие чекпойнта, позиция чужой пары, занятый файл позиции
+- [x] `make test`, `make test-integration`, `make test-copy-schema`, `make lint` — зелёные
+- ➕ аудит кода: обращения `internal/verify` к серверу — `Watch`, `ListCollections`, `Indexes().List`, `Find`, `ping` и `replicator.AppliedPosition` (чтение чекпойнта); кода аренды и записи нет. Остановка сверки: в `TestIntegrationVerifyReplicator` репликатор после выхода сверки продолжает применять (`waitApplied`), ручная проверка F1/F6 — Task 10
+- ➕ граничные случаи, которых не было на уровне `Run`, — интеграционные тесты `TestIntegrationVerify{Transaction,NoCheckpoint,OtherPair,Locked,Rename,Drop}`; горячий документ и ABA — `TestIntegrationVerifyABA` и юнит-тесты очереди
 
 ### Task 12: [Final] Update documentation
 - [ ] README «Требования»: цель — replica set MongoDB 4.4+ (интеграционные тесты — на 8.0; возможности 8.0, которых нет в 4.4, не используются)

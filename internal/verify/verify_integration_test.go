@@ -379,6 +379,150 @@ func TestIntegrationVerifyABA(t *testing.T) {
 	assert.Equal(t, counts{Checked: 2, Matched: 1}, rep.counts, "горячий вердикт и совпадение, без дефекта")
 }
 
+// Транзакция: события двух документов с одним clusterTime. Позиция чекпойнта,
+// равная ему, не значит, что применены оба (токен сохраняется и посреди группы),
+// — ключи ждут позиции строго больше.
+func TestIntegrationVerifyTransaction(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	since := srcNow(t)
+	tx := srcAt(ctx, t, db, func(ctx context.Context, c *mongo.Collection) error {
+		_, err := mongo.SessionFromContext(ctx).WithTransaction(ctx, func(ctx context.Context) (any, error) {
+			return c.InsertMany(ctx, []any{doc(1, "a"), doc(2, "a")})
+		})
+		return err
+	})
+	insert(ctx, t, dstClient, db, doc(1, "a"), doc(2, "a"))
+	writeCkpt(t, db, tx)
+	tickSrc(t)
+	vr := startVerify(t, itConfig(db, since))
+	vr.until(func(s status) bool { return s.queue == 2 }, "оба ключа в очереди")
+
+	v := vr.v
+	assert.Never(t, func() bool { return v.status().inflight > 0 }, 2*time.Second, 50*time.Millisecond,
+		"ключи выданы на проверку при позиции чекпойнта, равной времени транзакции")
+	assert.Equal(t, status{queue: 2}, v.status())
+
+	followCkpt(t, db)
+	vr.until(func(s status) bool { return s.Matched == 2 }, "ключи проверены после сдвига чекпойнта")
+	rep, err := vr.stop()
+	require.NoError(t, err)
+	assert.Equal(t, counts{Checked: 2, Matched: 2}, rep.counts)
+}
+
+// Чекпойнта на цели ещё нет (репликатор не запущен): сверка ждёт его, а не
+// падает, и проверяет ключи, когда он появится.
+func TestIntegrationVerifyNoCheckpoint(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	since := srcNow(t)
+	insert(ctx, t, srcClient, db, doc(1, "a"))
+	insert(ctx, t, dstClient, db, doc(1, "a"))
+	tickSrc(t)
+	vr := startVerify(t, itConfig(db, since))
+	vr.until(func(s status) bool { return s.queue == 1 }, "ключ в очереди")
+
+	v := vr.v
+	assert.Never(t, func() bool { return v.status().inflight > 0 }, 2*time.Second, 50*time.Millisecond,
+		"ключ выдан на проверку без чекпойнта")
+	assert.Equal(t, status{queue: 1}, v.status())
+
+	followCkpt(t, db)
+	vr.until(func(s status) bool { return s.Matched == 1 }, "ключ проверен после появления чекпойнта")
+	rep, err := vr.stop()
+	require.NoError(t, err)
+	assert.Equal(t, counts{Checked: 1, Matched: 1}, rep.counts)
+}
+
+// Чекпойнт цели записан репликатором другой пары баз — сверка
+// останавливается, а не сверяет с чужой позицией.
+func TestIntegrationVerifyOtherPair(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	since := srcNow(t)
+	_, err := dstClient.Database(db).Collection(replicator.CheckpointColl).InsertOne(ctx, bson.M{
+		"_id": "checkpoint", "token": bson.M{"_data": "00"}, "clusterTime": since, "db": "other", "dst_db": db,
+	})
+	require.NoError(t, err)
+
+	_, err = startVerify(t, itConfig(db, since)).wait()
+
+	assert.ErrorIs(t, err, replicator.ErrDBMismatch)
+}
+
+// Файл позиции занят другим процессом сверки — отказ до открытия потока.
+func TestIntegrationVerifyLocked(t *testing.T) {
+	db := prepare(t)
+	cfg := itConfig(db, srcNow(t))
+	cfg.StateDir = t.TempDir()
+	files, _, err := positionPaths(cfg.StateDir, db, dstURI)
+	require.NoError(t, err)
+	unlock, err := lock(files.lock)
+	require.NoError(t, err)
+	defer unlock()
+
+	_, err = startVerify(t, cfg).wait()
+
+	assert.ErrorIs(t, err, ErrLocked)
+}
+
+// rename в окне: ключ переносится под новое имя и проверяется там —
+// испорченный на цели документ в переименованной коллекции — дефект.
+func TestIntegrationVerifyRename(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	since := srcNow(t)
+	insert(ctx, t, srcClient, db, doc("k", "a"))
+	require.NoError(t, srcClient.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "renameCollection", Value: db + ".items"}, {Key: "to", Value: db + ".moved"},
+	}).Err())
+	_, err := dstClient.Database(db).Collection("moved").InsertOne(ctx, doc("k", "b"))
+	require.NoError(t, err)
+	followCkpt(t, db)
+	cfg := itConfig(db, since)
+	cfg.UntilCaughtUp = true
+	cfg.StateDir = t.TempDir()
+
+	rep, err := startVerify(t, cfg).wait()
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), rep.Defects, "дефектов после rename")
+	got, err := readReport(rep.DefectsFile)
+	require.NoError(t, err)
+	src, dst := `{"_id":"k","v":"a"}`, `{"_id":"k","v":"b"}`
+	assert.Equal(t, report{{NS: db + ".moved", ID: json.RawMessage(`"k"`), Reason: "различается: v", Src: &src, Dst: &dst}}, got)
+}
+
+// drop в окне: ждавшие ключи удалённой коллекции — «не проверено» с причиной
+// drop, а не дефект.
+func TestIntegrationVerifyDrop(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	since := srcNow(t)
+	insert(ctx, t, srcClient, db, doc("k", "a"))
+	require.NoError(t, srcClient.Database(db).Collection("items").Drop(ctx))
+	writeCkpt(t, db, since) // ключ не готов: он ждёт в очереди, когда приходит drop
+	tickSrc(t)
+	cfg := itConfig(db, since)
+	cfg.StateDir = t.TempDir()
+	vr := startVerify(t, cfg)
+	vr.until(func(s status) bool { return s.Unverified == 1 }, "ключ удалённой коллекции не проверен")
+
+	rep, err := vr.stop()
+
+	require.NoError(t, err)
+	assert.Equal(t, counts{Unverified: 1}, rep.counts)
+	assert.Zero(t, rep.Queue, "ключей в очереди при выходе")
+	got, err := readReport(rep.UnverifiedFile)
+	require.NoError(t, err)
+	assert.Equal(t, report{{NS: db + ".items", ID: json.RawMessage(`"k"`), Reason: reasonDrop}}, got)
+}
+
 // Остановленная сверка продолжается с файла позиции: ключи из очереди проверены
 // по одному разу, событие между запусками прочитано с сохранённого токена,
 // --since не нужна.
