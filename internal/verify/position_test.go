@@ -73,6 +73,7 @@ func TestPositionRoundTrip(t *testing.T) {
 			{ns: "c2", id: rawID(t, bson.D{{Key: "b", Value: int64(1)}, {Key: "a", Value: "x"}}), first: at(12), last: at(15)},
 			{ns: "c2", id: rawID(t, decimal(t, "1.10")), first: at(13), last: at(13)},
 		},
+		Created: []string{"log"},
 		Counts: counts{Checked: 7, Matched: 4, Defects: 1, Unverified: 2, SampledOut: 3},
 	}
 

@@ -78,6 +78,7 @@ type position struct {
 	Token      bson.Raw       // токен потока сверки; nil — поток не начат
 	StreamTime bson.Timestamp // время последнего события потока
 	Pending    []*item        // непроверенные ключи
+	Created    []string       // коллекции, созданные в потоке (сверка схемы)
 	Counts     counts
 }
 
@@ -106,6 +107,7 @@ type positionJSON struct {
 	Token      json.RawMessage `json:"token,omitempty"`
 	StreamTime jsonTS          `json:"stream_time"`
 	Pending    []pendingJSON   `json:"pending"`
+	Created    []string        `json:"created,omitempty"`
 	Counts     counts          `json:"counts"`
 }
 
@@ -138,7 +140,7 @@ func valueFromJSON(m json.RawMessage) (bson.RawValue, error) {
 func writePosition(path string, p *position) error {
 	f := positionJSON{
 		ident: p.ident, Since: p.Since, StreamTime: tsJSON(p.StreamTime),
-		Pending: make([]pendingJSON, 0, len(p.Pending)), Counts: p.Counts,
+		Pending: make([]pendingJSON, 0, len(p.Pending)), Created: p.Created, Counts: p.Counts,
 	}
 	if p.Token != nil {
 		tok, err := bson.MarshalExtJSON(p.Token, true, false)
@@ -170,7 +172,7 @@ func parsePosition(b []byte) (*position, error) {
 	}
 	p := &position{
 		ident: f.ident, Since: f.Since, StreamTime: f.StreamTime.ts(),
-		Pending: make([]*item, 0, len(f.Pending)), Counts: f.Counts,
+		Pending: make([]*item, 0, len(f.Pending)), Created: f.Created, Counts: f.Counts,
 	}
 	if f.Token != nil {
 		if err := bson.UnmarshalExtJSON(f.Token, true, &p.Token); err != nil {

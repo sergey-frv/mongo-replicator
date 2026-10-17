@@ -151,17 +151,22 @@ func prepare(t *testing.T) (db string) {
 }
 
 // writeCkpt записывает на цель чекпойнт одноимённой пары баз db с позицией at:
-// токен — заглушка, которую tokenTime не разбирает, поэтому позиция берётся
+// токен — заглушка, которую TokenTime не разбирает, поэтому позиция берётся
 // из clusterTime.
 func writeCkpt(t *testing.T, db string, at bson.Timestamp) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 	defer cancel()
+	require.NoError(t, setCkpt(ctx, db, at))
+}
+
+// setCkpt — writeCkpt без t: для горутин и условий Eventually.
+func setCkpt(ctx context.Context, db string, at bson.Timestamp) error {
 	_, err := dstClient.Database(db).Collection(replicator.CheckpointColl).ReplaceOne(ctx,
 		bson.M{"_id": "checkpoint"},
 		bson.M{"_id": "checkpoint", "token": bson.M{"_data": "00"}, "clusterTime": at, "db": db, "dst_db": db},
 		options.Replace().SetUpsert(true))
-	require.NoError(t, err)
+	return err
 }
 
 // Проверка обвязки: writeCkpt записывает позицию, которую читает AppliedPosition.

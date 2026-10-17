@@ -27,7 +27,7 @@ func TestTokenTime(t *testing.T) {
 		"post-batch": {postBatchToken, bson.Timestamp{T: 1791910139, I: 2}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			ts, err := tokenTime(mustMarshal(t, bson.D{{Key: "_data", Value: tc.data}}))
+			ts, err := TokenTime(mustMarshal(t, bson.D{{Key: "_data", Value: tc.data}}))
 
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, ts)
@@ -46,7 +46,7 @@ func TestTokenTimeErrors(t *testing.T) {
 		"нечётная длина hex": {{Key: "_data", Value: "826ACE60F50000000"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := tokenTime(mustMarshal(t, tok))
+			_, err := TokenTime(mustMarshal(t, tok))
 
 			assert.Error(t, err)
 		})

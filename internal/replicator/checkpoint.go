@@ -88,7 +88,7 @@ func AppliedPosition(ctx context.Context, dst *mongo.Client, srcDB, dstDB string
 // appliedAt — время применённой позиции: из токена, а если он не разобран —
 // clusterTime, записанный при сохранении по последнему событию.
 func (c checkpoint) appliedAt() bson.Timestamp {
-	if ts, err := tokenTime(c.Token); err == nil {
+	if ts, err := TokenTime(c.Token); err == nil {
 		return ts
 	}
 	return c.ClusterTime
@@ -99,7 +99,7 @@ func (r *Replicator) saveToken(ctx context.Context, token bson.Raw) error {
 		return nil // нечего сохранять: поток не продвинулся
 	}
 	// clusterTime — время применённой позиции: всё до токена уже на цели
-	ts, tsErr := tokenTime(token)
+	ts, tsErr := TokenTime(token)
 	if tsErr != nil {
 		log.Debug().Err(tsErr).Msg("время токена не разобрано, clusterTime — по последнему событию")
 		ts = r.lastTS

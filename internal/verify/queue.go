@@ -32,7 +32,12 @@ type key struct {
 }
 
 func keyOf(ns string, id bson.RawValue) key {
-	return key{ns: ns, id: string(append([]byte{byte(id.Type)}, id.Value...))}
+	return key{ns: ns, id: idKey(id)}
+}
+
+// idKey — точный raw _id: тип и байты значения.
+func idKey(id bson.RawValue) string {
+	return string(append([]byte{byte(id.Type)}, id.Value...))
 }
 
 // item — ключ в очереди или на проверке.
@@ -91,6 +96,22 @@ func newQueue(rate int) *queue {
 
 // len — ключей в очереди и на проверке.
 func (q *queue) len() int { return len(q.items) }
+
+// has — ключ в очереди или на проверке.
+func (q *queue) has(ns string, id bson.RawValue) bool {
+	_, ok := q.items[keyOf(ns, id)]
+	return ok
+}
+
+// anyBefore — есть ли ключ (в очереди или на проверке) с first строго раньше t.
+func (q *queue) anyBefore(t bson.Timestamp) bool {
+	for _, it := range q.items {
+		if it.first.Before(t) {
+			return true
+		}
+	}
+	return false
+}
 
 // full — достигнут предел: поток не читается, пока очередь не уменьшится.
 func (q *queue) full() bool { return len(q.items) >= q.limit }
@@ -183,6 +204,42 @@ func (q *queue) done(it *item, r result, t1 bson.Timestamp) string {
 		q.requeue(k, &item{ns: it.ns, id: it.id, first: first, last: it.lastEvent(first), tries: tries})
 	}
 	return ""
+}
+
+// back возвращает ключ с проверки в очередь без вердикта (ошибка чтения):
+// попытка не засчитывается, события проверки сливаются с ключом. Возвращает
+// reasonDrop, если коллекцию удалили во время проверки, иначе "".
+func (q *queue) back(it *item) string {
+	k := keyOf(it.ns, it.id)
+	if q.items[k] == it {
+		delete(q.items, k)
+	}
+	if it.dropped {
+		return reasonDrop
+	}
+	q.requeue(k, it.waiting())
+	return ""
+}
+
+// waiting — копия ключа как ждущего в очереди: события, пришедшие во время
+// проверки, учтены в first и last.
+func (it *item) waiting() *item {
+	w := &item{ns: it.ns, id: it.id, first: it.first, last: it.last, tries: it.tries}
+	for _, e := range it.events {
+		w.note(e)
+	}
+	return w
+}
+
+// snapshot — ключи очереди и на проверке как ждущие (waiting), по
+// compareItems: для файла позиции.
+func (q *queue) snapshot() []*item {
+	out := make([]*item, 0, len(q.items))
+	for _, it := range q.items {
+		out = append(out, it.waiting())
+	}
+	slices.SortFunc(out, compareItems)
+	return out
 }
 
 // firstAfter — самое раннее известное событие ключа позже t.

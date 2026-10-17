@@ -283,3 +283,65 @@ func TestQueueHotGivesUp(t *testing.T) {
 	assert.Equal(t, []string{"", "", "", "", reasonHot}, reasons)
 	assert.Equal(t, 0, q.len())
 }
+
+func TestQueueHas(t *testing.T) {
+	q := newQueue(500)
+	addAll(t, q, "db.a", 1, 10)
+	takeNext(t, q, 100)
+	addAll(t, q, "db.a", 2, 20)
+
+	assert.True(t, q.has("db.a", rawID(t, int32(1))), "ключ на проверке")
+	assert.True(t, q.has("db.a", rawID(t, int32(2))), "ждущий ключ")
+	assert.False(t, q.has("db.b", rawID(t, int32(1))), "тот же _id другой коллекции")
+}
+
+func TestQueueAnyBefore(t *testing.T) {
+	q := newQueue(500)
+	addAll(t, q, "db.a", 1, 10)
+	takeNext(t, q, 100)
+	addAll(t, q, "db.a", 2, 20)
+
+	assert.True(t, q.anyBefore(at(11)), "ключ на проверке с first=10")
+	assert.False(t, q.anyBefore(at(10)), "first=10 не раньше 10")
+}
+
+// Ошибка чтения: ключ возвращается без попытки, события проверки учтены.
+func TestQueueBack(t *testing.T) {
+	q := newQueue(500)
+	addAll(t, q, "db.a", 1, 10)
+	b := takeNext(t, q, 100)
+	b.items[0].tries = 2
+	addAll(t, q, "db.a", 1, 50, 30)
+
+	reason := q.back(b.items[0])
+
+	assert.Empty(t, reason)
+	assert.Equal(t, []itemView{{id: 1, first: 10, last: 50, tries: 2}}, viewsOf(takeNext(t, q, 100)))
+}
+
+func TestQueueBackDropped(t *testing.T) {
+	q := newQueue(500)
+	addAll(t, q, "db.a", 1, 10)
+	b := takeNext(t, q, 100)
+	q.drop("db.a")
+
+	reason := q.back(b.items[0])
+
+	assert.Equal(t, reasonDrop, reason)
+	assert.Equal(t, 0, q.len())
+}
+
+// Снимок для файла позиции: ключи на проверке — ждущими, с событиями проверки.
+func TestQueueSnapshot(t *testing.T) {
+	q := newQueue(500)
+	addAll(t, q, "db.a", 1, 10)
+	takeNext(t, q, 100)
+	addAll(t, q, "db.a", 1, 40)
+	addAll(t, q, "db.a", 2, 5, 20)
+
+	got := q.snapshot()
+
+	assert.Equal(t, []itemView{{id: 2, first: 5, last: 20}, {id: 1, first: 10, last: 40}},
+		viewsOf(batch{items: got}))
+	assert.False(t, got[1].busy, "ключ на проверке в снимке — ждущий")
+}
