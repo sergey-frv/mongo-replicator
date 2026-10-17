@@ -24,15 +24,20 @@ const (
 )
 
 type (
-	tickMsg  time.Time
+	tickMsg  struct{}
 	finalMsg struct{} // репликация закончилась: последний снимок и выход
 )
 
-// panel — модель панели статуса. Снимок берётся раз в секунду (время — от тика), точки
-// графиков — разница с предыдущим снимком за секунду; история графиков и догона копится
-// здесь, а не в репликаторе.
+// panel — модель панели статуса. Снимок берётся раз в секунду, точки графиков — разница
+// с предыдущим снимком за секунду; история графиков и догона копится здесь, а не в
+// репликаторе.
+//
+// Время снимка — now при обработке тика, а не время из tea.Tick: таймер отдаёт плановый
+// срок, и после Ctrl+Z ждавший тик пришёл бы со сроком до приостановки, а счётчики —
+// после неё.
 type panel struct {
 	status func() replicator.Status
+	now    func() time.Time
 	st     replicator.Status
 	at     time.Time // когда снят st
 	prevSt replicator.Status
@@ -48,18 +53,20 @@ type panel struct {
 }
 
 func newPanel(status func() replicator.Status) *panel {
-	return &panel{status: status, st: status(), at: time.Now(), width: defaultWidth, jobControl: jobControl}
+	return &panel{
+		status: status, now: time.Now, st: status(), at: time.Now(), width: defaultWidth, jobControl: jobControl,
+	}
 }
 
 func tick() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
 func (m *panel) Init() tea.Cmd { return tick() }
 
-func (m *panel) snapshot(at time.Time) {
+func (m *panel) snapshot() {
 	m.prevSt, m.prevAt = m.st, m.at
-	m.st, m.at = m.status(), at
+	m.st, m.at = m.status(), m.now()
 }
 
 // addPoints добавляет в графики разницу с предыдущим снимком за секунду. Счётчик,
@@ -90,10 +97,10 @@ func (m *panel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 	case tickMsg:
-		// первый тик — без точки: предыдущий снимок снят в newPanel по time.Now, а не по
-		// тику, и разница за неполную секунду — шум
+		// первый тик — без точки: предыдущий снимок снят в newPanel, и разница за неполную
+		// секунду — шум
 		first := m.prevAt.IsZero()
-		m.snapshot(time.Time(msg))
+		m.snapshot()
 		if !first {
 			m.addPoints()
 		}
@@ -102,7 +109,7 @@ func (m *panel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case finalMsg:
 		// репликация закончилась: тик, обработанный до выхода, точки не добавит — разница
 		// с финальным снимком за доли секунды — шум
-		m.snapshot(time.Now())
+		m.snapshot()
 		m.prevAt = time.Time{}
 		return m, tea.Quit
 	}

@@ -23,17 +23,19 @@ func TestPanelUpdate(t *testing.T) {
 		n++
 		return replicator.Status{Applied: int64(n), Traffic: traffic.Info{SrcIn: uint64(n)}}
 	})
+	m.now = clockSeq(clock(12, 0, 0), clock(12, 0, 1))
 	assert.True(t, m.prevAt.IsZero(), "до первого тика предыдущего снимка нет")
 
-	_, cmd := m.Update(tickMsg(clock(12, 0, 0)))
+	_, cmd := m.Update(tickMsg{})
 	require.NotNil(t, cmd, "тик планирует следующий")
 	assert.Equal(t, int64(2), m.st.Applied)
-	assert.Equal(t, clock(12, 0, 0), m.at, "время снимка — от тика")
+	assert.Equal(t, clock(12, 0, 0), m.at, "время снимка — по часам панели при обработке тика")
 	assert.Equal(t, uint64(1), m.prevSt.Traffic.SrcIn)
 	assert.False(t, m.prevAt.IsZero())
 
 	_, cmd = m.Update(finalMsg{})
 	assert.Equal(t, int64(3), m.st.Applied, "финальный снимок")
+	assert.Equal(t, clock(12, 0, 1), m.at, "время финального снимка")
 	require.NotNil(t, cmd)
 	assert.IsType(t, tea.QuitMsg{}, cmd())
 }
@@ -46,6 +48,17 @@ func statusSeq(sts ...replicator.Status) func() replicator.Status {
 			sts = sts[1:]
 		}
 		return st
+	}
+}
+
+// clockSeq — часы панели: время по очереди на каждый снимок, дальше — последнее
+func clockSeq(ts ...time.Time) func() time.Time {
+	return func() time.Time {
+		at := ts[0]
+		if len(ts) > 1 {
+			ts = ts[1:]
+		}
+		return at
 	}
 }
 
@@ -65,8 +78,9 @@ func TestPanelFirstTickNoPoint(t *testing.T) {
 		replicator.Status{},
 		replicator.Status{Applied: 100, Traffic: traffic.Info{SrcIn: 1000, DstOut: 500}},
 	))
+	m.now = clockSeq(clock(12, 0, 0))
 
-	m.Update(tickMsg(clock(12, 0, 0)))
+	m.Update(tickMsg{})
 
 	assert.Empty(t, m.rate.values(), "скорость")
 	assert.Empty(t, m.srcIn.values(), "источник")
@@ -80,10 +94,11 @@ func TestPanelTickPoints(t *testing.T) {
 		replicator.Status{Applied: 30, Traffic: traffic.Info{SrcIn: 3000, DstOut: 600}},
 		replicator.Status{Applied: 35, Traffic: traffic.Info{SrcIn: 3000, DstOut: 1600}},
 	))
+	m.now = clockSeq(clock(12, 0, 0), clock(12, 0, 1), clock(12, 0, 2))
 
-	m.Update(tickMsg(clock(12, 0, 0)))
-	m.Update(tickMsg(clock(12, 0, 1)))
-	m.Update(tickMsg(clock(12, 0, 2)))
+	m.Update(tickMsg{})
+	m.Update(tickMsg{})
+	m.Update(tickMsg{})
 
 	assert.Equal(t, []float64{20, 5}, m.rate.values(), "скорость")
 	assert.Equal(t, []float64{2000, 0}, m.srcIn.values(), "источник")
@@ -96,13 +111,35 @@ func TestPanelTickPerSecond(t *testing.T) {
 		replicator.Status{Applied: 10, Traffic: traffic.Info{SrcIn: 1000, DstOut: 500}},
 		replicator.Status{Applied: 30, Traffic: traffic.Info{SrcIn: 3000, DstOut: 600}},
 	))
+	m.now = clockSeq(clock(12, 0, 0), clock(12, 0, 2))
 
-	m.Update(tickMsg(clock(12, 0, 0)))
-	m.Update(tickMsg(clock(12, 0, 2)))
+	m.Update(tickMsg{})
+	m.Update(tickMsg{})
 
 	assert.Equal(t, []float64{10}, m.rate.values(), "скорость за 2 с между тиками")
 	assert.Equal(t, []float64{1000}, m.srcIn.values(), "источник за 2 с между тиками")
 	assert.Equal(t, []float64{50}, m.dstOut.values(), "цель за 2 с между тиками")
+}
+
+// после Ctrl+Z ждавший тик обрабатывается через 100 с: разница — за время по часам при
+// обработке, а не за плановую секунду тика, и всплеск догона после продолжения не
+// размазывается по паузе
+func TestPanelTickAfterSuspend(t *testing.T) {
+	m := newPanel(statusSeq(
+		replicator.Status{},
+		replicator.Status{Applied: 10},
+		replicator.Status{Applied: 20},
+		replicator.Status{Applied: 25},
+		replicator.Status{Applied: 225},
+	))
+	m.now = clockSeq(clock(12, 0, 0), clock(12, 0, 1), clock(12, 1, 41), clock(12, 1, 42))
+
+	m.Update(tickMsg{})
+	m.Update(tickMsg{})
+	m.Update(tickMsg{})
+	m.Update(tickMsg{})
+
+	assert.Equal(t, []float64{10, 0.05, 200}, m.rate.values(), "скорость: до паузы, за паузу 100 с, после неё")
 }
 
 func TestPanelTickSameTimeNoPoint(t *testing.T) {
@@ -111,9 +148,10 @@ func TestPanelTickSameTimeNoPoint(t *testing.T) {
 		replicator.Status{Applied: 10, Traffic: traffic.Info{SrcIn: 1000, DstOut: 500}},
 		replicator.Status{Applied: 30, Traffic: traffic.Info{SrcIn: 3000, DstOut: 600}},
 	))
+	m.now = clockSeq(clock(12, 0, 0), clock(12, 0, 0))
 
-	m.Update(tickMsg(clock(12, 0, 0)))
-	m.Update(tickMsg(clock(12, 0, 0)))
+	m.Update(tickMsg{})
+	m.Update(tickMsg{})
 
 	assert.Empty(t, m.rate.values(), "скорость")
 	assert.Empty(t, m.srcIn.values(), "источник")
@@ -126,9 +164,10 @@ func TestPanelTickCountersDecrease(t *testing.T) {
 		replicator.Status{Applied: 30, Traffic: traffic.Info{SrcIn: 3000, DstOut: 600}},
 		replicator.Status{Applied: 5, Traffic: traffic.Info{SrcIn: 100, DstOut: 50}},
 	))
+	m.now = clockSeq(clock(12, 0, 0), clock(12, 0, 1))
 
-	m.Update(tickMsg(clock(12, 0, 0)))
-	m.Update(tickMsg(clock(12, 0, 1)))
+	m.Update(tickMsg{})
+	m.Update(tickMsg{})
 
 	assert.Equal(t, []float64{0}, m.rate.values(), "скорость")
 	assert.Equal(t, []float64{0}, m.srcIn.values(), "источник")
@@ -142,11 +181,12 @@ func TestPanelFinalNoPoint(t *testing.T) {
 		replicator.Status{Applied: 30, Traffic: traffic.Info{SrcIn: 3000, DstOut: 600}},
 		replicator.Status{Applied: 90, Traffic: traffic.Info{SrcIn: 9000, DstOut: 900}},
 	))
-	m.Update(tickMsg(clock(12, 0, 0)))
-	m.Update(tickMsg(clock(12, 0, 1)))
+	m.now = clockSeq(clock(12, 0, 0), clock(12, 0, 1), clock(12, 0, 2), clock(12, 0, 3))
+	m.Update(tickMsg{})
+	m.Update(tickMsg{})
 
 	m.Update(finalMsg{})
-	m.Update(tickMsg(time.Now().Add(time.Second))) // тик до выхода, через секунду после финального снимка
+	m.Update(tickMsg{}) // тик до выхода, через секунду после финального снимка
 
 	assert.Equal(t, []float64{20}, m.rate.values(), "скорость")
 	assert.Equal(t, []float64{2000}, m.srcIn.values(), "источник")
@@ -158,8 +198,9 @@ func TestPanelTickCatchUp(t *testing.T) {
 		replicator.Status{Lag: -1, State: replicator.StateStarting},
 		replicator.Status{Lag: 2 * time.Minute, State: replicator.StateRunning},
 	))
+	m.now = clockSeq(clock(12, 0, 0))
 
-	m.Update(tickMsg(clock(12, 0, 0)))
+	m.Update(tickMsg{})
 
 	assert.True(t, m.catchUp.active, "лаг 2м0с из статуса включает догон")
 	assert.True(t, strings.HasPrefix(ansi.ReplaceAllString(m.View().Content, ""), "◐ догоняет"),
