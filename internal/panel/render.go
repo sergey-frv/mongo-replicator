@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	xansi "github.com/charmbracelet/x/ansi" // ansi — регулярка в тестах пакета
@@ -95,7 +96,7 @@ func headLine(v view, width int) string {
 	default:
 		state = labelStyle.Render("◌ " + st.State)
 	}
-	extra := st.DB + " → " + st.DstDB + labelStyle.Render("   с запуска ") + valueStyle.Render(fmtDuration(v.at.Sub(st.Started)))
+	extra := plainText(st.DB+" → "+st.DstDB) + labelStyle.Render("   с запуска ") + valueStyle.Render(fmtDuration(v.at.Sub(st.Started)))
 	return withExtra(state, lipgloss.Width(state)+2, extra, width)
 }
 
@@ -166,9 +167,9 @@ func appliedLine(st replicator.Status, width int) string {
 
 // ddlLine — последний DDL: время в колонке значений, операция и пространство имён — дальше
 func ddlLine(d *replicator.DDLInfo, width int) string {
-	extra := d.Op + " " + d.NS
+	extra := plainText(d.Op + " " + d.NS)
 	if d.Details != "" {
-		extra += labelStyle.Render(" (") + oneLine(d.Details) + labelStyle.Render(")")
+		extra += labelStyle.Render(" (") + plainText(d.Details) + labelStyle.Render(")")
 	}
 	return row("DDL", valueStyle.Render(d.At.Local().Format(time.TimeOnly)), "", extra, width)
 }
@@ -200,7 +201,7 @@ func machineLine(m *statefile.Machine, width int) string {
 
 // errLine — ошибка, из-за которой Run вернулся, усечённая по ширине окна
 func errLine(msg string, width int) string {
-	return errStyle.Render(xansi.Truncate("ошибка: "+oneLine(msg), width, "…"))
+	return errStyle.Render(xansi.Truncate("ошибка: "+plainText(msg), width, "…"))
 }
 
 // framed — график в тусклой рамке ▏…▕
@@ -233,11 +234,21 @@ func withExtra(s string, at int, extra string, width int) string {
 	return pad(s, at) + e
 }
 
-// newlines — переводы строк для oneLine
-var newlines = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
-
-// oneLine заменяет переводы строк пробелами: многострочный текст сломал бы раскладку
-func oneLine(s string) string { return newlines.Replace(s) }
+// plainText готовит внешний текст (имена баз и коллекций, детали DDL, ошибки) к выводу:
+// переводы строк и табуляция — пробелы (многострочный текст сломал бы раскладку), прочие
+// управляющие символы и битый UTF-8 — «�». Иначе ESC из имени коллекции или ошибки сервера
+// дошёл бы до терминала: xansi.Truncate сохраняет escape-последовательности.
+func plainText(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			return ' '
+		case unicode.IsControl(r):
+			return unicode.ReplacementChar
+		}
+		return r
+	}, strings.ReplaceAll(s, "\r\n", "\n"))
+}
 
 const (
 	sparkCols = 20 // колонок графика: минута при seriesLen точках
@@ -328,7 +339,7 @@ func fmtBatch(b *replicator.BatchInfo) string {
 			kinds = append(kinds, fmt.Sprintf("%s %d", k.name, k.n))
 		}
 	}
-	s := fmtCount(int64(o.Ins+o.Upd+o.Rep+o.Del)) + " (" + strings.Join(kinds, " · ") + ") в " + strings.Join(b.Colls, ", ")
+	s := fmtCount(int64(o.Ins+o.Upd+o.Rep+o.Del)) + " (" + strings.Join(kinds, " · ") + ") в " + plainText(strings.Join(b.Colls, ", "))
 	if b.More > 0 {
 		s += fmt.Sprintf(" и ещё %d", b.More)
 	}

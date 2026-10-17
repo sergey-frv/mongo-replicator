@@ -239,6 +239,40 @@ func TestRenderPanelNewlines(t *testing.T) {
 	assert.Equal(t, "ошибка: write failed: duplicate key", lines[10])
 }
 
+func TestRenderPanelControlChars(t *testing.T) {
+	v := workingView()
+	v.st.DB = "url\x1b[2Jshrinker"
+	v.st.LastBatch.Colls = []string{"Private\x1b]52;c;aGk=\x07Urls"}
+	v.st.LastDDL.NS = "urlshrinker.\x9b31mPublicUrls"
+	v.st.State, v.st.LastErr = replicator.StateStopped, "write failed: \x1b]8;;http://x\x1b\\key"
+
+	lines := panelLines(v, 120)
+
+	assert.Equal(t, "✗ остановлен  url�[2Jshrinker → urlshrinker_v2   с запуска 25м0с", lines[0])
+	assert.Equal(t, "  применено  1 727 851      пачка 19:37:18: 1 (ins 1) в Private�]52;c;aGk=�Urls", lines[4])
+	assert.Equal(t, "  DDL        11:40:02       createIndexes urlshrinker.�31mPublicUrls (slug_1)", lines[5])
+	assert.Equal(t, "ошибка: write failed: �]8;;http://x�\\key", lines[10])
+}
+
+func TestPlainText(t *testing.T) {
+	for _, tc := range []struct {
+		name, s, want string
+	}{
+		{"обычный", "urlshrinker.PublicUrls", "urlshrinker.PublicUrls"},
+		{"переводы строк", "a\r\nb\nc\rd\te", "a b c d e"},
+		{"ESC", "a\x1b[31mb", "a�[31mb"},
+		{"BEL и DEL", "a\x07b\x7fc", "a�b�c"},
+		{"C1", "a\u009b31mb", "a�31mb"},
+		{"битый UTF-8", "a\x9bb", "a�b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := plainText(tc.s)
+
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // assertWithin проверяет, что ни одна строка lines не шире окна width
 func assertWithin(t *testing.T, width int, lines []string) {
 	t.Helper()
