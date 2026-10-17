@@ -253,17 +253,20 @@ mongo-replicator verify [опции сверки]
 - Create: `internal/verify/lock_other.go`
 - Create: `internal/verify/lock_unix_test.go`
 
-- [ ] `positionPath(stateDir, dstDB, dstURI)` → `<state-dir>/verify/<имя>`, создание каталога
-- [ ] загрузка:
+- [x] `positionPath(stateDir, dstDB, dstURI)` → `<state-dir>/verify/<имя>`, создание каталога
+- [x] загрузка:
   - нет файла → пусто;
   - битый файл → `statefile.MoveAside(…, "corrupt")`;
   - чужие `db`/`dst_db`/`cluster`/`src_cluster` → `MoveAside(…, "mismatch")`;
   - `_id` сериализуется в canonical extended JSON, ключи восстанавливаются побайтно
-- [ ] запись позиции через `statefile.WriteJSON`; `defects.json`/`unverified.json` с обрезкой документов до 4 КиБ и лимитом 10 000 записей
-- [ ] блокировка `flock` на `<имя>.lock` (unix) и заглушка (вне unix)
-- [ ] тесты: круговая запись и чтение (`_id`: ObjectId, строка, вложенный документ, Decimal128); битый файл и чужая пара переносятся в сторону; обрезка и лимит отчётов; `statefile.Summary` по каталогу с подкаталогом `verify/` считает только файлы состояния
-- [ ] тест блокировки: второй захват той же блокировки → ошибка, после освобождения — успех
-- [ ] `make test`, `make lint` — зелёные
+- [x] запись позиции через `statefile.WriteJSON`; `defects.json`/`unverified.json` с обрезкой документов до 4 КиБ и лимитом 10 000 записей
+- [x] блокировка `flock` на `<имя>.lock` (unix) и заглушка (вне unix)
+- [x] тесты: круговая запись и чтение (`_id`: ObjectId, строка, вложенный документ, Decimal128); битый файл и чужая пара переносятся в сторону; обрезка и лимит отчётов; `statefile.Summary` по каталогу с подкаталогом `verify/` считает только файлы состояния
+- [x] тест блокировки: второй захват той же блокировки → ошибка, после освобождения — успех
+- [x] `make test`, `make lint` — зелёные
+- ➕ API для Task 7: `positionPaths(stateDir, dstDB, dstURI) (paths, cluster, error)` — `paths{position, lock, defects, unverified}`, имена `<dst-db>.<hash>.{json,lock,defects.json,unverified.json}`; `position{ident, Since, Token, StreamTime, Pending []*item, Counts}`, `loadPosition(path, ident) (*position, error)` (`nil` — начать с `--since`; не перенесённый файл — ошибка), `writePosition`; `report.add(ns, id, reason, src, dst)`, `writeReport` (пустой — `[]`), `readReport` и `reportEntry.id()` — для `--ids`; `lock(path) (unlock func(), error)`, занято — экспортированная `ErrLocked`
+- ➕ документы в отчётах — строки canonical extended JSON (видна разница типов), обрезанные по границе руны с «…»; `null` — документа нет. Отчёты пишутся целиком при выходе: при продолжении Task 7 должна загрузить отчёты прошлого запуска (`readReport`), иначе они затрутся
+- ➕ `lock_unix.go` — `unix && !aix`: в `x/sys/unix` для AIX нет `Flock`
 
 ### Task 6: Сверка схемы
 
