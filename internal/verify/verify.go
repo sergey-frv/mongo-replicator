@@ -193,15 +193,17 @@ func (v *Verifier) runStream(ctx context.Context) (Report, error) {
 
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalTimeout)
 	defer cancel()
-	if final, schemaErr := checkSchema(fctx, v.src, v.dst, v.cfg.DB, v.cfg.DstDB, v.created); schemaErr != nil {
-		log.Warn().Err(schemaErr).Msg("итоговая сверка схемы не выполнена: в отчёте — схема на старте")
-	} else {
+	// итоговая схема не прочитана — ошибка: без неё код 0 был бы по схеме на старте
+	final, err := checkSchema(fctx, v.src, v.dst, v.cfg.DB, v.cfg.DstDB, v.created)
+	if err == nil {
 		diffs = final
 		logSchema(diffs)
+	} else {
+		err = fmt.Errorf("итоговая сверка схемы: %w", err)
 	}
 	rep := v.report(diffs)
 	logReport(rep)
-	return rep, nil
+	return rep, err
 }
 
 // openPosition берёт блокировку и читает файл позиции; без StateDir — без них.
@@ -229,19 +231,46 @@ func (v *Verifier) openPosition() (_ *position, unlock func(), err error) {
 		log.Warn().Str("file", v.files.position).Msg("--since игнорируется: сверка продолжается с файла позиции")
 	}
 	// отчёты пишутся целиком: прошлые записи — в начало
-	v.defects = loadReport(v.files.defects)
-	v.unverified = loadReport(v.files.unverified)
+	if v.defects, err = loadReport(v.files.defects, pos.Counts.Defects, v.files.position); err == nil {
+		v.unverified, err = loadReport(v.files.unverified, pos.Counts.Unverified, v.files.position)
+	}
+	if err != nil {
+		unlock()
+		return nil, nil, err
+	}
 	log.Info().Str("file", v.files.position).Int("pending", len(pos.Pending)).Msg("продолжаю сверку с файла позиции")
 	return pos, unlock, nil
 }
 
-// loadReport — отчёт прошлого запуска; нет или не прочитан — пустой.
-func loadReport(path string) report {
+// loadReport — отчёт прошлого запуска; counted — его записи по счётчику
+// позиции posPath. Отчёты пишутся до позиции, поэтому в файле не меньше
+// min(counted, reportLimit) записей; меньше (файла нет, он битый или усечён) —
+// ошибка errReportIncomplete, файл не трогается: новый отчёт без этих записей
+// навсегда оставил бы их ключи без --ids. Битый при counted == 0 (позиция его
+// записей не учла) переносится в сторону (statefile.MoveAside) с WARN и
+// считается пустым. Не прочитанный по другой причине или не перенесённый —
+// ошибка.
+func loadReport(path string, counted int64, posPath string) (report, error) {
 	r, err := readReport(path)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		log.Warn().Err(err).Msg("отчёт прошлого запуска сверки не прочитан: он будет перезаписан")
+	switch {
+	case errors.Is(err, errReportCorrupt) && counted == 0:
+		to, mvErr := statefile.MoveAside(path, "corrupt")
+		if mvErr != nil {
+			return nil, fmt.Errorf("%w, но не перенесён: %w", err, mvErr)
+		}
+		log.Warn().Err(err).Str("file", path).Str("moved_to", to).
+			Msg("отчёт прошлого запуска сверки повреждён: перенесён в сторону, новый начат пустым")
+		return nil, nil
+	case err == nil:
+		err = fmt.Errorf("%s: записей %d", path, len(r))
+	case !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, errReportCorrupt):
+		return nil, err
 	}
-	return r
+	if want := min(counted, reportLimit); int64(len(r)) < want {
+		return nil, fmt.Errorf("%w (%d): %w — верните файл или начните заново, удалив %s",
+			errReportIncomplete, want, err, posPath)
+	}
+	return r, nil
 }
 
 // restore переносит позицию в состояние цикла.

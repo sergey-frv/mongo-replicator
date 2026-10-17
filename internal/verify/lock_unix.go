@@ -16,7 +16,7 @@ import (
 // не удаляется: удаление между open и flock второго процесса дало бы две
 // блокировки на разных файлах.
 func lock(path string) (unlock func(), err error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o640) //nolint:gosec // путь из --state-dir
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, filePerm) //nolint:gosec // путь из --state-dir
 	if err != nil {
 		return nil, fmt.Errorf("блокировка сверки: %w", err)
 	}

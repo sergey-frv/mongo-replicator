@@ -187,6 +187,17 @@ func TestReportRoundTrip(t *testing.T) {
 	assert.Equal(t, id, gotID)
 }
 
+// Файлы сверки — только владельцу: в отчётах документы баз.
+func TestWriteReportPrivate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dst.defects.json")
+
+	require.NoError(t, writeReport(path, nil))
+
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), fi.Mode().Perm())
+}
+
 // Пустой отчёт — "[]": отчёт прошлого запуска не остаётся.
 func TestWriteReportEmpty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dst.defects.json")

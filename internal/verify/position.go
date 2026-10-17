@@ -22,6 +22,11 @@ var (
 	// ErrPositionMismatch — файл позиции записан для другой пары баз или других
 	// кластеров, а --since не задана: файл не переносится.
 	ErrPositionMismatch = errors.New("файл позиции сверки записан для другой пары баз или других кластеров")
+	// errReportCorrupt — файл отчёта не разбирается как JSON.
+	errReportCorrupt = errors.New("отчёт сверки повреждён")
+	// errReportIncomplete — в отчёте (нет файла, битый, усечён) меньше записей,
+	// чем учли счётчики позиции.
+	errReportIncomplete = errors.New("в отчёте сверки меньше записей, чем учла позиция")
 )
 
 const (
@@ -29,6 +34,9 @@ const (
 	reportLimit = 10_000
 	// reportDocMax — предел расширенного JSON документа в отчёте, байт.
 	reportDocMax = 4 << 10
+	// filePerm — права файлов сверки: в отчётах — документы баз, а сводка
+	// репликатора файлы verify/ не читает, группе общего --state-dir они не нужны.
+	filePerm = 0o600
 )
 
 // paths — файлы сверки одной базы цели в <state-dir>/verify/. Подкаталог, а не
@@ -163,7 +171,7 @@ func writePosition(path string, p *position) error {
 			NS: it.ns, ID: id, First: tsJSON(it.first), Last: tsJSON(it.last), Tries: it.tries,
 		})
 	}
-	if err := statefile.WriteJSON(path, f); err != nil {
+	if err := statefile.WriteJSON(path, f, filePerm); err != nil {
 		return fmt.Errorf("файл позиции сверки: %w", err)
 	}
 	return nil
@@ -299,7 +307,7 @@ func writeReport(path string, r report) error {
 	if r == nil {
 		r = report{}
 	}
-	if err := statefile.WriteJSON(path, r); err != nil {
+	if err := statefile.WriteJSON(path, r, filePerm); err != nil {
 		return fmt.Errorf("отчёт сверки: %w", err)
 	}
 	return nil
@@ -313,7 +321,7 @@ func readReport(path string) (report, error) {
 	}
 	var r report
 	if err := json.Unmarshal(b, &r); err != nil {
-		return nil, fmt.Errorf("отчёт сверки %s: %w", path, err)
+		return nil, fmt.Errorf("%w %s: %v", errReportCorrupt, path, err)
 	}
 	return r, nil
 }

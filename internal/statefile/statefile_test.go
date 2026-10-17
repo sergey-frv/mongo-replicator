@@ -111,9 +111,9 @@ func TestWriteStateNoDir(t *testing.T) {
 func TestWriteJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.0123abcd.json")
-	require.NoError(t, os.WriteFile(path, []byte(`{"old": true}`), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte(`{"old": true}`), 0o640))
 
-	err := WriteJSON(path, map[string]any{"db": "app", "pending": []int{1, 2}})
+	err := WriteJSON(path, map[string]any{"db": "app", "pending": []int{1, 2}}, 0o600)
 
 	require.NoError(t, err)
 	b, err := os.ReadFile(path)
@@ -123,12 +123,15 @@ func TestWriteJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1, "временных файлов нет")
 	assert.Equal(t, "app.0123abcd.json", entries[0].Name())
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), fi.Mode().Perm(), "права из perm, не прежнего файла")
 }
 
 func TestWriteJSONUnmarshalable(t *testing.T) {
 	dir := t.TempDir()
 
-	err := WriteJSON(filepath.Join(dir, "app.json"), map[string]any{"ch": make(chan int)})
+	err := WriteJSON(filepath.Join(dir, "app.json"), map[string]any{"ch": make(chan int)}, 0o600)
 
 	require.Error(t, err)
 	entries, err := os.ReadDir(dir)

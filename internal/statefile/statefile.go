@@ -112,24 +112,25 @@ func Load(path string) (State, error) {
 	return s, nil
 }
 
-// Write заменяет файл состояния целиком (WriteJSON).
+// Write заменяет файл состояния целиком (WriteJSON). Права 0640: в общем
+// --state-dir сводку пользователей одной группы собирают из чужих файлов.
 func Write(path string, s State) error {
-	if err := WriteJSON(path, s); err != nil {
+	if err := WriteJSON(path, s, 0o640); err != nil {
 		return fmt.Errorf("файл состояния: %w", err)
 	}
 	return nil
 }
 
-// WriteJSON заменяет файл path на JSON v целиком: временный файл в том же
-// каталоге, Sync, Rename, Sync каталога — после сбоя остаётся старое или новое
-// содержимое.
-func WriteJSON(path string, v any) error {
+// WriteJSON заменяет файл path на JSON v целиком с правами perm: временный файл
+// в том же каталоге, Sync, Rename, Sync каталога — после сбоя остаётся старое
+// или новое содержимое.
+func WriteJSON(path string, v any, perm os.FileMode) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 	dir := filepath.Dir(path)
-	tmp, err := writeTemp(dir, "."+filepath.Base(path)+".tmp-*", b)
+	tmp, err := writeTemp(dir, "."+filepath.Base(path)+".tmp-*", b, perm)
 	if err != nil {
 		return err
 	}
@@ -145,15 +146,14 @@ func WriteJSON(path string, v any) error {
 	return d.Sync()
 }
 
-// writeTemp пишет b во временный файл каталога dir с Sync и возвращает его путь;
-// при ошибке файл удаляется. Права 0640 (CreateTemp создаёт 0600): в общем
-// --state-dir сводку пользователей одной группы собирают из чужих файлов.
-func writeTemp(dir, pattern string, b []byte) (string, error) {
+// writeTemp пишет b во временный файл каталога dir с правами perm (CreateTemp
+// создаёт 0600) и Sync и возвращает его путь; при ошибке файл удаляется.
+func writeTemp(dir, pattern string, b []byte, perm os.FileMode) (string, error) {
 	f, err := os.CreateTemp(dir, pattern)
 	if err != nil {
 		return "", err
 	}
-	err = f.Chmod(0o640)
+	err = f.Chmod(perm)
 	if err == nil {
 		_, err = f.Write(b)
 	}
