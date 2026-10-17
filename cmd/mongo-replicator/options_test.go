@@ -14,7 +14,7 @@ import (
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DB", "DST_DB", "APPLY_DROP",
-		"LOG_LEVEL", "LOG_FILE", "LOG_FILE_LEVEL", "PROGRESS", "STATE_DIR"} {
+		"LOG_LEVEL", "LOG_FILE", "LOG_FILE_LEVEL", "PROGRESS", "NO_CLEAR", "STATE_DIR"} {
 		t.Setenv(k, "") // восстановит исходное значение после теста
 		require.NoError(t, os.Unsetenv(k))
 	}
@@ -201,6 +201,57 @@ func TestProgressMode(t *testing.T) {
 	}
 	for _, c := range cases {
 		assert.Equal(t, c.want, progressMode(c.opt, c.tty, c.term), "%+v", c)
+	}
+}
+
+func TestParseOptsNoClear(t *testing.T) {
+	base := []string{"--src", "s", "--dst", "d", "--db", "db"}
+	for _, c := range []struct {
+		name string
+		env  map[string]string
+		args []string
+		want bool
+	}{
+		{"не задан", nil, nil, false},
+		{"флаг", nil, []string{"--no-clear"}, true},
+		{"NO_CLEAR=true", map[string]string{"NO_CLEAR": "true"}, nil, true},
+		{"NO_CLEAR=false", map[string]string{"NO_CLEAR": "false"}, nil, false},
+		{"пустой NO_CLEAR — включён", map[string]string{"NO_CLEAR": ""}, nil, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clearEnv(t)
+			setEnv(t, c.env)
+
+			opts, err := parseOpts(append(base, c.args...))
+
+			require.NoError(t, err)
+			assert.Equal(t, c.want, opts.NoClear, "не очищать экран")
+		})
+	}
+}
+
+func TestParseOptsNoClearInvalid(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("NO_CLEAR", "yes")
+
+	_, err := parseOpts([]string{"--src", "s", "--dst", "d", "--db", "db"})
+
+	require.Error(t, err)
+	assert.False(t, isHelp(err), "ошибка — не --help")
+}
+
+func TestClearBeforePanel(t *testing.T) {
+	cases := []struct {
+		mode    string
+		noClear bool
+		want    bool
+	}{
+		{progressTTY, false, true},
+		{progressTTY, true, false},
+		{progressPlain, false, false},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, clearBeforePanel(c.mode, c.noClear), "%+v", c)
 	}
 }
 
@@ -491,5 +542,7 @@ func TestParseOptsHelp(t *testing.T) {
 	assert.NotContains(t, err.Error(), "--all-dbs")
 	assert.Contains(t, err.Error(), "--log-level")
 	assert.Contains(t, err.Error(), "LOG_FILE_LEVEL")
+	assert.Contains(t, err.Error(), "--no-clear")
+	assert.Contains(t, err.Error(), "NO_CLEAR")
 	assert.NotContains(t, err.Error(), "--dbg")
 }

@@ -48,6 +48,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	// до первой строки лога: строки запуска остаются над панелью
+	if clearBeforePanel(progressMode(opts.Progress, stdoutTTY(), os.Getenv("TERM")), opts.NoClear) {
+		panel.ClearScreen(os.Stdout)
+	}
 
 	logFile, err := setupLog(opts)
 	if err != nil {

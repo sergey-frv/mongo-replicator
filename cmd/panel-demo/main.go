@@ -30,6 +30,7 @@ func main() {
 
 	demo := newSim(time.Now())
 	in, closeIn := panel.Input(os.Stdin)
+	panel.ClearScreen(os.Stdout)
 	console, stopP, killP := panel.Start(demo.status, os.Stdout, in, panel.SignalSelf)
 	log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: console, TimeFormat: "15:04:05"}).
 		With().Timestamp().Logger()

@@ -28,6 +28,7 @@ type options struct {
 	LogFile      string `long:"log-file" env:"LOG_FILE" description:"путь к файлу лога (JSON, дозапись; каталог должен существовать); ротация — снаружи, logrotate copytruncate"`
 	LogFileLevel string `long:"log-file-level" env:"LOG_FILE_LEVEL" choice:"debug" choice:"info" choice:"warn" choice:"error" description:"уровень лога в файле; по умолчанию info, только вместе с --log-file"`
 	Progress     string `long:"progress" env:"PROGRESS" default:"auto" choice:"auto" choice:"tty" choice:"plain" description:"панель статуса в терминале (tty; в консоли — только WARN и выше) или построчный лог (plain); auto — панель, если stdout — терминал и TERM не dumb"`
+	NoClear      bool   `long:"no-clear" env:"NO_CLEAR" description:"не очищать экран перед панелью статуса"`
 	StateDir     string `long:"state-dir" env:"STATE_DIR" description:"каталог файлов состояния на машине (накопленный трафик процессов, сводка по ним); по умолчанию $XDG_STATE_HOME/mongo-replicator или ~/.local/state/mongo-replicator"`
 }
 
@@ -154,4 +155,10 @@ func progressMode(opt string, stdoutTTY bool, termEnv string) string {
 		return progressTTY
 	}
 	return progressPlain
+}
+
+// clearBeforePanel — очищать ли экран перед панелью: только в режиме панели
+// (mode — после progressMode) и без --no-clear.
+func clearBeforePanel(mode string, noClear bool) bool {
+	return mode == progressTTY && !noClear
 }

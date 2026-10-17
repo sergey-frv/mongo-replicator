@@ -209,17 +209,18 @@
 **Files:**
 - Create: `internal/panel/clear.go`, `internal/panel/clear_test.go`
 - Modify: `cmd/mongo-replicator/options.go`, `cmd/mongo-replicator/options_test.go`
-- Modify: `cmd/mongo-replicator/main.go`, `cmd/mongo-replicator/main_test.go`
+- Modify: `cmd/mongo-replicator/main.go`
 - Modify: `cmd/panel-demo/main.go`
 
-- [ ] `panel.ClearScreen(w io.Writer)` — пишет `"\x1b[H\x1b[2J"`; doc-комментарий: почему не `tea.ClearScreen` (без полноэкранного режима не очищает экран)
-- [ ] флаг `NoClear bool` в `options`: `long:"no-clear" env:"NO_CLEAR"`, описание — «не очищать экран перед панелью статуса»; `"NO_CLEAR"` добавить в `clearEnv` (`options_test.go`)
-- [ ] условие очистки — отдельной функцией (ориентир `clearBeforePanel(mode string, noClear bool) bool`: `mode == progressTTY && !noClear`); `main`: после успешного `parseOpts`, до `setupLog` — `if clearBeforePanel(progressMode(…), opts.NoClear) { panel.ClearScreen(os.Stdout) }`
-- [ ] демо: `panel.ClearScreen(os.Stdout)` перед `panel.Start` (после проверки, что stdout — терминал)
-- [ ] тест `ClearScreen`: в буфер записано ровно `"\x1b[H\x1b[2J"`
-- [ ] тесты `parseOpts` (таблица по env/аргументам → `NoClear`): ничего → false; `--no-clear` → true; `NO_CLEAR=true` → true; `NO_CLEAR=false` → false; `NO_CLEAR=` → true; `NO_CLEAR=yes` → ошибка (в `TestParseOptsErrors` или отдельной таблицей)
-- [ ] тест `clearBeforePanel` (таблица по данным): `tty`/false → true; `tty`/true → false; `plain`/false → false
-- [ ] `make test`, `make lint` — должно пройти
+- [x] `panel.ClearScreen(w io.Writer)` — пишет `"\x1b[H\x1b[2J"`; doc-комментарий: почему не `tea.ClearScreen` (без полноэкранного режима не очищает экран)
+- [x] флаг `NoClear bool` в `options`: `long:"no-clear" env:"NO_CLEAR"`, описание — «не очищать экран перед панелью статуса»; `"NO_CLEAR"` добавить в `clearEnv` (`options_test.go`)
+- [x] условие очистки — отдельной функцией (ориентир `clearBeforePanel(mode string, noClear bool) bool`: `mode == progressTTY && !noClear`); `main`: после успешного `parseOpts`, до `setupLog` — `if clearBeforePanel(progressMode(…), opts.NoClear) { panel.ClearScreen(os.Stdout) }`
+- [x] демо: `panel.ClearScreen(os.Stdout)` перед `panel.Start` (после проверки, что stdout — терминал)
+- [x] тест `ClearScreen`: в буфер записано ровно `"\x1b[H\x1b[2J"`
+- [x] тесты `parseOpts` (таблица по env/аргументам → `NoClear`): ничего → false; `--no-clear` → true; `NO_CLEAR=true` → true; `NO_CLEAR=false` → false; `NO_CLEAR=` → true; `NO_CLEAR=yes` → ошибка (в `TestParseOptsErrors` или отдельной таблицей)
+- [x] тест `clearBeforePanel` (таблица по данным): `tty`/false → true; `tty`/true → false; `plain`/false → false
+- ➕ `clearBeforePanel` — в `options.go` рядом с `progressMode`, тест — `TestClearBeforePanel` в `options_test.go` (а не `main_test.go`); `NO_CLEAR=yes` — отдельный `TestParseOptsNoClearInvalid`; `TestParseOptsHelp` проверяет `--no-clear`/`NO_CLEAR`
+- [x] `make test`, `make lint` — должно пройти
 
 ### Task 7: Сценарий демо под новую панель
 
