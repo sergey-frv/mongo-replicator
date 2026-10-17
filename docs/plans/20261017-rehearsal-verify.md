@@ -186,11 +186,11 @@ mongo-replicator verify [опции сверки]
 - Modify: `internal/statefile/statefile.go`
 - Modify: `internal/statefile/statefile_test.go`
 
-- [ ] `replicator.AppliedPosition(ctx, dst, srcDB, dstDB)`: чтение с primary, `appliedAt()`, `ok=false` при отсутствии документа или пустой позиции, ошибка пары баз через `checkDBs`; doc-комментарий о строгом сравнении
-- [ ] `statefile`: экспорт имени файла без каталога (`Name(dstDB, dstURI) (name, cluster string)`, `Path` выражен через него), ключа кластера (`ClusterKey`) и атомарной записи JSON (`WriteJSON(path string, v any) error` поверх `writeTemp`, `Write` выражен через неё)
-- [ ] юнит-тесты `Name`/`ClusterKey` (тот же ключ для разного порядка хостов, `srv:`) и `WriteJSON` (содержимое, отсутствие временных файлов после записи)
-- [ ] интеграционные тесты `AppliedPosition`: нет документа; документ аренды без позиции; позиция из токена; позиция из `clusterTime` при неразбираемом токене; чужая пара баз
-- [ ] `make test`, `make test-integration`, `make lint` — зелёные
+- [x] `replicator.AppliedPosition(ctx, dst, srcDB, dstDB)`: чтение с primary, `appliedAt()`, `ok=false` при отсутствии документа или пустой позиции, ошибка пары баз через `checkDBs`; doc-комментарий о строгом сравнении
+- [x] `statefile`: экспорт имени файла без каталога (`Name(dstDB, dstURI) (name, cluster string)`, `Path` выражен через него), ключа кластера (`ClusterKey`) и атомарной записи JSON (`WriteJSON(path string, v any) error` поверх `writeTemp`, `Write` выражен через неё)
+- [x] юнит-тесты `Name`/`ClusterKey` (тот же ключ для разного порядка хостов, `srv:`) и `WriteJSON` (содержимое, отсутствие временных файлов после записи)
+- [x] интеграционные тесты `AppliedPosition`: нет документа; документ аренды без позиции; позиция из токена; позиция из `clusterTime` при неразбираемом токене; чужая пара баз
+- [x] `make test`, `make test-integration`, `make lint` — зелёные
 
 ### Task 2: Разделить опции на общие, репликации и сверки
 
