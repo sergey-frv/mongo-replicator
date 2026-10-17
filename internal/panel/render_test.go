@@ -2,10 +2,12 @@ package panel
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/sergey-frv/mongo-replicator/internal/replicator"
@@ -22,9 +24,9 @@ const (
 	GiB = 1 << 30
 )
 
-// panelLines — строки панели v в окне шириной 100 без цветовых последовательностей
-func panelLines(v view) []string {
-	return strings.Split(ansi.ReplaceAllString(renderPanel(v, 100), ""), "\n")
+// panelLines — строки панели v в окне шириной width без цветовых последовательностей
+func panelLines(v view, width int) []string {
+	return strings.Split(ansi.ReplaceAllString(renderPanel(v, width), ""), "\n")
 }
 
 func clock(h, m, s int) time.Time { return time.Date(2026, 10, 15, h, m, s, 0, time.Local) }
@@ -68,7 +70,7 @@ func workingView() view {
 func TestRenderPanel(t *testing.T) {
 	v := workingView()
 
-	lines := panelLines(v)
+	lines := panelLines(v, 100)
 
 	assert.Equal(t, []string{
 		"● работает  urlshrinker → urlshrinker_v2   с запуска 25м0с",
@@ -90,7 +92,7 @@ func TestRenderPanelStarting(t *testing.T) {
 	v := view{st: replicator.Status{DB: "a", DstDB: "b", Started: at.Add(-5 * time.Second), Rate: 0.3, Lag: -1,
 		Traffic: traffic.Info{SrcIn: 512, SrcOut: 1536}, State: replicator.StateStarting}, at: at}
 
-	lines := panelLines(v)
+	lines := panelLines(v, 100)
 
 	assert.Equal(t, []string{
 		"◌ запуск  a → b   с запуска 5с",
@@ -109,7 +111,7 @@ func TestRenderPanelCatchUp(t *testing.T) {
 	v.st.Lag = 21 * time.Hour
 	v.catchUp = catchUpOf(v.at, 50*time.Hour, 21*time.Hour)
 
-	lines := panelLines(v)
+	lines := panelLines(v, 100)
 
 	assert.Equal(t, []string{
 		"◐ догоняет  urlshrinker → urlshrinker_v2   с запуска 25м0с",
@@ -124,7 +126,7 @@ func TestRenderPanelCatchUpNoEstimate(t *testing.T) {
 	v.st.Lag = 50 * time.Hour
 	v.catchUp = catchUpOf(v.at, 50*time.Hour)
 
-	lines := panelLines(v)
+	lines := panelLines(v, 100)
 
 	assert.Equal(t, "  лаг        2д2ч           ░░░░░░░░░░░░░░░░░░░░ 0%", lines[2], "одна точка догона — только процент")
 }
@@ -135,7 +137,7 @@ func TestRenderPanelRetryDuringCatchUp(t *testing.T) {
 	v.st.State, v.st.Retry, v.st.LastErr = replicator.StateRetry, 2, "connection refused"
 	v.catchUp = catchUpOf(v.at, 50*time.Hour, 21*time.Hour)
 
-	lines := panelLines(v)
+	lines := panelLines(v, 100)
 
 	assert.Equal(t, "↻ повтор 2  urlshrinker → urlshrinker_v2   с запуска 25м0с", lines[0])
 	assert.Equal(t, "  лаг        21ч0м          применено до 19:37:18", lines[2], "без полосы и оценки")
@@ -161,7 +163,7 @@ func TestRenderPanelStopped(t *testing.T) {
 			v := workingView()
 			v.st.State, v.st.LastErr = replicator.StateStopped, tc.lastErr
 
-			lines := panelLines(v)
+			lines := panelLines(v, 100)
 
 			assert.Equal(t, tc.want, []string{lines[0], lines[len(lines)-1]}, "шапка и последняя строка")
 		})
@@ -230,11 +232,117 @@ func TestRenderPanelNewlines(t *testing.T) {
 	v.st.LastDDL.Details = "slug_1\nunique"
 	v.st.State, v.st.LastErr = replicator.StateStopped, "write failed:\r\nduplicate key"
 
-	lines := panelLines(v)
+	lines := panelLines(v, 100)
 
 	assert.Len(t, lines, 11, "переводы строк не добавили строк")
 	assert.Equal(t, "  DDL        11:40:02       createIndexes urlshrinker.PublicUrls (slug_1 unique)", lines[5])
 	assert.Equal(t, "ошибка: write failed: duplicate key", lines[10])
+}
+
+// assertWithin проверяет, что ни одна строка lines не шире окна width
+func assertWithin(t *testing.T, width int, lines []string) {
+	t.Helper()
+	for _, l := range lines {
+		assert.LessOrEqual(t, lipgloss.Width(l), width, "строка %q", l)
+	}
+}
+
+func TestRenderPanelNarrow(t *testing.T) {
+	for _, tc := range []struct {
+		width int
+		want  []string
+	}{
+		{80, []string{
+			"● работает  urlshrinker → urlshrinker_v2   с запуска 25м0с",
+			"── репликация " + strings.Repeat("─", 66),
+			"  лаг        0с             применено до 19:37:18",
+			"  скорость   19/с           ▏▁▂▂▂▃▃▃▄▄▄▅▅▆▆▆▇▇▇██▕ 2–59/с",
+			"  применено  1 727 851      пачка 19:37:18: 1 (ins 1) в PrivateUrls",
+			"  DDL        11:40:02       createIndexes urlshrinker.PublicUrls (slug_1)",
+			"── трафик " + strings.Repeat("─", 70),
+			"  источник   ↓ 4.1 KiB/с    ▏                   █▕ всего ↓ 881 MiB ↑ 2.7 MiB",
+			"  цель       ↑ 3.8 KiB/с    ▏                   █▕ всего ↑ 278 MiB ↓ 36.3 MiB",
+			"  машина     процессов 1, активно 1 · на 19:36  всего ↓ 881 MiB ↑ 277.9 MiB",
+			"ошибка: write failed: connection reset by peer while applying batch to collecti…",
+		}},
+		{60, []string{
+			"● работает  urlshrinker → urlshrinker_v2   с запуска 25м0с",
+			"── репликация " + strings.Repeat("─", 46),
+			"  лаг        0с             применено до 19:37:18",
+			"  скорость   19/с           ▏▁▂▂▂▃▃▃▄▄▄▅▅▆▆▆▇▇▇██▕ 2–59/с",
+			"  применено  1 727 851      пачка 19:37:18: 1 (ins 1) в Pri…",
+			"  DDL        11:40:02       createIndexes urlshrinker.Publi…",
+			"── трафик " + strings.Repeat("─", 50),
+			"  источник   ↓ 4.1 KiB/с    ▏                   █▕ всего ↓ …",
+			"  цель       ↑ 3.8 KiB/с    ▏                   █▕ всего ↑ …",
+			"  машина     процессов 1, активно 1 · на 19:36  всего ↓ 881…",
+			"ошибка: write failed: connection reset by peer while applyi…",
+		}},
+		{40, []string{
+			"● работает  urlshrinker → urlshrinker_v…",
+			"── репликация " + strings.Repeat("─", 26),
+			"  лаг        0с             применено д…",
+			"  скорость   19/с           2–59/с",
+			"  применено  1 727 851      пачка 19:37…",
+			"  DDL        11:40:02       createIndex…",
+			"── трафик " + strings.Repeat("─", 30),
+			"  источник   ↓ 4.1 KiB/с    всего ↓ 881…",
+			"  цель       ↑ 3.8 KiB/с    всего ↑ 278…",
+			"  машина     процессов 1, активно 1 · н…",
+			"ошибка: write failed: connection reset …",
+		}},
+	} {
+		t.Run(strconv.Itoa(tc.width), func(t *testing.T) {
+			v := workingView()
+			v.st.LastErr = "write failed: connection reset by peer while applying batch to collection PrivateUrls"
+
+			lines := panelLines(v, tc.width)
+
+			assert.Equal(t, tc.want, lines)
+			assertWithin(t, tc.width, lines)
+		})
+	}
+}
+
+func TestRenderPanelNarrowCatchUp(t *testing.T) {
+	for _, tc := range []struct {
+		width int
+		want  string
+	}{
+		{80, "  лаг        21ч0м          ████████████░░░░░░░░ 58% · ~7с до 0"},
+		{60, "  лаг        21ч0м          ████████████░░░░░░░░ 58% · ~7с …"},
+		{40, "  лаг        21ч0м          58% · ~7с д…"},
+	} {
+		t.Run(strconv.Itoa(tc.width), func(t *testing.T) {
+			v := workingView()
+			v.st.Lag = 21 * time.Hour
+			v.catchUp = catchUpOf(v.at, 50*time.Hour, 21*time.Hour)
+
+			lines := panelLines(v, tc.width)
+
+			assert.Equal(t, tc.want, lines[2])
+			assertWithin(t, tc.width, lines)
+		})
+	}
+}
+
+func TestRenderPanelNarrowMachine(t *testing.T) {
+	for _, tc := range []struct {
+		width int
+		want  string
+	}{
+		{40, "  машина     процессов 12, активно 3 · …"},
+		{31, "  машина     процессов 12"},
+	} {
+		t.Run(strconv.Itoa(tc.width), func(t *testing.T) {
+			v := workingView()
+			v.st.Machine.Processes, v.st.Machine.Active = 12, 3
+
+			lines := panelLines(v, tc.width)
+
+			assert.Equal(t, tc.want, lines[len(lines)-1], "процессов — всегда, остальное — пока остаток не меньше 8")
+		})
+	}
 }
 
 func TestFmtBytes(t *testing.T) {
