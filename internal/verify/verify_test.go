@@ -3,6 +3,7 @@ package verify
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -114,4 +115,42 @@ func TestOpenPositionKeepsReports(t *testing.T) {
 	got, err := readReport(files.defects)
 	require.NoError(t, err)
 	assert.Equal(t, []string{`{"$numberInt":"1"}`, `{"$numberInt":"2"}`}, []string{string(got[0].ID), string(got[1].ID)})
+}
+
+// reportFailVerifier — сверка с дефектом, чей отчёт не записать: каталога
+// отчёта о дефектах нет. Возвращает и этот каталог.
+func reportFailVerifier(t *testing.T) (v *Verifier, missing string) {
+	t.Helper()
+	dir := t.TempDir()
+	missing = filepath.Join(dir, "missing")
+	v = unitVerifier(Config{})
+	v.files = paths{
+		position:   filepath.Join(dir, "p.json"),
+		defects:    filepath.Join(missing, "p.defects.json"),
+		unverified: filepath.Join(dir, "p.unverified.json"),
+	}
+	v.addDefect("db.items", rawID(t, int32(1)), nil, rawDoc(t, bson.D{{Key: "_id", Value: int32(1)}}))
+	return v, missing
+}
+
+// Отчёт не записан — позиция не пишется: она учла бы записи, которых нет в
+// отчётах.
+func TestSaveReportFailed(t *testing.T) {
+	v, _ := reportFailVerifier(t)
+
+	v.save()
+
+	assert.NoFileExists(t, v.files.position)
+}
+
+// После неудачной записи следующая повторяет отчёты, хотя новых записей нет.
+func TestSaveRetriesReports(t *testing.T) {
+	v, missing := reportFailVerifier(t)
+	v.save()
+	require.NoError(t, os.Mkdir(missing, 0o700))
+
+	v.save()
+
+	assert.FileExists(t, v.files.defects)
+	assert.FileExists(t, v.files.position)
 }

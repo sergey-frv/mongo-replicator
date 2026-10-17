@@ -362,6 +362,35 @@ func TestIntegrationVerifyIDs(t *testing.T) {
 	assert.NoFileExists(t, files.position, "файл позиции")
 }
 
+// --ids, остановленная до проверки ключа (чекпойнт стоит): ошибка, а не итог, и
+// ключ — в отчёте «не проверено», иначе он пропал бы: файла позиции у --ids нет.
+func TestIntegrationVerifyIDsStopped(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	insert(ctx, t, srcClient, db, doc(1, "a"))
+	insert(ctx, t, dstClient, db, doc(1, "a"))
+	ids := filepath.Join(t.TempDir(), "defects.json")
+	var r report
+	require.NoError(t, r.add(db+".items", rawID(t, 1), "различается: v", nil, nil))
+	require.NoError(t, writeReport(ids, r))
+	writeCkpt(t, db, srcNow(t))
+	cfg := itConfig(db, bson.Timestamp{})
+	cfg.IDs = ids
+	cfg.StateDir = t.TempDir()
+	vr := startVerify(t, cfg)
+	vr.until(func(s status) bool { return s.ckptWaiting == 1 }, "S1 прочитан, проверка ждёт чекпойнт")
+
+	rep, err := vr.stop()
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, counts{Unverified: 1}, rep.counts)
+	got, err := readReport(rep.UnverifiedFile)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, reportEntry{NS: db + ".items", ID: json.RawMessage(`{"$numberInt":"1"}`), Reason: "stopped"}, got[0])
+}
+
 // Мягкий предел очереди: при полной очереди поток всё равно читается, пока
 // проверка ждёт его время, иначе ключ на проверке ждал бы поток вечно.
 func TestIntegrationVerifyQueueFull(t *testing.T) {

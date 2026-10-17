@@ -22,6 +22,8 @@ const (
 const (
 	reasonDrop = "drop" // коллекция удалена
 	reasonHot  = "hot"  // источник менялся во время каждой из maxTries проверок
+	// reasonStopped — --ids остановлена по сигналу до проверки ключа
+	reasonStopped = "stopped"
 )
 
 // key — ключ очереди: пространство имён и точный raw _id (тип и байты значения).

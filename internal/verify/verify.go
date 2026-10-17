@@ -135,7 +135,9 @@ func New(src, dst *mongo.Client, cfg Config) *Verifier {
 
 // Run выполняет сверку в режиме из Config. Отмена ctx после начала цикла
 // сверки — штатное завершение: позиция и отчёты записываются, ошибки нет; до
-// него (схема, открытие потока) итога нет — ошибка.
+// него (схема, открытие потока) итога нет — ошибка. Исключение — --ids с
+// непроверенными ключами: позиции у неё нет, итога тоже — ошибка, ключи — в
+// отчёте «не проверено» с причиной stopped.
 func (v *Verifier) Run(ctx context.Context) (Report, error) {
 	switch {
 	case v.cfg.SchemaOnly:
@@ -293,12 +295,32 @@ func (v *Verifier) runIDs(ctx context.Context) (Report, error) {
 		return Report{}, err
 	}
 	err = v.loop(ctx, cs)
+	left := v.q.len()
+	if err == nil && ctx.Err() != nil && left > 0 {
+		// у --ids нет файла позиции: непроверенные ключи — в отчёт, иначе они
+		// пропали бы (файл --ids мог быть и прошлым отчётом .ids, его затрёт запись)
+		v.stopped()
+		err = fmt.Errorf("перепроверка остановлена, ключей не проверено: %d: %w", left, ctx.Err())
+	}
 	v.writeReports()
 	rep := v.report(nil)
 	if err == nil {
 		logReport(rep)
 	}
 	return rep, err
+}
+
+// stopped переносит ключи очереди в «не проверено» с причиной reasonStopped:
+// одна строка лога вместо WARN на ключ.
+func (v *Verifier) stopped() {
+	items := v.q.snapshot()
+	for _, it := range items {
+		v.counts.Unverified++
+		if err := v.unverified.add(it.ns, it.id, reasonStopped, nil, nil); err != nil {
+			log.Warn().Err(err).Msg("непроверенный ключ не добавлен в отчёт")
+		}
+	}
+	log.Warn().Int("keys", len(items)).Str("reason", reasonStopped).Msg("не проверено")
 }
 
 // loop — цикл сверки: события потока → очередь, готовые пачки → проверка,
@@ -585,8 +607,9 @@ func idString(id bson.RawValue) string {
 // которых нет в отчётах (иначе после kill они остались бы только в счётчиках,
 // и --ids их не перепроверил бы).
 func (v *Verifier) save() {
-	v.writeReports()
-	v.savePosition()
+	if v.writeReports() {
+		v.savePosition()
+	}
 }
 
 // savePosition пишет файл позиции; ошибка — WARN: потеря позиции значит
@@ -605,18 +628,24 @@ func (v *Verifier) savePosition() {
 }
 
 // writeReports пишет отчёты, если записи добавились с прошлой записи; первая
-// запись — всегда: она заменяет отчёты прошлого запуска.
-func (v *Verifier) writeReports() {
+// запись — всегда: она заменяет отчёты прошлого запуска. false — отчёт не
+// записан: позицию писать нельзя, следующая запись повторит оба файла.
+func (v *Verifier) writeReports() bool {
 	n := len(v.defects) + len(v.unverified)
 	if v.files.defects == "" || n == v.reported {
-		return
+		return true
 	}
-	v.reported = n
+	ok := true
 	for path, r := range map[string]report{v.files.defects: v.defects, v.files.unverified: v.unverified} {
 		if err := writeReport(path, r); err != nil {
 			log.Warn().Err(err).Msg("отчёт сверки не записан")
+			ok = false
 		}
 	}
+	if ok {
+		v.reported = n
+	}
+	return ok
 }
 
 func (v *Verifier) report(schema []SchemaDiff) Report {
