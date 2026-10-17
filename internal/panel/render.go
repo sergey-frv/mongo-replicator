@@ -11,85 +11,233 @@ import (
 	xansi "github.com/charmbracelet/x/ansi" // ansi — регулярка в тестах пакета
 
 	"github.com/sergey-frv/mongo-replicator/internal/replicator"
-	"github.com/sergey-frv/mongo-replicator/internal/traffic"
+	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 )
 
 var (
-	labelStyle = lipgloss.NewStyle().Faint(true)
-	retryStyle = lipgloss.NewStyle().Foreground(lipgloss.Yellow)
+	labelStyle = lipgloss.NewStyle().Faint(true) // подписи, единицы, заголовки, рамки графиков
+	valueStyle = lipgloss.NewStyle().Bold(true)
+	okStyle    = lipgloss.NewStyle().Foreground(lipgloss.Green)
+	warnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Yellow)
 	errStyle   = lipgloss.NewStyle().Foreground(lipgloss.Red)
+
+	lagGoodStyle = valueStyle.Foreground(lipgloss.Green)  // лаг < lagSlow
+	lagSlowStyle = valueStyle.Foreground(lipgloss.Yellow) // лаг < lagBad
+	lagBadStyle  = valueStyle.Foreground(lipgloss.Red)
+
+	rateStyle = lipgloss.NewStyle().Foreground(lipgloss.Cyan)    // график скорости
+	srcStyle  = lipgloss.NewStyle().Foreground(lipgloss.Green)   // график источника
+	dstStyle  = lipgloss.NewStyle().Foreground(lipgloss.Magenta) // график цели
+	barStyle  = lipgloss.NewStyle().Foreground(lipgloss.Yellow)  // полоса догона
 )
 
-// renderPanel — текст панели по снимку st, снятому в at; prev, prevAt — трафик
-// предыдущего снимка для скоростей (нулевое prevAt — скорости не показываются).
-func renderPanel(st replicator.Status, at time.Time, prev traffic.Info, prevAt time.Time) string {
-	label := func(s string) string { return labelStyle.Render(s) }
-	var lines []string
+const (
+	indentCols = 2  // отступ строк блока
+	labelCols  = 11 // колонка подписей
+	valueCols  = 15 // колонка значений: «↓ 1023.5 KiB/с» — 14
 
-	head := fmt.Sprintf("%s → %s %s %s", st.DB, st.DstDB, label("· с запуска"), fmtDuration(at.Sub(st.Started)))
-	if st.Lag < 0 {
-		head += label(" · лаг неизвестен")
-	} else {
-		head += label(" · лаг ") + fmtDuration(st.Lag)
-		if !st.AppliedAt.IsZero() {
-			head += label(" (применено до ") + st.AppliedAt.Local().Format(time.TimeOnly) + label(")")
-		}
-	}
-	lines = append(lines, head)
+	lagSlow = 10 * time.Second
+	lagBad  = time.Minute
+)
 
-	ops := label("операции: ") + fmtCount(st.Applied) + label(" всего · ") + fmtFloat(st.Rate) + label("/с")
-	if b := st.LastBatch; b != nil {
-		ops += label(" · пачка ") + b.At.Local().Format(time.TimeOnly) + label(": ") + fmtBatch(b)
-	}
-	lines = append(lines, ops)
+// view — всё, что показывает панель: снимок st, снятый в at, история для графиков
+// (операций/с, байт/с с источника и на цель) и состояние догона.
+type view struct {
+	st                  replicator.Status
+	at                  time.Time
+	rate, srcIn, dstOut series
+	catchUp             catchUp
+}
 
-	if d := st.LastDDL; d != nil {
-		ddl := label("DDL: ") + d.At.Local().Format(time.TimeOnly) + " " + d.Op + " " + d.NS
-		if d.Details != "" {
-			ddl += " (" + d.Details + ")"
-		}
-		lines = append(lines, ddl)
+// renderPanel — текст панели v для окна шириной width.
+func renderPanel(v view, width int) string {
+	st := v.st
+	lines := []string{
+		headLine(v, width),
+		blockLine("репликация", width),
+		lagLine(v, width),
+		rateLine(v, width),
+		appliedLine(st, width),
 	}
-
-	elapsed := time.Duration(0)
-	if !prevAt.IsZero() {
-		elapsed = at.Sub(prevAt)
+	if st.LastDDL != nil {
+		lines = append(lines, ddlLine(st.LastDDL, width))
 	}
-	speed := func(cur, prev uint64) string {
-		if elapsed <= 0 {
-			return ""
-		}
-		return " " + fmtBytes(uint64(float64(cur-prev)/elapsed.Seconds())) + label("/с")
-	}
-	t := st.Traffic
-	lines = append(lines, label("трафик процесса: источник ↓ ")+fmtBytes(t.SrcIn)+speed(t.SrcIn, prev.SrcIn)+
-		label(" ↑ ")+fmtBytes(t.SrcOut)+
-		label(" · цель ↓ ")+fmtBytes(t.DstIn)+
-		label(" ↑ ")+fmtBytes(t.DstOut)+speed(t.DstOut, prev.DstOut))
-
-	if m := st.Machine; m != nil {
-		mt := m.Traffic
-		lines = append(lines, label(fmt.Sprintf("на машине (%d, активно %d, на %s): источник ↓ ",
-			m.Processes, m.Active, m.At.Local().Format("15:04")))+fmtBytes(mt.SrcIn)+
-			label(" ↑ ")+fmtBytes(mt.SrcOut)+
-			label(" · цель ↓ ")+fmtBytes(mt.DstIn)+
-			label(" ↑ ")+fmtBytes(mt.DstOut))
-	}
-
-	state := st.State
-	switch {
-	case st.State == replicator.StateRetry:
-		state = retryStyle.Render(fmt.Sprintf("%s %d", st.State, st.Retry))
-	case st.LastErr != "":
-		state = errStyle.Render(st.State)
+	lines = append(lines,
+		blockLine("трафик", width),
+		trafficLine("источник", "↓", v.srcIn, srcStyle, labelStyle.Render("всего ↓ ")+fmtBytes(st.Traffic.SrcIn)+
+			labelStyle.Render(" ↑ ")+fmtBytes(st.Traffic.SrcOut), width),
+		trafficLine("цель", "↑", v.dstOut, dstStyle, labelStyle.Render("всего ↑ ")+fmtBytes(st.Traffic.DstOut)+
+			labelStyle.Render(" ↓ ")+fmtBytes(st.Traffic.DstIn), width))
+	if st.Machine != nil {
+		lines = append(lines, machineLine(st.Machine, width))
 	}
 	if st.LastErr != "" {
-		state += label(": ") + errStyle.Render(st.LastErr)
+		lines = append(lines, errLine(st.LastErr, width))
 	}
-	lines = append(lines, label("состояние: ")+state)
-
 	return strings.Join(lines, "\n")
 }
+
+// headLine — шапка: значок и состояние, пара баз и время с запуска
+func headLine(v view, width int) string {
+	st := v.st
+	var state string
+	switch {
+	case st.State == replicator.StateRunning && v.catchUp.active:
+		state = warnStyle.Render("◐ догоняет")
+	case st.State == replicator.StateRunning:
+		state = okStyle.Render("● " + st.State)
+	case st.State == replicator.StateRetry:
+		state = warnStyle.Render(fmt.Sprintf("↻ %s %d", st.State, st.Retry))
+	case st.State == replicator.StateStopped && st.LastErr != "":
+		state = errStyle.Render("✗ " + st.State)
+	case st.State == replicator.StateStopped:
+		state = labelStyle.Render("✗ " + st.State)
+	default:
+		state = labelStyle.Render("◌ " + st.State)
+	}
+	extra := st.DB + " → " + st.DstDB + labelStyle.Render("   с запуска ") + valueStyle.Render(fmtDuration(v.at.Sub(st.Started)))
+	return withExtra(state, lipgloss.Width(state)+2, extra, width)
+}
+
+// blockLine — заголовок блока с линией до ширины окна
+func blockLine(name string, width int) string {
+	s := "── " + name + " "
+	return labelStyle.Render(s + strings.Repeat("─", max(width-lipgloss.Width(s), 0)))
+}
+
+// lagLine — лаг; при догоне (только в работе и с известным лагом) — полоса, процент и
+// оценка, иначе — до какого времени источника всё применено.
+func lagLine(v view, width int) string {
+	st := v.st
+	if st.Lag < 0 {
+		return row("лаг", labelStyle.Render("неизвестен"), "", "", width)
+	}
+	value := lagStyle(st.Lag).Render(fmtDuration(st.Lag))
+	if st.State == replicator.StateRunning && v.catchUp.active {
+		frac := v.catchUp.frac()
+		extra := valueStyle.Render(fmt.Sprintf("%d%%", int(math.Round(frac*100))))
+		if e := v.catchUp.estimate(); e != "" {
+			extra += labelStyle.Render(" · " + e)
+		}
+		return row("лаг", value, barStyle.Render(progressBar(frac, barCols)), extra, width)
+	}
+	extra := ""
+	if !st.AppliedAt.IsZero() {
+		extra = labelStyle.Render("применено до ") + st.AppliedAt.Local().Format(time.TimeOnly)
+	}
+	return row("лаг", value, "", extra, width)
+}
+
+// lagStyle — цвет лага по порогам lagSlow и lagBad
+func lagStyle(lag time.Duration) lipgloss.Style {
+	switch {
+	case lag < lagSlow:
+		return lagGoodStyle
+	case lag < lagBad:
+		return lagSlowStyle
+	default:
+		return lagBadStyle
+	}
+}
+
+// rateLine — скорость: число — Status.Rate (за интервал прогресса, не скачет от пачек),
+// график — по разнице Applied между тиками, диапазон — по средним колонок графика.
+func rateLine(v view, width int) string {
+	value := valueStyle.Render(fmtFloat(v.st.Rate)) + labelStyle.Render("/с")
+	extra := ""
+	if cols := sparkColumns(v.rate, sparkCols); len(cols) > 0 {
+		lo, hi := cols[0], cols[0]
+		for _, c := range cols {
+			lo, hi = min(lo, c), max(hi, c)
+		}
+		extra = fmtFloat(lo) + "–" + fmtFloat(hi) + labelStyle.Render("/с")
+	}
+	return row("скорость", value, framed(sparkline(v.rate), rateStyle), extra, width)
+}
+
+// appliedLine — всего применено и последняя пачка
+func appliedLine(st replicator.Status, width int) string {
+	extra := ""
+	if b := st.LastBatch; b != nil {
+		extra = labelStyle.Render("пачка ") + b.At.Local().Format(time.TimeOnly) + labelStyle.Render(": ") + fmtBatch(b)
+	}
+	return row("применено", valueStyle.Render(fmtCount(st.Applied)), "", extra, width)
+}
+
+// ddlLine — последний DDL: время в колонке значений, операция и пространство имён — дальше
+func ddlLine(d *replicator.DDLInfo, width int) string {
+	extra := d.Op + " " + d.NS
+	if d.Details != "" {
+		extra += labelStyle.Render(" (") + oneLine(d.Details) + labelStyle.Render(")")
+	}
+	return row("DDL", valueStyle.Render(d.At.Local().Format(time.TimeOnly)), "", extra, width)
+}
+
+// trafficLine — трафик процесса с одной стороны: скорость по последней точке s (arrow —
+// направление), график s и всего байт. Точек ещё нет — «—».
+func trafficLine(name, arrow string, s series, style lipgloss.Style, extra string, width int) string {
+	speed := "—"
+	if vals := s.values(); len(vals) > 0 {
+		speed = fmtBytes(uint64(vals[len(vals)-1]))
+	}
+	value := labelStyle.Render(arrow+" ") + valueStyle.Render(speed)
+	if speed != "—" {
+		value += labelStyle.Render("/с")
+	}
+	return row(name, value, framed(sparkline(s), style), extra, width)
+}
+
+// machineLine — сводка по файлам состояния машины: число процессов остаётся всегда,
+// остальное — сколько поместится.
+func machineLine(m *statefile.Machine, width int) string {
+	s := strings.Repeat(" ", indentCols) + pad(labelStyle.Render("машина"), labelCols) +
+		labelStyle.Render("процессов ") + valueStyle.Render(strconv.Itoa(m.Processes))
+	extra := labelStyle.Render(", активно ") + valueStyle.Render(strconv.Itoa(m.Active)) +
+		labelStyle.Render(" · на "+m.At.Local().Format("15:04")+"  всего ↓ ") + fmtBytes(m.Traffic.SrcIn) +
+		labelStyle.Render(" ↑ ") + fmtBytes(m.Traffic.DstOut)
+	return withExtra(s, lipgloss.Width(s), extra, width)
+}
+
+// errLine — ошибка, из-за которой Run вернулся, усечённая по ширине окна
+func errLine(msg string, width int) string {
+	return errStyle.Render(xansi.Truncate("ошибка: "+oneLine(msg), width, "…"))
+}
+
+// framed — график в тусклой рамке ▏…▕
+func framed(graph string, style lipgloss.Style) string {
+	return labelStyle.Render("▏") + style.Render(graph) + labelStyle.Render("▕")
+}
+
+// row — строка блока: подпись и значение в своих колонках, затем график, если помещается
+// целиком, и дополнительная часть, усечённая до остатка ширины.
+func row(name, value, graph, extra string, width int) string {
+	s := strings.Repeat(" ", indentCols) + pad(labelStyle.Render(name), labelCols) + value
+	at := indentCols + labelCols + valueCols
+	if graph != "" && at+lipgloss.Width(graph) <= width {
+		s = pad(s, at) + graph
+		at = lipgloss.Width(s) + 1
+	}
+	return withExtra(s, at, extra, width)
+}
+
+// withExtra — s и с колонки at дополнительная часть extra, усечённая до ширины width;
+// если она пуста или не помещается (fit), s остаётся без хвостовых пробелов.
+func withExtra(s string, at int, extra string, width int) string {
+	if extra == "" {
+		return s
+	}
+	e := fit(extra, width-at)
+	if e == "" {
+		return s
+	}
+	return pad(s, at) + e
+}
+
+// newlines — переводы строк для oneLine
+var newlines = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
+
+// oneLine заменяет переводы строк пробелами: многострочный текст сломал бы раскладку
+func oneLine(s string) string { return newlines.Replace(s) }
 
 const (
 	sparkCols = 20 // колонок графика: минута при seriesLen точках
@@ -128,16 +276,16 @@ func sparkColumns(s series, cols int) []float64 {
 	return sums
 }
 
-// sparkline — график s в cols колонках: высота столбика — среднее колонки относительно
+// sparkline — график s в sparkCols колонках: высота столбика — среднее колонки относительно
 // наибольшего среднего; колонки без точек (слева, пока данных меньше минуты) — пробелы.
-func sparkline(s series, cols int) string {
-	avgs := sparkColumns(s, cols)
+func sparkline(s series) string {
+	avgs := sparkColumns(s, sparkCols)
 	top := 0.0
 	for _, v := range avgs {
 		top = max(top, v)
 	}
 	var b strings.Builder
-	b.WriteString(strings.Repeat(" ", cols-len(avgs)))
+	b.WriteString(strings.Repeat(" ", sparkCols-len(avgs)))
 	for _, v := range avgs {
 		idx := 0
 		if top > 0 {

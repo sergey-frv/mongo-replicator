@@ -17,6 +17,9 @@ import (
 	"github.com/sergey-frv/mongo-replicator/internal/traffic"
 )
 
+// defaultWidth — ширина окна, пока bubbletea не сообщил размер
+const defaultWidth = 80
+
 type (
 	tickMsg  time.Time
 	finalMsg struct{} // репликация закончилась: последний снимок и выход
@@ -98,7 +101,7 @@ func (m *panel) key(k tea.KeyPressMsg) tea.Cmd {
 // View завершается переводом строки: при выходе рендерер стирает экран от последней
 // строки кадра, без него пропала бы строка состояния.
 func (m *panel) View() tea.View {
-	v := tea.NewView(renderPanel(m.st, m.at, m.prev, m.prevAt) + "\n")
+	v := tea.NewView(renderPanel(view{st: m.st, at: m.at}, defaultWidth) + "\n")
 	v.KeyboardEnhancements.ReportAlternateKeys = true // BaseCode для key
 	return v
 }

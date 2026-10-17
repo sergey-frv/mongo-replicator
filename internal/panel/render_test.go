@@ -22,90 +22,219 @@ const (
 	GiB = 1 << 30
 )
 
-// panelLines — строки панели без цветовых последовательностей
-func panelLines(st replicator.Status, at time.Time, prev traffic.Info, prevAt time.Time) []string {
-	return strings.Split(ansi.ReplaceAllString(renderPanel(st, at, prev, prevAt), ""), "\n")
+// panelLines — строки панели v в окне шириной 100 без цветовых последовательностей
+func panelLines(v view) []string {
+	return strings.Split(ansi.ReplaceAllString(renderPanel(v, 100), ""), "\n")
 }
 
 func clock(h, m, s int) time.Time { return time.Date(2026, 10, 15, h, m, s, 0, time.Local) }
 
-func TestRenderPanel(t *testing.T) {
-	at := clock(12, 1, 35)
-	st := replicator.Status{
-		DB: "urlshrinker", DstDB: "urlshrinker_v2",
-		Started:   at.Add(-(2*time.Hour + 14*time.Minute + 20*time.Second)),
-		Applied:   1284551,
-		Rate:      312,
-		AppliedAt: clock(12, 1, 33),
-		Lag:       1500 * time.Millisecond,
-		LastBatch: &replicator.BatchInfo{At: clock(12, 1, 34), Ops: replicator.OpCounts{Ins: 30, Upd: 15, Del: 3},
-			Colls: []string{"links", "clicks"}},
-		LastDDL: &replicator.DDLInfo{At: clock(11, 40, 2), Op: "createIndexes", NS: "urlshrinker.links", Details: "slug_1"},
-		Traffic: traffic.Info{SrcIn: 3*GiB + 100*MiB, SrcOut: 12 * MiB, DstIn: 40 * MiB, DstOut: 2*GiB + 900*MiB},
-		Machine: &statefile.Machine{At: clock(12, 1, 0), Processes: 3, Active: 2,
-			Traffic: traffic.Info{SrcIn: 12*GiB + 400*MiB, SrcOut: 300 * MiB, DstIn: 200 * MiB, DstOut: 11*GiB + 900*MiB}},
-		State: replicator.StateRunning,
+// catchUpOf — догон после лагов lags, снятых раз в 10 с; последний — в at
+func catchUpOf(at time.Time, lags ...time.Duration) catchUp {
+	var c catchUp
+	for i, lag := range lags {
+		c.update(lag, at.Add(time.Duration(i-len(lags)+1)*10*time.Second))
 	}
-	prev := st.Traffic
-	prev.SrcIn -= 420 * KiB
-	prev.DstOut -= 390 * KiB
+	return c
+}
 
-	lines := panelLines(st, at, prev, at.Add(-time.Second))
+// workingView — работа после догона: все строки панели заполнены
+func workingView() view {
+	at := clock(19, 37, 20)
+	return view{
+		st: replicator.Status{
+			DB: "urlshrinker", DstDB: "urlshrinker_v2",
+			Started:   at.Add(-25 * time.Minute),
+			Applied:   1727851,
+			Rate:      19,
+			AppliedAt: clock(19, 37, 18),
+			Lag:       0,
+			LastBatch: &replicator.BatchInfo{At: clock(19, 37, 18), Ops: replicator.OpCounts{Ins: 1},
+				Colls: []string{"PrivateUrls"}},
+			LastDDL: &replicator.DDLInfo{At: clock(11, 40, 2), Op: "createIndexes", NS: "urlshrinker.PublicUrls",
+				Details: "slug_1"},
+			Traffic: traffic.Info{SrcIn: 881 * MiB, SrcOut: 2*MiB + 700*KiB, DstIn: 36*MiB + 300*KiB, DstOut: 278 * MiB},
+			Machine: &statefile.Machine{At: clock(19, 36, 0), Processes: 1, Active: 1,
+				Traffic: traffic.Info{SrcIn: 881 * MiB, SrcOut: 2 * MiB, DstIn: 36 * MiB, DstOut: 277*MiB + 900*KiB}},
+			State: replicator.StateRunning,
+		},
+		at:     at,
+		rate:   seriesOf(numbers(60)...),
+		srcIn:  seriesOf(2*KiB, 4*KiB+100),
+		dstOut: seriesOf(3*KiB + 800),
+	}
+}
+
+func TestRenderPanel(t *testing.T) {
+	v := workingView()
+
+	lines := panelLines(v)
 
 	assert.Equal(t, []string{
-		"urlshrinker → urlshrinker_v2 · с запуска 2ч14м · лаг 1с (применено до 12:01:33)",
-		"операции: 1 284 551 всего · 312/с · пачка 12:01:34: 48 (ins 30 · upd 15 · del 3) в links, clicks",
-		"DDL: 11:40:02 createIndexes urlshrinker.links (slug_1)",
-		"трафик процесса: источник ↓ 3.1 GiB 420 KiB/с ↑ 12 MiB · цель ↓ 40 MiB ↑ 2.9 GiB 390 KiB/с",
-		"на машине (3, активно 2, на 12:01): источник ↓ 12.4 GiB ↑ 300 MiB · цель ↓ 200 MiB ↑ 11.9 GiB",
-		"состояние: работает",
+		"● работает  urlshrinker → urlshrinker_v2   с запуска 25м0с",
+		"── репликация " + strings.Repeat("─", 86),
+		"  лаг        0с             применено до 19:37:18",
+		"  скорость   19/с           ▏▁▂▂▂▃▃▃▄▄▄▅▅▆▆▆▇▇▇██▕ 2–59/с",
+		"  применено  1 727 851      пачка 19:37:18: 1 (ins 1) в PrivateUrls",
+		"  DDL        11:40:02       createIndexes urlshrinker.PublicUrls (slug_1)",
+		"── трафик " + strings.Repeat("─", 90),
+		"  источник   ↓ 4.1 KiB/с    ▏                   █▕ всего ↓ 881 MiB ↑ 2.7 MiB",
+		"  цель       ↑ 3.8 KiB/с    ▏                   █▕ всего ↑ 278 MiB ↓ 36.3 MiB",
+		"  машина     процессов 1, активно 1 · на 19:36  всего ↓ 881 MiB ↑ 277.9 MiB",
 	}, lines)
 }
 
-func TestRenderPanelMinimal(t *testing.T) {
+func TestRenderPanelStarting(t *testing.T) {
 	at := clock(12, 0, 5)
-	// без пачки, DDL и сводки, лаг неизвестен, предыдущего снимка нет — без скоростей
-	st := replicator.Status{DB: "a", DstDB: "b", Started: at.Add(-5 * time.Second), Rate: 0.3, Lag: -1,
-		Traffic: traffic.Info{SrcIn: 512, SrcOut: 1536}, State: replicator.StateStarting}
+	// лаг неизвестен, точек графиков ещё нет, без пачки, DDL и сводки
+	v := view{st: replicator.Status{DB: "a", DstDB: "b", Started: at.Add(-5 * time.Second), Rate: 0.3, Lag: -1,
+		Traffic: traffic.Info{SrcIn: 512, SrcOut: 1536}, State: replicator.StateStarting}, at: at}
 
-	lines := panelLines(st, at, traffic.Info{}, time.Time{})
+	lines := panelLines(v)
 
 	assert.Equal(t, []string{
-		"a → b · с запуска 5с · лаг неизвестен",
-		"операции: 0 всего · 0.3/с",
-		"трафик процесса: источник ↓ 512 B ↑ 1.5 KiB · цель ↓ 0 B ↑ 0 B",
-		"состояние: запуск",
+		"◌ запуск  a → b   с запуска 5с",
+		"── репликация " + strings.Repeat("─", 86),
+		"  лаг        неизвестен",
+		"  скорость   0.3/с          ▏                    ▕",
+		"  применено  0",
+		"── трафик " + strings.Repeat("─", 90),
+		"  источник   ↓ —            ▏                    ▕ всего ↓ 512 B ↑ 1.5 KiB",
+		"  цель       ↑ —            ▏                    ▕ всего ↑ 0 B ↓ 0 B",
 	}, lines)
 }
 
-func TestRenderPanelRetry(t *testing.T) {
-	at := clock(12, 0, 0)
-	st := replicator.Status{DB: "a", DstDB: "a", Started: at.Add(-3*time.Minute - 5*time.Second), Lag: 0,
-		LastBatch: &replicator.BatchInfo{At: clock(11, 59, 0), Ops: replicator.OpCounts{Rep: 2},
-			Colls: []string{"x", "y", "z"}, More: 2},
-		State: replicator.StateRetry, Retry: 2, LastErr: "connection refused"}
+func TestRenderPanelCatchUp(t *testing.T) {
+	v := workingView()
+	v.st.Lag = 21 * time.Hour
+	v.catchUp = catchUpOf(v.at, 50*time.Hour, 21*time.Hour)
 
-	lines := panelLines(st, at, traffic.Info{}, time.Time{})
-	raw := renderPanel(st, at, traffic.Info{}, time.Time{})
+	lines := panelLines(v)
 
 	assert.Equal(t, []string{
-		"a → a · с запуска 3м5с · лаг 0с",
-		"операции: 0 всего · 0/с · пачка 11:59:00: 2 (rep 2) в x, y, z и ещё 2",
-		"трафик процесса: источник ↓ 0 B ↑ 0 B · цель ↓ 0 B ↑ 0 B",
-		"состояние: повтор 2: connection refused",
-	}, lines)
-	assert.Contains(t, raw, retryStyle.Render("повтор 2"), "повтор выделен")
-	assert.Contains(t, raw, errStyle.Render("connection refused"), "ошибка выделена")
+		"◐ догоняет  urlshrinker → urlshrinker_v2   с запуска 25м0с",
+		"── репликация " + strings.Repeat("─", 86),
+		"  лаг        21ч0м          ████████████░░░░░░░░ 58% · ~7с до 0",
+		"  скорость   19/с           ▏▁▂▂▂▃▃▃▄▄▄▅▅▆▆▆▇▇▇██▕ 2–59/с",
+	}, lines[:4])
+}
+
+func TestRenderPanelCatchUpNoEstimate(t *testing.T) {
+	v := workingView()
+	v.st.Lag = 50 * time.Hour
+	v.catchUp = catchUpOf(v.at, 50*time.Hour)
+
+	lines := panelLines(v)
+
+	assert.Equal(t, "  лаг        2д2ч           ░░░░░░░░░░░░░░░░░░░░ 0%", lines[2], "одна точка догона — только процент")
+}
+
+func TestRenderPanelRetryDuringCatchUp(t *testing.T) {
+	v := workingView()
+	v.st.Lag = 21 * time.Hour
+	v.st.State, v.st.Retry, v.st.LastErr = replicator.StateRetry, 2, "connection refused"
+	v.catchUp = catchUpOf(v.at, 50*time.Hour, 21*time.Hour)
+
+	lines := panelLines(v)
+
+	assert.Equal(t, "↻ повтор 2  urlshrinker → urlshrinker_v2   с запуска 25м0с", lines[0])
+	assert.Equal(t, "  лаг        21ч0м          применено до 19:37:18", lines[2], "без полосы и оценки")
+	assert.Equal(t, "ошибка: connection refused", lines[len(lines)-1])
 }
 
 func TestRenderPanelStopped(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		lastErr string
+		want    []string
+	}{
+		{"с ошибкой", "аренду забрал другой процесс", []string{
+			"✗ остановлен  urlshrinker → urlshrinker_v2   с запуска 25м0с",
+			"ошибка: аренду забрал другой процесс",
+		}},
+		{"без ошибки", "", []string{
+			"✗ остановлен  urlshrinker → urlshrinker_v2   с запуска 25м0с",
+			"  машина     процессов 1, активно 1 · на 19:36  всего ↓ 881 MiB ↑ 277.9 MiB",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := workingView()
+			v.st.State, v.st.LastErr = replicator.StateStopped, tc.lastErr
+
+			lines := panelLines(v)
+
+			assert.Equal(t, tc.want, []string{lines[0], lines[len(lines)-1]}, "шапка и последняя строка")
+		})
+	}
+}
+
+func TestRenderPanelStateColors(t *testing.T) {
 	at := clock(12, 0, 0)
-	st := replicator.Status{DB: "a", DstDB: "a", Started: at.Add(-time.Minute), Lag: 0,
-		State: replicator.StateStopped, LastErr: "аренду забрал другой процесс"}
+	for _, tc := range []struct {
+		name    string
+		st      replicator.Status
+		catchUp catchUp
+		want    string
+	}{
+		{"работает", replicator.Status{State: replicator.StateRunning}, catchUp{},
+			okStyle.Render("● работает")},
+		{"догоняет", replicator.Status{State: replicator.StateRunning, Lag: 2 * time.Minute},
+			catchUpOf(at, 2*time.Minute), warnStyle.Render("◐ догоняет")},
+		{"повтор", replicator.Status{State: replicator.StateRetry, Retry: 3}, catchUp{},
+			warnStyle.Render("↻ повтор 3")},
+		{"запуск", replicator.Status{State: replicator.StateStarting}, catchUp{},
+			labelStyle.Render("◌ запуск")},
+		{"остановлен с ошибкой", replicator.Status{State: replicator.StateStopped, LastErr: "x"}, catchUp{},
+			errStyle.Render("✗ остановлен")},
+		{"остановлен без ошибки", replicator.Status{State: replicator.StateStopped}, catchUp{},
+			labelStyle.Render("✗ остановлен")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := view{st: tc.st, at: at, catchUp: tc.catchUp}
 
-	lines := panelLines(st, at, traffic.Info{}, time.Time{})
+			head, _, _ := strings.Cut(renderPanel(v, 100), "\n")
 
-	assert.Equal(t, "состояние: остановлен: аренду забрал другой процесс", lines[len(lines)-1])
+			assert.True(t, strings.HasPrefix(head, tc.want), "шапка %q", head)
+		})
+	}
+}
+
+func TestRenderPanelLagColors(t *testing.T) {
+	for _, tc := range []struct {
+		lag  time.Duration
+		want string
+	}{
+		{9 * time.Second, lagGoodStyle.Render("9с")},
+		{10 * time.Second, lagSlowStyle.Render("10с")},
+		{59 * time.Second, lagSlowStyle.Render("59с")},
+		{time.Minute, lagBadStyle.Render("1м0с")},
+	} {
+		v := view{st: replicator.Status{Lag: tc.lag, State: replicator.StateRunning}, at: clock(12, 0, 0)}
+
+		raw := renderPanel(v, 100)
+
+		assert.Contains(t, raw, tc.want, "лаг %s", tc.lag)
+	}
+}
+
+func TestRenderPanelErrorColor(t *testing.T) {
+	v := view{st: replicator.Status{State: replicator.StateStopped, LastErr: "connection refused"}, at: clock(12, 0, 0)}
+
+	raw := renderPanel(v, 100)
+
+	assert.True(t, strings.HasSuffix(raw, errStyle.Render("ошибка: connection refused")), "строка ошибки — последней")
+}
+
+func TestRenderPanelNewlines(t *testing.T) {
+	v := workingView()
+	v.st.LastDDL.Details = "slug_1\nunique"
+	v.st.State, v.st.LastErr = replicator.StateStopped, "write failed:\r\nduplicate key"
+
+	lines := panelLines(v)
+
+	assert.Len(t, lines, 11, "переводы строк не добавили строк")
+	assert.Equal(t, "  DDL        11:40:02       createIndexes urlshrinker.PublicUrls (slug_1 unique)", lines[5])
+	assert.Equal(t, "ошибка: write failed: duplicate key", lines[10])
 }
 
 func TestFmtBytes(t *testing.T) {
@@ -160,7 +289,7 @@ func TestSparkline(t *testing.T) {
 		{"неполная правая колонка — среднее её точек", seriesOf(2, 2, 2, 7), "                  ▃█"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := sparkline(tc.s, sparkCols)
+			got := sparkline(tc.s)
 
 			assert.Equal(t, tc.want, got)
 		})
@@ -171,8 +300,8 @@ func TestSparklineShift(t *testing.T) {
 	before := seriesOf(numbers(60)...)
 	after := seriesOf(append(numbers(60), 0)...)
 
-	assert.Equal(t, "▁▂▂▂▃▃▃▄▄▄▅▅▆▆▆▇▇▇██", sparkline(before, sparkCols))
-	assert.Equal(t, "▂▂▂▃▃▃▄▄▄▅▅▆▆▆▇▇▇██▁", sparkline(after, sparkCols),
+	assert.Equal(t, "▁▂▂▂▃▃▃▄▄▄▅▅▆▆▆▇▇▇██", sparkline(before))
+	assert.Equal(t, "▂▂▂▃▃▃▄▄▄▅▅▆▆▆▇▇▇██▁", sparkline(after),
 		"полные колонки сдвинулись на одну влево, новая точка — в новой колонке")
 }
 
