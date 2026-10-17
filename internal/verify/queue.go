@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"bytes"
 	"cmp"
 	"slices"
 
@@ -64,13 +65,15 @@ func (it *item) note(t bson.Timestamp) {
 	}
 }
 
-// compareItems — порядок выдачи: по first, затем по коллекции и _id, чтобы
-// порядок не зависел от обхода map.
+// compareItems — порядок выдачи: по first, затем по коллекции и _id (как idKey:
+// тип, затем байты значения — без выделения памяти), чтобы порядок не зависел
+// от обхода map.
 func compareItems(a, b *item) int {
 	return cmp.Or(
 		a.first.Compare(b.first),
 		cmp.Compare(a.ns, b.ns),
-		cmp.Compare(keyOf(a.ns, a.id).id, keyOf(b.ns, b.id).id),
+		cmp.Compare(a.id.Type, b.id.Type),
+		bytes.Compare(a.id.Value, b.id.Value),
 	)
 }
 
@@ -86,6 +89,9 @@ type queue struct {
 	size  int // предел пачки
 	limit int // предел ключей
 	items map[key]*item
+	// floor — нижняя граница first ждущих ключей: next с позицией не позже неё
+	// не обходит очередь (цикл зовёт next на каждое событие потока)
+	floor bson.Timestamp
 }
 
 // newQueue — очередь с пачками до min(maxBatch, rate): пачка всегда помещается
@@ -124,10 +130,19 @@ func (q *queue) add(ns string, id bson.RawValue, t bson.Timestamp) {
 	switch it := q.items[k]; {
 	case it == nil:
 		q.items[k] = &item{ns: ns, id: id, first: t, last: t}
+		q.lower(t)
 	case it.busy:
 		it.events = append(it.events, t)
 	default:
 		it.note(t)
+		q.lower(t)
+	}
+}
+
+// lower учитывает ждущий ключ с first = t в нижней границе floor.
+func (q *queue) lower(t bson.Timestamp) {
+	if t.Before(q.floor) {
+		q.floor = t
 	}
 }
 
@@ -137,6 +152,9 @@ func (q *queue) add(ns string, id bson.RawValue, t bson.Timestamp) {
 // compareItems, не больше size. Ключи пачки переходят на проверку. false —
 // готовых нет.
 func (q *queue) next(pos bson.Timestamp) (batch, bool) {
+	if !q.floor.Before(pos) {
+		return batch{}, false
+	}
 	var ready []*item
 	for _, it := range q.items {
 		if !it.busy && it.first.Before(pos) {
@@ -144,6 +162,7 @@ func (q *queue) next(pos bson.Timestamp) (batch, bool) {
 		}
 	}
 	if len(ready) == 0 {
+		q.floor = pos // все ждущие — не раньше pos
 		return batch{}, false
 	}
 	oldest := slices.MinFunc(ready, compareItems)
@@ -271,12 +290,14 @@ func (q *queue) requeue(k key, it *item) {
 	switch {
 	case have == nil:
 		q.items[k] = it
+		q.lower(it.first)
 	case have.busy:
 		have.events = append(have.events, it.first, it.last)
 	default:
 		have.note(it.first)
 		have.note(it.last)
 		have.tries = max(have.tries, it.tries)
+		q.lower(it.first)
 	}
 }
 

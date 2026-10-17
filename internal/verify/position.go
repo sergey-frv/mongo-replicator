@@ -16,8 +16,13 @@ import (
 	"github.com/sergey-frv/mongo-replicator/internal/statefile"
 )
 
-// ErrLocked — файл позиции занят другим процессом сверки.
-var ErrLocked = errors.New("сверка этой базы уже запущена")
+var (
+	// ErrLocked — файл позиции занят другим процессом сверки.
+	ErrLocked = errors.New("сверка этой базы уже запущена")
+	// ErrPositionMismatch — файл позиции записан для другой пары баз или других
+	// кластеров, а --since не задана: файл не переносится.
+	ErrPositionMismatch = errors.New("файл позиции сверки записан для другой пары баз или других кластеров")
+)
 
 const (
 	// reportLimit — предел записей в файле отчёта; счётчик в позиции — полный.
@@ -192,11 +197,12 @@ func parsePosition(b []byte) (*position, error) {
 }
 
 // loadPosition читает позицию сверки для want. nil без ошибки — позиции нет:
-// файла нет, или он битый, или записан для другой пары баз или других
-// кластеров — тогда он переносится в сторону (statefile.MoveAside) с WARN, и
-// сверка начинается с --since. Не перенесённый файл — ошибка: следующая запись
-// затёрла бы его.
-func loadPosition(path string, want ident) (*position, error) {
+// файла нет, или он битый, или (при fresh — задана --since) записан для другой
+// пары баз или других кластеров — тогда он переносится в сторону
+// (statefile.MoveAside) с WARN, и сверка начинается с --since. Без fresh файл
+// другой сверки — ErrPositionMismatch, файл остаётся: опечатка в опциях не
+// отрывает позицию. Не перенесённый файл — ошибка: следующая запись затёрла бы его.
+func loadPosition(path string, want ident, fresh bool) (*position, error) {
 	b, err := os.ReadFile(path) //nolint:gosec // путь из --state-dir
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -209,6 +215,9 @@ func loadPosition(path string, want ident) (*position, error) {
 	switch {
 	case err != nil:
 		reason, msg = "corrupt", "файл позиции сверки повреждён"
+	case p.ident != want && !fresh:
+		return nil, fmt.Errorf("%w: %s — %q → %q (цель %s, источник %s)",
+			ErrPositionMismatch, path, p.DB, p.DstDB, p.Cluster, p.SrcCluster)
 	case p.ident != want:
 		reason, msg = "mismatch", fmt.Sprintf("файл позиции сверки записан для %q → %q (цель %s, источник %s)",
 			p.DB, p.DstDB, p.Cluster, p.SrcCluster)

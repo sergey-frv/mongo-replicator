@@ -40,8 +40,15 @@ type verifyRun struct {
 
 func startVerify(t *testing.T, cfg Config) *verifyRun {
 	t.Helper()
+	return startVerifier(t, New(srcClient, dstClient, cfg))
+}
+
+// startVerifier — startVerify готовой сверки: её поля меняются до запуска,
+// иначе гонка с Run.
+func startVerifier(t *testing.T, v *Verifier) *verifyRun {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	vr := &verifyRun{t: t, v: New(srcClient, dstClient, cfg), cancel: cancel, done: make(chan struct{})}
+	vr := &verifyRun{t: t, v: v, cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(vr.done)
 		vr.rep, vr.err = vr.v.Run(ctx)
@@ -332,6 +339,13 @@ func TestIntegrationVerifyIDs(t *testing.T) {
 	require.NoError(t, r.add(db+".items", rawID(t, 2), "различается: v", nil, nil))
 	require.NoError(t, writeReport(ids, r))
 	followCkpt(t, db)
+	// живые записи во время перепроверки: события ключа не из файла в очередь
+	// не встают (иначе _id 3 — ещё один дефект)
+	pulse(t, func(ctx context.Context, ts bson.Timestamp) error {
+		_, err := srcClient.Database(db).Collection("items").
+			UpdateOne(ctx, bson.M{"_id": 3}, bson.M{"$set": bson.M{"n": ts.T}})
+		return err
+	})
 	cfg := itConfig(db, bson.Timestamp{})
 	cfg.IDs = ids
 	cfg.StateDir = t.TempDir()
@@ -346,6 +360,27 @@ func TestIntegrationVerifyIDs(t *testing.T) {
 	assert.FileExists(t, rep.DefectsFile)
 	assert.NoFileExists(t, files.defects, "отчёт основной сверки")
 	assert.NoFileExists(t, files.position, "файл позиции")
+}
+
+// Мягкий предел очереди: при полной очереди поток всё равно читается, пока
+// проверка ждёт его время, иначе ключ на проверке ждал бы поток вечно.
+func TestIntegrationVerifyQueueFull(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	since := srcNow(t)
+	insert(ctx, t, srcClient, db, doc(1, "a"), doc(2, "a"))
+	insert(ctx, t, dstClient, db, doc(1, "a"), doc(2, "a"))
+	followCkpt(t, db)
+	cfg := itConfig(db, since)
+	cfg.UntilCaughtUp = true
+	v := New(srcClient, dstClient, cfg)
+	v.q.limit = 1
+
+	rep, err := startVerifier(t, v).wait()
+
+	require.NoError(t, err)
+	assert.Equal(t, counts{Checked: 2, Matched: 2}, rep.counts)
 }
 
 // ABA: документ изменён и возвращён между S1 и S2, на цели — промежуточное

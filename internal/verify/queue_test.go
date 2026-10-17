@@ -345,3 +345,71 @@ func TestQueueSnapshot(t *testing.T) {
 		viewsOf(batch{items: got}))
 	assert.False(t, got[1].busy, "ключ на проверке в снимке — ждущий")
 }
+
+// Без готовых ключей next запоминает позицию и не обходит очередь, пока не
+// появится ключ раньше неё: новый ключ, вернувшийся с проверки и сдвиг позиции.
+func TestQueueNextFloor(t *testing.T) {
+	q := newQueue(500)
+	addAll(t, q, "db.a", 1, 20)
+	_, readyBefore := q.next(at(10))
+
+	addAll(t, q, "db.a", 2, 5)
+
+	assert.False(t, readyBefore, "ключ с first=20 при позиции 10")
+	assert.Equal(t, batchView{ns: "db.a", ids: []int32{2}}, batchViewOf(takeNext(t, q, 10)), "новый ключ раньше позиции")
+	assert.Equal(t, batchView{ns: "db.a", ids: []int32{1}}, batchViewOf(takeNext(t, q, 21)), "позиция сдвинулась")
+}
+
+func TestQueueNextFloorRequeue(t *testing.T) {
+	q := newQueue(500)
+	addAll(t, q, "db.a", 1, 20)
+	b := takeNext(t, q, 30)
+	addAll(t, q, "db.a", 1, 25)
+	_, readyDuringCheck := q.next(at(30))
+
+	reason := q.done(b.items[0], matched, at(22))
+
+	assert.False(t, readyDuringCheck, "ключ на проверке")
+	assert.Empty(t, reason)
+	assert.Equal(t, []itemView{{id: 1, first: 25, last: 25}}, viewsOf(takeNext(t, q, 30)),
+		"вернулся в очередь с событием после T1=22")
+}
+
+// Переименованный ключ на проверке ложится на ждущий под новым именем: ждущий
+// поглощается, ключ вернётся в очередь со временем rename.
+func TestQueueRenameBusyOntoWaiting(t *testing.T) {
+	q := newQueue(500)
+	addAll(t, q, "db.a", 1, 10)
+	b := takeNext(t, q, 100)
+	addAll(t, q, "db.b", 1, 5)
+	q.rename("db.a", "db.b", at(30))
+
+	reason := q.done(b.items[0], matched, at(40))
+
+	assert.Empty(t, reason)
+	next := takeNext(t, q, 100)
+	assert.Equal(t, "db.b", next.ns)
+	assert.Equal(t, []itemView{{id: 1, first: 30, last: 30}}, viewsOf(next))
+	assert.Equal(t, 1, q.len())
+}
+
+// Оба ключа на проверке: переименованный выходит из учёта, его done сливается с
+// оставшимся, и тот вернётся в очередь, если его T1 раньше rename.
+func TestQueueRenameBothBusy(t *testing.T) {
+	q := newQueue(500)
+	addAll(t, q, "db.a", 1, 10)
+	moved := takeNext(t, q, 100)
+	addAll(t, q, "db.b", 1, 5)
+	stayed := takeNext(t, q, 100)
+	q.rename("db.a", "db.b", at(30))
+
+	movedReason := q.done(moved.items[0], matched, at(40))
+	stayedReason := q.done(stayed.items[0], matched, at(20))
+
+	assert.Empty(t, movedReason)
+	assert.Empty(t, stayedReason)
+	next := takeNext(t, q, 100)
+	assert.Equal(t, "db.b", next.ns)
+	assert.Equal(t, []itemView{{id: 1, first: 30, last: 30}}, viewsOf(next), "rename позже T1=20 оставшегося")
+	assert.Equal(t, 1, q.len())
+}

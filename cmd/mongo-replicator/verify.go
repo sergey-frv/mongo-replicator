@@ -36,7 +36,8 @@ func mainVerify(args []string) {
 // runVerify подключается к кластерам и сверяет цель с источником. Возвращает код
 // выхода (verifyCode). srcOpts/dstOpts — разобранные URI с найденными паролями
 // (prepareClients). SIGINT/SIGTERM — штатное завершение: позиция и отчёты
-// записываются, код — по итогу.
+// записываются, код — по итогу; сигнал до итога (подключение, схема на старте) —
+// код 1: сверки не было, а 0 значит «дефектов нет».
 func runVerify(opts verifyOptions, srcOpts, dstOpts *mongoopts.ClientOptions) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -44,13 +45,15 @@ func runVerify(opts verifyOptions, srcOpts, dstOpts *mongoopts.ClientOptions) in
 	// чтения сверки сами задают primary и majority: read preference из URI не мешает
 	src, err := connect(ctx, srcOpts.SetAppName(verifyAppName))
 	if err != nil {
-		return failCode(ctx, err, "источник")
+		failCode(ctx, err, "источник")
+		return 1
 	}
 	defer src.Disconnect(context.Background()) //nolint:errcheck // выходим, ошибка не важна
 
 	dst, err := connect(ctx, dstOpts.SetAppName(verifyAppName))
 	if err != nil {
-		return failCode(ctx, err, "цель")
+		failCode(ctx, err, "цель")
+		return 1
 	}
 	defer dst.Disconnect(context.Background()) //nolint:errcheck // выходим, ошибка не важна
 
@@ -64,13 +67,14 @@ func runVerify(opts verifyOptions, srcOpts, dstOpts *mongoopts.ClientOptions) in
 
 // verifyCode логирует ошибку сверки с подсказкой и возвращает код выхода: 0 —
 // дефектов нет («не проверено» допускается), 1 — дефекты или ошибка выполнения,
-// 2 — сверку нельзя начать (нет --since и позиции, файл позиции занят). Ошибка
-// после отмены ctx — остановка по сигналу, а не сбой: код по итогу. Итог и
-// дефекты логирует сам пакет verify.
+// 2 — сверку нельзя начать (нет --since и позиции, файл позиции занят или
+// записан для другой сверки). Остановка по сигналу после начала цикла сверки
+// приходит без ошибки (код по итогу); ошибка после сигнала — остановка до итога,
+// код 1. Итог и дефекты логирует сам пакет verify.
 func verifyCode(ctx context.Context, rep verify.Report, err error) int {
 	if err != nil && ctx.Err() != nil {
-		log.Info().Msg("сверка остановлена по сигналу")
-		err = nil
+		log.Info().Msg("сверка остановлена по сигналу до итога")
+		return 1
 	}
 	switch {
 	case err == nil && rep.Clean():
@@ -83,7 +87,7 @@ func verifyCode(ctx context.Context, rep verify.Report, err error) int {
 		e = e.Str("hint", h)
 	}
 	e.Msg("сверка прервана")
-	if errors.Is(err, verify.ErrNoSince) || errors.Is(err, verify.ErrLocked) {
+	if errors.Is(err, verify.ErrNoSince) || errors.Is(err, verify.ErrLocked) || errors.Is(err, verify.ErrPositionMismatch) {
 		return 2
 	}
 	return 1
@@ -95,6 +99,9 @@ func verifyHint(err error) string {
 	case errors.Is(err, verify.ErrNoSince):
 		return "задайте --since — unix-сек, с которых сверять изменённые документы; " +
 			"файл позиции прошлого запуска ищется в подкаталоге verify/ каталога --state-dir"
+	case errors.Is(err, verify.ErrPositionMismatch):
+		return "--db и URI должны совпадать с прошлым запуском verify на эту базу цели; " +
+			"чтобы начать сверку заново, задайте --since — файл позиции будет перенесён в сторону"
 	case errors.Is(err, verify.ErrLocked):
 		return "эту базу цели уже сверяет другой процесс verify: дождитесь его или остановите (Ctrl+C)"
 	case errors.Is(err, verify.ErrHistoryLost):

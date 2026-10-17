@@ -88,13 +88,12 @@ type Verifier struct {
 	cfg      Config
 	lim      *limiter
 
-	ckpt   *mark // позиция чекпойнта: применено всё строго до неё
-	stream *mark // поток сверки: доставлены все события строго до неё
-	srcNow *mark // время источника — для лага в логе
+	ckpt   *mark                          // позиция чекпойнта: применено всё строго до неё
+	stream *mark                          // поток сверки: доставлены все события строго до неё
+	srcNow atomic.Pointer[bson.Timestamp] // время источника — для лага в логе; nil — ещё не прочитано
 	wake   chan struct{}
 
 	// состояние цикла: им владеет горутина Run
-	ids        bool // режим --ids: только ключи из файла
 	files      paths
 	ident      ident
 	since      uint32
@@ -103,6 +102,7 @@ type Verifier struct {
 	created    map[string]bool
 	defects    report
 	unverified report
+	reported   int            // записей в отчётах при последней записи; -1 — не записывались
 	token      bson.Raw       // токен потока для файла позиции
 	streamTime bson.Timestamp // время потока для файла позиции
 	ended      bool           // поток окончен (dropDatabase, invalidate)
@@ -126,14 +126,16 @@ func New(src, dst *mongo.Client, cfg Config) *Verifier {
 	return &Verifier{
 		src: src, dst: dst, cfg: cfg,
 		lim:  newLimiter(cfg.Rate, time.Now, time.After),
-		ckpt: newMark(wake), stream: newMark(wake), srcNow: newMark(nil), wake: wake,
-		q:       newQueue(cfg.Rate),
-		created: map[string]bool{},
+		ckpt: newMark(wake), stream: newMark(wake), wake: wake,
+		q:        newQueue(cfg.Rate),
+		created:  map[string]bool{},
+		reported: -1,
 	}
 }
 
-// Run выполняет сверку в режиме из Config. Отмена ctx — штатное завершение:
-// позиция и отчёты записываются, ошибки нет.
+// Run выполняет сверку в режиме из Config. Отмена ctx после начала цикла
+// сверки — штатное завершение: позиция и отчёты записываются, ошибки нет; до
+// него (схема, открытие потока) итога нет — ошибка.
 func (v *Verifier) Run(ctx context.Context) (Report, error) {
 	switch {
 	case v.cfg.SchemaOnly:
@@ -182,8 +184,7 @@ func (v *Verifier) runStream(ctx context.Context) (Report, error) {
 		return Report{}, err
 	}
 	err = v.loop(ctx, cs)
-	v.savePosition()
-	v.writeReports()
+	v.save()
 	if err != nil {
 		return v.report(diffs), err
 	}
@@ -214,7 +215,7 @@ func (v *Verifier) openPosition() (_ *position, unlock func(), err error) {
 	if unlock, err = lock(v.files.lock); err != nil {
 		return nil, nil, err
 	}
-	pos, err := loadPosition(v.files.position, v.ident)
+	pos, err := loadPosition(v.files.position, v.ident, v.cfg.Since != 0)
 	if err != nil {
 		unlock()
 		return nil, nil, err
@@ -225,7 +226,7 @@ func (v *Verifier) openPosition() (_ *position, unlock func(), err error) {
 	if v.cfg.Since != 0 {
 		log.Warn().Str("file", v.files.position).Msg("--since игнорируется: сверка продолжается с файла позиции")
 	}
-	// отчёты пишутся целиком при выходе: прошлые записи — в начало
+	// отчёты пишутся целиком: прошлые записи — в начало
 	v.defects = loadReport(v.files.defects)
 	v.unverified = loadReport(v.files.unverified)
 	log.Info().Str("file", v.files.position).Int("pending", len(pos.Pending)).Msg("продолжаю сверку с файла позиции")
@@ -263,7 +264,6 @@ func (v *Verifier) restore(pos *position) {
 // момента и учитывает события только этих ключей: без них вердикт не видел бы
 // изменений в окне (ABA) и давал бы ложный дефект.
 func (v *Verifier) runIDs(ctx context.Context) (Report, error) {
-	v.ids = true
 	entries, err := readReport(v.cfg.IDs)
 	if err != nil {
 		return Report{}, err
@@ -368,6 +368,9 @@ func (v *Verifier) loop(ctx context.Context, cs *mongo.ChangeStream) error {
 			return err
 		case m := <-in:
 			if err := v.onStream(m); err != nil {
+				if ctx.Err() != nil {
+					return nil // ошибка потока из-за отмены — остановка, а не сбой
+				}
 				return err
 			}
 		case r := <-results:
@@ -386,7 +389,7 @@ func (v *Verifier) loop(ctx context.Context, cs *mongo.ChangeStream) error {
 				lastLog = now
 			}
 			if now.Sub(lastSave) >= saveEvery {
-				v.savePosition()
+				v.save()
 				lastSave = now
 			}
 		}
@@ -397,10 +400,11 @@ func (v *Verifier) loop(ctx context.Context, cs *mongo.ChangeStream) error {
 // в --until-caught-up — проверены все ключи строго до позиции чекпойнта, которую
 // догнал поток сверки.
 func (v *Verifier) finished(inflight int) bool {
-	if (v.ids || v.ended) && v.q.len() == 0 && inflight == 0 {
+	ids := v.cfg.IDs != ""
+	if (ids || v.ended) && v.q.len() == 0 && inflight == 0 {
 		return true
 	}
-	if !v.cfg.UntilCaughtUp || v.ids {
+	if !v.cfg.UntilCaughtUp || ids {
 		return false
 	}
 	if v.target.IsZero() {
@@ -577,10 +581,18 @@ func idString(id bson.RawValue) string {
 	return string(b)
 }
 
+// save пишет отчёты, затем файл позиции: позиция не должна учитывать записи,
+// которых нет в отчётах (иначе после kill они остались бы только в счётчиках,
+// и --ids их не перепроверил бы).
+func (v *Verifier) save() {
+	v.writeReports()
+	v.savePosition()
+}
+
 // savePosition пишет файл позиции; ошибка — WARN: потеря позиции значит
 // повторный просмотр, а не потерю расхождений.
 func (v *Verifier) savePosition() {
-	if v.files.position == "" || v.ids {
+	if v.files.position == "" || v.cfg.IDs != "" {
 		return
 	}
 	p := &position{
@@ -592,10 +604,14 @@ func (v *Verifier) savePosition() {
 	}
 }
 
+// writeReports пишет отчёты, если записи добавились с прошлой записи; первая
+// запись — всегда: она заменяет отчёты прошлого запуска.
 func (v *Verifier) writeReports() {
-	if v.files.defects == "" {
+	n := len(v.defects) + len(v.unverified)
+	if v.files.defects == "" || n == v.reported {
 		return
 	}
+	v.reported = n
 	for path, r := range map[string]report{v.files.defects: v.defects, v.files.unverified: v.unverified} {
 		if err := writeReport(path, r); err != nil {
 			log.Warn().Err(err).Msg("отчёт сверки не записан")
@@ -650,7 +666,7 @@ func (v *Verifier) pollCkpt(ctx context.Context, errc chan<- error) {
 		}
 		if now.Sub(lastSrc) >= logEvery {
 			if ts, srcErr := srcTime(ctx, v.src); srcErr == nil {
-				v.srcNow.set(ts)
+				v.srcNow.Store(&ts)
 				lastSrc = now
 			}
 		}
@@ -688,8 +704,8 @@ func (v *Verifier) logProgress() {
 		Int64("checked", v.counts.Checked).Int64("matched", v.counts.Matched).
 		Int64("defects", v.counts.Defects).Int64("unverified", v.counts.Unverified).
 		Int("queue", v.q.len())
-	if now, ok := v.srcNow.get(); ok {
-		e = e.Dur("stream_lag", lagOf(now, v.streamTime))
+	if now := v.srcNow.Load(); now != nil {
+		e = e.Dur("stream_lag", lagOf(*now, v.streamTime))
 	}
 	if ck, ok := v.ckpt.get(); ok {
 		e = e.Dur("ckpt_lag", lagOf(v.streamTime, ck))
@@ -741,7 +757,7 @@ type mark struct {
 	ok      bool
 	ch      chan struct{} // закрывается при сдвиге
 	waiters atomic.Int32
-	wake    chan<- struct{} // будит цикл при сдвиге и при новом ждущем; nil — не будит
+	wake    chan<- struct{} // будит цикл при сдвиге и при новом ждущем
 }
 
 func newMark(wake chan<- struct{}) *mark { return &mark{ch: make(chan struct{}), wake: wake} }
@@ -791,9 +807,6 @@ func (m *mark) waitAfter(ctx context.Context, t bson.Timestamp) error {
 func (m *mark) waiting() int { return int(m.waiters.Load()) }
 
 func (m *mark) poke() {
-	if m.wake == nil {
-		return
-	}
 	select {
 	case m.wake <- struct{}{}:
 	default:

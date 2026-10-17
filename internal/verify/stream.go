@@ -153,7 +153,7 @@ func (v *Verifier) onEvent(ev *streamEvent) {
 	case "insert", "update", "replace", "delete":
 		id := ev.DocumentKey.ID
 		switch {
-		case v.ids:
+		case v.cfg.IDs != "":
 			if v.q.has(ns, id) {
 				v.q.add(ns, id, ev.ClusterTime)
 			}

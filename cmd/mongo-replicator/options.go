@@ -46,7 +46,7 @@ type verifyOptions struct {
 	Rate          int     `long:"rate" env:"VERIFY_RATE" default:"200" description:"максимум чтений документов в секунду с источника"`
 	Sample        float64 `long:"sample" env:"VERIFY_SAMPLE" description:"доля ключей (0, 1], выбор по хэшу _id; когда --rate не успевает за потоком изменений; по умолчанию 1"`
 	UntilCaughtUp bool    `long:"until-caught-up" env:"VERIFY_UNTIL_CAUGHT_UP" description:"закончить, когда проверены все ключи, изменённые до позиции чекпойнта на момент, когда сверка её догнала"`
-	IDs           string  `long:"ids" description:"файл unverified.json или defects.json: перепроверить эти ключи и выйти (без потока и файла позиции)"`
+	IDs           string  `long:"ids" description:"файл *.unverified.json или *.defects.json: перепроверить эти ключи и выйти (поток — с текущего момента, без файла позиции и блокировки)"`
 	SchemaOnly    bool    `long:"schema-only" description:"сверить только схему (коллекции, опции, индексы, views) и выйти"`
 }
 

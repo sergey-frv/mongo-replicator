@@ -22,7 +22,7 @@ deploy/rehearsal/       стенд репетиции: compose цели `mongo:4
 
 ## Где живёт состояние
 - **на цели** — один документ `{_id: "checkpoint"}` в `<dst-db>._replicator_checkpoint` (`ckptColl`/`ckptID`, `internal/replicator/checkpoint.go`): позиция, пара баз, аренда. Отдельной служебной базы нет, на цели нужен только `readWrite` на `--dst-db`; `SystemDBs` — только `admin`, `config`, `local`
-- служебную коллекцию **всегда** отсекает `streamPipeline` (`$match` по `ns.coll`), но rename проходит фильтр намеренно: rename в `_replicator_checkpoint` или из него ловит `applyDDL` до `checkLease()` и возвращает перманентную `ErrReservedCollection`. Меняя фильтр, сохранять пропуск rename
+- служебную коллекцию **всегда** отсекает `streamPipeline` (`$match` по `ns.coll`), но rename проходит фильтр намеренно: rename в `_replicator_checkpoint` или из него ловит `applyDDL` до `checkLease()` и возвращает перманентную `ErrReservedCollection`. Меняя фильтр, сохранять пропуск rename. Фильтр продублирован в `streamPipeline` сверки (`internal/verify/stream.go`) — менять оба; имя коллекции вне Go — в `deploy/rehearsal/copy-schema.js`
 - в тестах списки коллекций цели сравнивать через `collNames` (исключает служебную), не через `ListCollectionNames`
 - **на машине** — трафик процесса в `<state-dir>/<dst-db>.<8 hex sha256(ключа кластера)>.json` (`internal/statefile`, писатель — `internal/replicator/state.go`); потеря файла не ломает репликацию, ошибки записи — WARN. Сводка «на машине» — сумма всех `*.json` каталога
 - ключ кластера (`statefile.ClusterKey`) — по URI цели как написан, не по разрешённым хостам: `srv:<host>` для `mongodb+srv` (SRV с `srvMaxHosts` даёт случайное подмножество), для `mongodb://` — хосты в нижнем регистре с портом, отсортированные
@@ -38,7 +38,11 @@ deploy/rehearsal/       стенд репетиции: compose цели `mongo:4
 - позиция чекпойнта (`replicator.AppliedPosition`) значит «применено всё **строго до** неё»: токен сохраняется и посреди группы событий с одним `clusterTime`. Ключ готов и ожидание после S1 кончается только при позиции **строго больше** времени — не `>=`
 - файлы сверки — в `<state-dir>/verify/` (`positionPaths`): с именем `statefile.Name` в корне `--state-dir` файл совпал бы с файлом состояния репликатора — тот загрузил бы и перезаписал его, а `statefile.Summary` посчитал бы процессом (каталоги `Summary` пропускает)
 - чтения сверки — только primary и read concern majority, независимо от URI: отстающая secondary дала бы ложные дефекты
-- предел очереди мягкий: при `full()` поток всё равно читается, пока проверки ждут его время (иначе взаимоблокировка)
+- предел очереди мягкий: при `full()` поток всё равно читается, пока проверки ждут его время (иначе взаимоблокировка; `TestIntegrationVerifyQueueFull`)
+- отчёты (`*.defects.json`/`*.unverified.json`) пишутся **до** файла позиции (`save`): позиция не должна считать записи, которых нет в отчётах, иначе после kill `--ids` их не перепроверит
+- `Run` без ошибки после отмены — только из цикла сверки (итог есть); отмена до него (схема, открытие потока) — ошибка, и `verifyCode` даёт `1`, а не `0`
+- позиция другой сверки без `--since` — `ErrPositionMismatch`, файл не переносится; переносится только при `--since` (начать заново)
+- `docs/runbook-rehearsal.md` цитирует тексты логов и подсказок репликатора и сверки и имена тестов аренды — меняя их, обновлять runbook
 - блокировка — `lock_unix.go` (`unix && !aix`: в `x/sys/unix` для AIX нет `Flock`), заглушка — `lock_other.go`
 - стенд репетиции — `mongo:4.4`: в образе нет `mongosh` (только старый `mongo` — им пользуется healthcheck), скрипты `deploy/rehearsal/*.js` запускаются `mongosh` с хоста; с хоста к стенду — только `directConnection=true`. Тестов на 4.4 нет: возможности 8.0, которых нет в 4.4, не используются
 

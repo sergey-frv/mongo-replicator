@@ -78,7 +78,7 @@ func TestPositionRoundTrip(t *testing.T) {
 	}
 
 	require.NoError(t, writePosition(path, want))
-	got, err := loadPosition(path, testIdent)
+	got, err := loadPosition(path, testIdent, false)
 
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
@@ -90,7 +90,7 @@ func TestPositionRoundTripEmpty(t *testing.T) {
 	want := &position{ident: testIdent, Since: 1791900000, Pending: []*item{}}
 
 	require.NoError(t, writePosition(path, want))
-	got, err := loadPosition(path, testIdent)
+	got, err := loadPosition(path, testIdent, false)
 
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
@@ -99,7 +99,7 @@ func TestPositionRoundTripEmpty(t *testing.T) {
 func TestLoadPositionMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dst.json")
 
-	got, err := loadPosition(path, testIdent)
+	got, err := loadPosition(path, testIdent, false)
 
 	require.NoError(t, err)
 	assert.Nil(t, got)
@@ -117,7 +117,7 @@ func TestLoadPositionCorrupt(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "dst.json")
 			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
-			got, err := loadPosition(path, testIdent)
+			got, err := loadPosition(path, testIdent, false)
 
 			require.NoError(t, err)
 			assert.Nil(t, got)
@@ -128,7 +128,7 @@ func TestLoadPositionCorrupt(t *testing.T) {
 	}
 }
 
-// Позиция другой пары баз или других кластеров переносится в сторону.
+// Позиция другой пары баз или других кластеров при заданной --since переносится в сторону.
 func TestLoadPositionMismatch(t *testing.T) {
 	for name, written := range map[string]ident{
 		"база источника":    {DB: "other", DstDB: "dst", Cluster: "mongo-dst:27017", SrcCluster: "mongo-src:27017"},
@@ -140,7 +140,7 @@ func TestLoadPositionMismatch(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "dst.json")
 			require.NoError(t, writePosition(path, &position{ident: written, Since: 1791900000}))
 
-			got, err := loadPosition(path, testIdent)
+			got, err := loadPosition(path, testIdent, true)
 
 			require.NoError(t, err)
 			assert.Nil(t, got)
@@ -149,6 +149,22 @@ func TestLoadPositionMismatch(t *testing.T) {
 			assert.Len(t, moved, 1, "перенесённые файлы")
 		})
 	}
+}
+
+// Без --since позиция другой сверки — ошибка, файл остаётся на месте: опечатка
+// в --db или URI не отрывает настоящую позицию.
+func TestLoadPositionMismatchNoSince(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dst.json")
+	written := ident{DB: "other", DstDB: "dst", Cluster: "mongo-dst:27017", SrcCluster: "mongo-src:27017"}
+	require.NoError(t, writePosition(path, &position{ident: written, Since: 1791900000}))
+
+	got, err := loadPosition(path, testIdent, false)
+
+	require.ErrorIs(t, err, ErrPositionMismatch)
+	assert.Nil(t, got)
+	assert.FileExists(t, path)
+	moved, _ := filepath.Glob(path + ".mismatch-*")
+	assert.Empty(t, moved, "перенесённые файлы")
 }
 
 // Запись отчёта читается обратно: _id побайтно, документы — canonical
