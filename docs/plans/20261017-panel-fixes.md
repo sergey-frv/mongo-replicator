@@ -111,14 +111,14 @@
 - [x] `make test`, `make lint` — должно пройти
 
 ### Task 4: Verify acceptance criteria
-- [ ] скорость: целые от 10/с с разделителем тысяч, дробь ниже — по тестам Task 1
-- [ ] полоса не показывает 100% во время догона — по тестам Task 2
-- [ ] графики после догона различимы, старые упираются в `█`, диапазон настоящий — по тестам Task 3
-- [ ] демо рисует панель и выходит по SIGINT: `make panel-demo`, затем `script -qec "timeout --foreground -s INT 4 ./bin/mongo-replicator-panel" /dev/null` (байт 0x1a не отправлять)
-- [ ] (по возможности) демо в отсоединённом tmux шириной 100: `tmux -L demo new-session -d -s d -x 100 -y 22 ./bin/mongo-replicator-panel`, снимки `tmux -L demo capture-pane -p -t d` на ~15 с (`12 000/с`, диапазон с разделителем) и ~40 с (`99%`, `100%` нет), затем `tmux -L demo kill-server`
-- [ ] run full test suite: `make test`
-- [ ] `make test-integration`
-- [ ] `make lint` без замечаний
+- [x] скорость: целые от 10/с с разделителем тысяч, дробь ниже — по тестам Task 1
+- [x] полоса не показывает 100% во время догона — по тестам Task 2
+- [x] графики после догона различимы, старые упираются в `█`, диапазон настоящий — по тестам Task 3
+- [x] демо рисует панель и выходит по SIGINT: `make panel-demo`, затем `script -qec "timeout --foreground -s INT 4 ./bin/mongo-replicator-panel" /dev/null` (байт 0x1a не отправлять)
+- [x] (по возможности) демо в отсоединённом tmux шириной 100: `tmux -L demo new-session -d -s d -x 100 -y 22 ./bin/mongo-replicator-panel`, снимки `tmux -L demo capture-pane -p -t d` на ~15 с (`12 000/с`, диапазон с разделителем) и ~40 с (`99%`, `100%` нет), затем `tmux -L demo kill-server`
+- [x] run full test suite: `make test`
+- [x] `make test-integration`
+- [x] `make lint` без замечаний
 
 ### Task 5: [Final] Update documentation
 - [ ] README, «Панель статуса»:
