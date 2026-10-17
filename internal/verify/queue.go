@@ -22,7 +22,7 @@ const (
 const (
 	reasonDrop = "drop" // коллекция удалена
 	reasonHot  = "hot"  // источник менялся во время каждой из maxTries проверок
-	// reasonStopped — --ids остановлена по сигналу до проверки ключа
+	// reasonStopped — --ids остановлена (сигнал или ошибка) до проверки ключа
 	reasonStopped = "stopped"
 )
 
@@ -328,6 +328,13 @@ func (q *queue) rename(from, to string, t bson.Timestamp) {
 		case have == nil:
 			q.items[k] = it
 		case !it.busy:
+			if have.busy {
+				// тот проверяет документ to до rename: после вердикта он
+				// вернётся в очередь со временем rename, иначе документ из
+				// from остался бы непроверенным
+				have.events = append(have.events, t)
+				have.movedAt = t
+			}
 			q.requeue(k, it)
 		case !have.busy:
 			it.events = append(it.events, have.first, have.last)

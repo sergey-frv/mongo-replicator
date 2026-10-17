@@ -325,11 +325,14 @@ func (v *Verifier) runIDs(ctx context.Context) (Report, error) {
 	}
 	err = v.loop(ctx, cs)
 	left := v.q.len()
-	if err == nil && ctx.Err() != nil && left > 0 {
-		// у --ids нет файла позиции: непроверенные ключи — в отчёт, иначе они
-		// пропали бы (файл --ids мог быть и прошлым отчётом .ids, его затрёт запись)
+	if left > 0 && (err != nil || ctx.Err() != nil) {
+		// у --ids нет файла позиции: непроверенные ключи — в отчёт и при отмене,
+		// и при ошибке, иначе они пропали бы (файл --ids мог быть и прошлым
+		// отчётом .ids, его затрёт запись)
 		v.stopped()
-		err = fmt.Errorf("перепроверка остановлена, ключей не проверено: %d: %w", left, ctx.Err())
+		if err == nil {
+			err = fmt.Errorf("перепроверка остановлена, ключей не проверено: %d: %w", left, ctx.Err())
+		}
 	}
 	v.writeReports()
 	rep := v.report(nil)

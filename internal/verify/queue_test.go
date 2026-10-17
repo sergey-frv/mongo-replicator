@@ -393,6 +393,24 @@ func TestQueueRenameBusyOntoWaiting(t *testing.T) {
 	assert.Equal(t, 1, q.len())
 }
 
+// Ждущий ключ переименован на ключ на проверке: тот проверял документ до
+// rename и вернётся в очередь со временем rename, хотя события ждущего — до T1.
+func TestQueueRenameWaitingOntoBusy(t *testing.T) {
+	q := newQueue(500)
+	addAll(t, q, "db.b", 1, 2)
+	addAll(t, q, "db.a", 1, 3)
+	b := takeNext(t, q, 10)
+	q.rename("db.a", "db.b", at(30))
+
+	reason := q.done(b.items[0], matched, at(12))
+
+	assert.Empty(t, reason)
+	next := takeNext(t, q, 100)
+	assert.Equal(t, "db.b", next.ns)
+	assert.Equal(t, []itemView{{id: 1, first: 30, last: 30}}, viewsOf(next), "документ из db.a не проверен под db.b")
+	assert.Equal(t, 1, q.len())
+}
+
 // Оба ключа на проверке: переименованный выходит из учёта, его done сливается с
 // оставшимся, и тот вернётся в очередь, если его T1 раньше rename.
 func TestQueueRenameBothBusy(t *testing.T) {
