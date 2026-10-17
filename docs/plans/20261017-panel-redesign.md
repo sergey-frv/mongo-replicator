@@ -236,13 +236,13 @@
 - ➕ фазы — `switch` по `catchUp > tail` (догон), `tail > 0` (хвост 300/с), иначе ровный поток; случай «хвост выше догона» (29,97 с: тик демо не кратен 200 мс) — в `TestSimStep`; тесты пачки, трафика и `AppliedAt` перенесены на ровный поток (77 с)
 
 ### Task 8: Verify acceptance criteria
-- [ ] шапка, блоки с заголовками, колонка подписей, графики в рамках своим цветом, полоса только на догоне, ошибка отдельной строкой — по тестам Task 3–4
-- [ ] экран очищается перед панелью по умолчанию, `--no-clear` отключает — по тестам Task 6 (`ClearScreen`, `clearBeforePanel`, `parseOpts`)
-- [ ] логи над панелью не изменились (`teaWriter` → `tea.Println`, `TestTeaWriterAfterExit`)
-- [ ] демо под псевдотерминалом рисует новую панель и по SIGINT выходит: `make panel-demo`, затем `script -qec "timeout --foreground -s INT 4 ./bin/mongo-replicator-panel" /dev/null`; в выводе — последовательность очистки `\x1b[2J` в начале, `── репликация`, `◐ догоняет`, «остановлен по сигналу» (байт 0x1a не отправлять)
-- [ ] run full test suite: `make test`
-- [ ] `make test-integration`
-- [ ] `make lint` без замечаний
+- [x] шапка, блоки с заголовками, колонка подписей, графики в рамках своим цветом, полоса только на догоне, ошибка отдельной строкой — по тестам Task 3–4
+- [x] экран очищается перед панелью по умолчанию, `--no-clear` отключает — по тестам Task 6 (`ClearScreen`, `clearBeforePanel`, `parseOpts`)
+- [x] логи над панелью не изменились (`teaWriter` → `tea.Println`, `TestTeaWriterAfterExit`)
+- [x] демо под псевдотерминалом рисует новую панель и по SIGINT выходит: `make panel-demo`, затем `script -qec "timeout --foreground -s INT 4 ./bin/mongo-replicator-panel" /dev/null`; в выводе — последовательность очистки `\x1b[2J` в начале, `── репликация`, `◐ догоняет`, «остановлен по сигналу» (байт 0x1a не отправлять)
+- [x] run full test suite: `make test`
+- [x] `make test-integration`
+- [x] `make lint` без замечаний
 
 ### Task 9: [Final] Update documentation
 - [ ] README, таблица опций: `--no-clear` / `NO_CLEAR` — по умолчанию экран очищается перед панелью статуса (до строк запуска, они остаются видны); в `plain` не действует; с `--progress tty` в файл попадёт и последовательность очистки
