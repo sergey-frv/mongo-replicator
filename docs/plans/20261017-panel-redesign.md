@@ -157,11 +157,12 @@
 - Create: `internal/panel/render_test.go`
 - Modify: `internal/panel/panel.go`, `internal/panel/panel_test.go`
 
-- [ ] перенести `renderPanel`, стили, `fmt*` из `panel.go` в `render.go` без изменений; `TestRenderPanel*`, `TestFmt*`, `panelLines`, `ansi`, `clock`, `KiB/MiB/GiB` — в `render_test.go`; `make test` зелёный до изменения логики
-- [ ] `sparkline`, `progressBar`, `pad`, усечение по ширине — по Technical Details
-- [ ] тесты `sparkline` (таблица по данным): пусто; все нули; меньше 60 точек — пробелы слева; 60 точек — 20 колонок по 3; неполная правая колонка; столбик максимума — `█`; сдвиг на одну точку не меняет уже полные колонки
-- [ ] тесты `progressBar`: 0, 0.58, 1, вне 0–1; `pad` со стилизованным и кириллическим текстом
-- [ ] `make test`, `make lint` — должно пройти
+- [x] перенести `renderPanel`, стили, `fmt*` из `panel.go` в `render.go` без изменений; `TestRenderPanel*`, `TestFmt*`, `panelLines`, `ansi`, `clock`, `KiB/MiB/GiB` — в `render_test.go`; `make test` зелёный до изменения логики
+- [x] `sparkline`, `progressBar`, `pad`, усечение по ширине — по Technical Details
+- [x] тесты `sparkline` (таблица по данным): пусто; все нули; меньше 60 точек — пробелы слева; 60 точек — 20 колонок по 3; неполная правая колонка; столбик максимума — `█`; сдвиг на одну точку не меняет уже полные колонки
+- [x] тесты `progressBar`: 0, 0.58, 1, вне 0–1; `pad` со стилизованным и кириллическим текстом
+- [x] `make test`, `make lint` — должно пройти
+- ➕ усечение — `fit(s, n)` через `ansi.Truncate` (`github.com/charmbracelet/x/ansi` теперь прямая зависимость, `go mod tidy` + `go mod vendor` сделаны); импорт под псевдонимом `xansi`: имя `ansi` в пакете занято регуляркой тестов; для диапазона скорости — `sparkColumns` (средние колонок)
 
 ### Task 3: Новая раскладка `renderPanel` (широкое окно)
 
@@ -184,7 +185,7 @@
 - [ ] правило ширины по Technical Details: фиксированная часть всегда, график/полоса если помещается, дополнительная часть усекается с `…` или пропадает (< 8), шапка усекается после значка
 - [ ] строка `машина`: фиксированная часть — `процессов N`, дополнительная — `, активно M · на HH:MM` и «всего ↓ … ↑ …» (усекается тем же правилом)
 - [ ] тесты при ширине 80, 60, 40: какая часть каждой строки осталась (литералы, включая `машина` при 40), числа на месте, ни одна строка не шире окна (`lipgloss.Width` после снятия ANSI)
-- [ ] если нужен прямой импорт `github.com/charmbracelet/x/ansi` — `go mod tidy`, `go mod vendor` в контейнере, `go.mod`/`vendor/modules.txt` в коммит задачи
+- [ ] (сделано в Task 2) если нужен прямой импорт `github.com/charmbracelet/x/ansi` — `go mod tidy`, `go mod vendor` в контейнере, `go.mod`/`vendor/modules.txt` в коммит задачи
 - [ ] `make test`, `make lint` — должно пройти
 
 ### Task 5: Модель панели — время тика, ширина, точки
