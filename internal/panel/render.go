@@ -254,10 +254,11 @@ func plainText(s string) string {
 }
 
 const (
-	sparkCols = 20 // колонок графика: минута при seriesLen точках
-	sparkPer  = 3  // точек на колонку
-	barCols   = 20 // колонок полосы прогресса
-	fitMin    = 8  // меньше этой ширины дополнительная часть строки не выводится
+	sparkCols  = 20 // колонок графика: минута при seriesLen точках
+	sparkPer   = 3  // точек на колонку
+	sparkScale = 5  // последних колонок (15 с), по которым берётся масштаб графика
+	barCols    = 20 // колонок полосы прогресса
+	fitMin     = 8  // меньше этой ширины дополнительная часть строки не выводится
 )
 
 // sparkLevels — высоты столбиков графика от нуля до максимума
@@ -291,19 +292,28 @@ func sparkColumns(s series) []float64 {
 }
 
 // sparkline — график s в sparkCols колонках: высота столбика — среднее колонки относительно
-// наибольшего среднего; колонки без точек (слева, пока данных меньше минуты) — пробелы.
+// наибольшего среднего последних sparkScale колонок (15 с), чтобы после всплеска (догона)
+// график не оставался плоским минуту; старые колонки выше масштаба упираются в верхний
+// уровень. Если последние колонки нулевые (повтор, остановка), масштаб — по всему окну.
+// Колонки без точек (слева, пока данных меньше минуты) — пробелы.
 func sparkline(s series) string {
 	avgs := sparkColumns(s)
 	top := 0.0
-	for _, v := range avgs {
+	for _, v := range avgs[max(len(avgs)-sparkScale, 0):] {
 		top = max(top, v)
+	}
+	if top == 0 {
+		for _, v := range avgs {
+			top = max(top, v)
+		}
 	}
 	var b strings.Builder
 	b.WriteString(strings.Repeat(" ", sparkCols-len(avgs)))
 	for _, v := range avgs {
 		idx := 0
 		if top > 0 {
-			idx = int(math.Round(v / top * float64(len(sparkLevels)-1)))
+			// ограничение до int: огромное отношение иначе дало бы выход за sparkLevels
+			idx = int(math.Round(min(v/top, 1) * float64(len(sparkLevels)-1)))
 		}
 		b.WriteRune(sparkLevels[idx])
 	}

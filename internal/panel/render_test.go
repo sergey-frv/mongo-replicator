@@ -2,6 +2,7 @@ package panel
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -95,6 +96,17 @@ func TestRenderPanelRateThousands(t *testing.T) {
 
 	assert.Equal(t, "  скорость   12 000/с       ▏                  ▆█▕ 8 803–12 000/с", lines[3],
 		"число и диапазон — целые с группами разрядов, без дробей средних колонок")
+}
+
+func TestRenderPanelRateClamped(t *testing.T) {
+	v := workingView()
+	v.st.Rate = 25
+	v.rate = seriesOf(append(slices.Repeat([]float64{12000}, 45), 5, 5, 5, 10, 10, 10, 15, 15, 15, 20, 20, 20, 25, 25, 25)...)
+
+	lines := panelLines(v, 100)
+
+	assert.Equal(t, "  скорость   25/с           ▏███████████████▂▄▅▇█▕ 5–12 000/с", lines[3],
+		"старые столбики упираются в верх, диапазон — настоящий за минуту")
 }
 
 func TestRenderPanelStarting(t *testing.T) {
@@ -457,6 +469,12 @@ func TestSparkline(t *testing.T) {
 		{"меньше 60 точек — пробелы слева", seriesOf(1, 1, 1, 2, 2, 2), "                  ▅█"},
 		{"60 точек — 20 колонок по 3", seriesOf(numbers(60)...), "▁▂▂▂▃▃▃▄▄▄▅▅▆▆▆▇▇▇██"},
 		{"неполная правая колонка — среднее её точек", seriesOf(2, 2, 2, 7), "                  ▃█"},
+		{"масштаб по последним 15 с — старые колонки упираются в верх",
+			seriesOf(append(slices.Repeat([]float64{12000}, 45), 5, 5, 5, 10, 10, 10, 15, 15, 15, 20, 20, 20, 25, 25, 25)...),
+			"███████████████▂▄▅▇█"},
+		{"последние 15 с нулевые — масштаб по всему окну",
+			seriesOf(append(slices.Repeat([]float64{100}, 45), slices.Repeat([]float64{0}, 15)...)...),
+			"███████████████▁▁▁▁▁"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sparkline(tc.s)
