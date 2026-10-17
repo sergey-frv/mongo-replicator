@@ -63,26 +63,6 @@ func main() {
 	os.Exit(run(opts, srcOpts, dstOpts, logFile))
 }
 
-// mainVerify — main формы сверки; args — без ведущего verify. Не возвращается.
-func mainVerify(args []string) {
-	opts, err := parseVerifyOpts(args)
-	exitOnOptsErr(err)
-
-	logFile := startLog(&opts.commonOptions)
-	masked := opts
-	masked.Src, masked.Dst = logURI(opts.Src), logURI(opts.Dst)
-	log.Debug().Any("options", masked).Send()
-
-	srcOpts, dstOpts := clientOpts(opts.commonOptions, args)
-	os.Exit(runVerify(opts, srcOpts, dstOpts, logFile))
-}
-
-// runVerify сверяет цель с источником. Возвращает код выхода.
-func runVerify(_ verifyOptions, _, _ *mongoopts.ClientOptions, _ *os.File) int {
-	log.Error().Msg("сверка ещё не реализована")
-	return 1
-}
-
 // exitOnOptsErr завершает процесс при ошибке разбора опций: --help — справка и код 0,
 // остальное — код 2.
 func exitOnOptsErr(err error) {

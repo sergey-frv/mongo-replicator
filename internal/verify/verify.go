@@ -642,7 +642,8 @@ func (v *Verifier) pollCkpt(ctx context.Context, errc chan<- error) {
 			log.Warn().Err(err).Msg("чекпойнт не прочитан, повторяю")
 			lastWarn = now
 		case err == nil && !ok && now.Sub(lastWarn) >= warnEvery:
-			log.Warn().Str("db", v.cfg.DstDB).Msg("чекпойнта на цели ещё нет: жду репликатор")
+			log.Warn().Str("db", v.cfg.DstDB).
+				Msg("чекпойнта на цели ещё нет: жду репликатор (проверьте, что он запущен на эту базу цели)")
 			lastWarn = now
 		case ok:
 			v.ckpt.set(pos)

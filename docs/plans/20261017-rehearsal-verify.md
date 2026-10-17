@@ -326,19 +326,21 @@ mongo-replicator verify [опции сверки]
 - Modify: `cmd/mongo-replicator/main.go`
 - Modify: `cmd/mongo-replicator/errors.go`
 
-- [ ] `runVerify(opts, srcOpts, dstOpts, logFile) int`:
+- [x] `runVerify(opts, srcOpts, dstOpts, logFile) int`:
   - `prepareClients` (пароль с терминала для обеих сторон), `appName` источника `mongo-replicator-verify`;
   - лог как у репликатора, без панели; `connect`, `stateDir`;
   - SIGINT/SIGTERM → отмена контекста; коды `0`/`1`/`2`
-- [ ] подсказки оператору:
+- [x] подсказки оператору:
   - нет `--since` и нет позиции;
   - файл позиции занят;
   - поток выпал из окна oplog;
   - чужая пара баз в чекпойнте;
   - чекпойнта на цели ещё нет: `verify` ждёт и пишет WARN раз в минуту, а не падает
-- [ ] юнит-тесты: код выхода по `Report` и ошибке, тексты подсказок (важен сам текст)
-- [ ] интеграционный тест на compose: `runVerify` со схемой без расхождений и без ключей → код `0`; с подложенным дефектом → код `1`
-- [ ] `make test`, `make test-integration`, `make lint` — зелёные
+- [x] юнит-тесты: код выхода по `Report` и ошибке, тексты подсказок (важен сам текст)
+- [x] интеграционный тест на compose: `runVerify` со схемой без расхождений и без ключей → код `0`; с подложенным дефектом → код `1`
+- [x] `make test`, `make test-integration`, `make lint` — зелёные
+- ➕ `runVerify(opts, srcOpts, dstOpts) int` — без `logFile`: панели у сверки нет, файл лога нужен только `setupLog`; `mainVerify` и `runVerify` перенесены в `verify.go`; `appName` `mongo-replicator-verify` — у клиентов обеих сторон
+- ➕ код выхода — `verifyCode(ctx, rep, err)`: ошибка после сигнала — остановка, код по итогу; подсказка — поле `hint` ERROR `сверка прервана` (`verifyHint`); WARN «чекпойнта ещё нет» в пакете дополнен подсказкой проверить, что репликатор запущен на эту базу цели
 
 ### Task 9: Стенд репетиции и копия схемы
 
