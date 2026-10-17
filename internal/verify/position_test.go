@@ -42,6 +42,30 @@ func fillReport(t *testing.T, n int) report {
 	return r
 }
 
+// testPaths — файлы сверки во временном каталоге.
+func testPaths(t *testing.T) paths {
+	t.Helper()
+	base := filepath.Join(t.TempDir(), "dst")
+	return paths{position: base + ".json", lock: base + ".lock", defects: base + ".defects.json", unverified: base + ".unverified.json"}
+}
+
+// writeTestReports пишет оба отчёта files с одной записью.
+func writeTestReports(t *testing.T, files paths) {
+	t.Helper()
+	require.NoError(t, writeReport(files.defects, fillReport(t, 1)), "defects")
+	require.NoError(t, writeReport(files.unverified, fillReport(t, 1)), "unverified")
+}
+
+// assertMovedAside — каждый из files перенесён в сторону ровно один раз с причиной reason.
+func assertMovedAside(t *testing.T, reason string, files ...string) {
+	t.Helper()
+	for _, path := range files {
+		assert.NoFileExists(t, path)
+		moved, _ := filepath.Glob(path + "." + reason + "-*")
+		assert.Len(t, moved, 1, "перенесённые файлы %s", path)
+	}
+}
+
 func TestPositionPaths(t *testing.T) {
 	dir := t.TempDir()
 
@@ -61,7 +85,7 @@ func TestPositionPaths(t *testing.T) {
 // Ключи после записи и чтения совпадают побайтно: тип _id сохраняется, порядок
 // полей вложенного документа тоже.
 func TestPositionRoundTrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dst.json")
+	files := testPaths(t)
 	want := &position{
 		ident:      testIdent,
 		Since:      1791900000,
@@ -77,8 +101,8 @@ func TestPositionRoundTrip(t *testing.T) {
 		Counts:  counts{Checked: 7, Matched: 4, Defects: 1, Unverified: 2, SampledOut: 3},
 	}
 
-	require.NoError(t, writePosition(path, want))
-	got, err := loadPosition(path, testIdent, false)
+	require.NoError(t, writePosition(files.position, want))
+	got, err := loadPosition(files, testIdent, false)
 
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
@@ -86,26 +110,43 @@ func TestPositionRoundTrip(t *testing.T) {
 
 // Позиция без токена (поток не начат) и без ключей.
 func TestPositionRoundTripEmpty(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dst.json")
+	files := testPaths(t)
 	want := &position{ident: testIdent, Since: 1791900000, Pending: []*item{}}
 
-	require.NoError(t, writePosition(path, want))
-	got, err := loadPosition(path, testIdent, false)
+	require.NoError(t, writePosition(files.position, want))
+	got, err := loadPosition(files, testIdent, false)
 
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
 }
 
+// Без --since сверка не начнётся (ErrNoSince): отчёты прошлой сверки остаются.
 func TestLoadPositionMissing(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dst.json")
+	files := testPaths(t)
+	writeTestReports(t, files)
 
-	got, err := loadPosition(path, testIdent, false)
+	got, err := loadPosition(files, testIdent, false)
 
 	require.NoError(t, err)
 	assert.Nil(t, got)
+	assert.FileExists(t, files.defects)
+	assert.FileExists(t, files.unverified)
 }
 
-// Битый файл переносится в сторону, сверка начинается с --since.
+// Начало заново с --since без позиции (её удалили) переносит отчёты прошлой
+// сверки: первая запись новой затёрла бы их.
+func TestLoadPositionMissingFresh(t *testing.T) {
+	files := testPaths(t)
+	writeTestReports(t, files)
+
+	got, err := loadPosition(files, testIdent, true)
+
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	assertMovedAside(t, "previous", files.defects, files.unverified)
+}
+
+// Битый файл переносится в сторону вместе с отчётами, сверка начинается с --since.
 func TestLoadPositionCorrupt(t *testing.T) {
 	for name, content := range map[string]string{
 		"не JSON":     `{"db":`,
@@ -114,21 +155,21 @@ func TestLoadPositionCorrupt(t *testing.T) {
 		"битый токен": `{"token":{"_data":{"$numberInt":"x"}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "dst.json")
-			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+			files := testPaths(t)
+			require.NoError(t, os.WriteFile(files.position, []byte(content), 0o600))
+			writeTestReports(t, files)
 
-			got, err := loadPosition(path, testIdent, false)
+			got, err := loadPosition(files, testIdent, false)
 
 			require.NoError(t, err)
 			assert.Nil(t, got)
-			assert.NoFileExists(t, path)
-			moved, _ := filepath.Glob(path + ".corrupt-*")
-			assert.Len(t, moved, 1, "перенесённые файлы")
+			assertMovedAside(t, "corrupt", files.position, files.defects, files.unverified)
 		})
 	}
 }
 
-// Позиция другой пары баз или других кластеров при заданной --since переносится в сторону.
+// Позиция другой пары баз или других кластеров при заданной --since переносится
+// в сторону вместе с отчётами.
 func TestLoadPositionMismatch(t *testing.T) {
 	for name, written := range map[string]ident{
 		"база источника":    {DB: "other", DstDB: "dst", Cluster: "mongo-dst:27017", SrcCluster: "mongo-src:27017"},
@@ -137,33 +178,35 @@ func TestLoadPositionMismatch(t *testing.T) {
 		"кластер источника": {DB: "src", DstDB: "dst", Cluster: "mongo-dst:27017", SrcCluster: "other:27017"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "dst.json")
-			require.NoError(t, writePosition(path, &position{ident: written, Since: 1791900000}))
+			files := testPaths(t)
+			require.NoError(t, writePosition(files.position, &position{ident: written, Since: 1791900000}))
+			writeTestReports(t, files)
 
-			got, err := loadPosition(path, testIdent, true)
+			got, err := loadPosition(files, testIdent, true)
 
 			require.NoError(t, err)
 			assert.Nil(t, got)
-			assert.NoFileExists(t, path)
-			moved, _ := filepath.Glob(path + ".mismatch-*")
-			assert.Len(t, moved, 1, "перенесённые файлы")
+			assertMovedAside(t, "mismatch", files.position, files.defects, files.unverified)
 		})
 	}
 }
 
-// Без --since позиция другой сверки — ошибка, файл остаётся на месте: опечатка
+// Без --since позиция другой сверки — ошибка, файлы остаются на месте: опечатка
 // в --db или URI не отрывает настоящую позицию.
 func TestLoadPositionMismatchNoSince(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "dst.json")
+	files := testPaths(t)
 	written := ident{DB: "other", DstDB: "dst", Cluster: "mongo-dst:27017", SrcCluster: "mongo-src:27017"}
-	require.NoError(t, writePosition(path, &position{ident: written, Since: 1791900000}))
+	require.NoError(t, writePosition(files.position, &position{ident: written, Since: 1791900000}))
+	writeTestReports(t, files)
 
-	got, err := loadPosition(path, testIdent, false)
+	got, err := loadPosition(files, testIdent, false)
 
 	require.ErrorIs(t, err, ErrPositionMismatch)
 	assert.Nil(t, got)
-	assert.FileExists(t, path)
-	moved, _ := filepath.Glob(path + ".mismatch-*")
+	assert.FileExists(t, files.position)
+	assert.FileExists(t, files.defects)
+	assert.FileExists(t, files.unverified)
+	moved, _ := filepath.Glob(files.position + ".mismatch-*")
 	assert.Empty(t, moved, "перенесённые файлы")
 }
 

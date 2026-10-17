@@ -101,7 +101,7 @@ func verifyHint(err error) string {
 			"файл позиции прошлого запуска ищется в подкаталоге verify/ каталога --state-dir"
 	case errors.Is(err, verify.ErrPositionMismatch):
 		return "--db и URI должны совпадать с прошлым запуском verify на эту базу цели; " +
-			"чтобы начать сверку заново, задайте --since — файл позиции будет перенесён в сторону"
+			"чтобы начать сверку заново, задайте --since — файл позиции и отчёты будут перенесены в сторону"
 	case errors.Is(err, verify.ErrLocked):
 		return "эту базу цели уже сверяет другой процесс verify: дождитесь его или остановите (Ctrl+C)"
 	case errors.Is(err, verify.ErrHistoryLost):

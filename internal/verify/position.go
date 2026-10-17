@@ -204,16 +204,21 @@ func parsePosition(b []byte) (*position, error) {
 	return p, nil
 }
 
-// loadPosition читает позицию сверки для want. nil без ошибки — позиции нет:
-// файла нет, или он битый, или (при fresh — задана --since) записан для другой
-// пары баз или других кластеров — тогда он переносится в сторону
-// (statefile.MoveAside) с WARN, и сверка начинается с --since. Без fresh файл
-// другой сверки — ErrPositionMismatch, файл остаётся: опечатка в опциях не
-// отрывает позицию. Не перенесённый файл — ошибка: следующая запись затёрла бы его.
-func loadPosition(path string, want ident, fresh bool) (*position, error) {
-	b, err := os.ReadFile(path) //nolint:gosec // путь из --state-dir
+// loadPosition читает позицию сверки files.position для want. nil без ошибки —
+// позиции нет: файла нет, или он битый, или (при fresh — задана --since)
+// записан для другой пары баз или других кластеров — тогда он переносится в
+// сторону (statefile.MoveAside) с WARN, и сверка начинается с --since. Без
+// fresh файл другой сверки — ErrPositionMismatch, файл остаётся: опечатка в
+// опциях не отрывает позицию. Не перенесённый файл — ошибка: следующая запись
+// затёрла бы его. Начало заново (позиция перенесена или её нет при fresh)
+// переносит и отчёты прошлой сверки (moveReportsAside).
+func loadPosition(files paths, want ident, fresh bool) (*position, error) {
+	b, err := os.ReadFile(files.position)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		if !fresh {
+			return nil, nil // без --since сверка не начнётся (ErrNoSince): отчёты не трогаем
+		}
+		return nil, moveReportsAside(files, "previous")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("файл позиции сверки: %w", err)
@@ -225,19 +230,42 @@ func loadPosition(path string, want ident, fresh bool) (*position, error) {
 		reason, msg = "corrupt", "файл позиции сверки повреждён"
 	case p.ident != want && !fresh:
 		return nil, fmt.Errorf("%w: %s — %q → %q (цель %s, источник %s)",
-			ErrPositionMismatch, path, p.DB, p.DstDB, p.Cluster, p.SrcCluster)
+			ErrPositionMismatch, files.position, p.DB, p.DstDB, p.Cluster, p.SrcCluster)
 	case p.ident != want:
 		reason, msg = "mismatch", fmt.Sprintf("файл позиции сверки записан для %q → %q (цель %s, источник %s)",
 			p.DB, p.DstDB, p.Cluster, p.SrcCluster)
 	default:
 		return p, nil
 	}
-	to, mvErr := statefile.MoveAside(path, reason)
+	// отчёты — до позиции: не перенесённый отчёт оставляет позицию на месте, и
+	// следующий запуск повторит перенос
+	if mvErr := moveReportsAside(files, reason); mvErr != nil {
+		return nil, mvErr
+	}
+	to, mvErr := statefile.MoveAside(files.position, reason)
 	if mvErr != nil {
 		return nil, fmt.Errorf("%s, но не перенесён: %w", msg, mvErr)
 	}
-	log.Warn().Err(err).Str("file", path).Str("moved_to", to).Msg(msg + ": перенесён в сторону, сверка — с --since")
+	log.Warn().Err(err).Str("file", files.position).Str("moved_to", to).Msg(msg + ": перенесён в сторону, сверка — с --since")
 	return nil, nil
+}
+
+// moveReportsAside переносит отчёты прошлой сверки в сторону с причиной reason:
+// новая сверка пишет отчёты с нуля, и первая запись затёрла бы записи, которых
+// больше нигде нет (их ключи — только для --ids). Отчёта нет — пропуск; не
+// перенесённый — ошибка.
+func moveReportsAside(files paths, reason string) error {
+	for _, path := range []string{files.defects, files.unverified} {
+		to, err := statefile.MoveAside(path, reason)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("отчёт прошлой сверки не перенесён: %w", err)
+		}
+		log.Warn().Str("file", path).Str("moved_to", to).Msg("отчёт прошлой сверки перенесён в сторону")
+	}
+	return nil
 }
 
 // reportEntry — запись файла отчёта (дефекты, «не проверено»). Документы — в

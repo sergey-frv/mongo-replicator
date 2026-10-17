@@ -219,7 +219,7 @@ func (v *Verifier) openPosition() (_ *position, unlock func(), err error) {
 	if unlock, err = lock(v.files.lock); err != nil {
 		return nil, nil, err
 	}
-	pos, err := loadPosition(v.files.position, v.ident, v.cfg.Since != 0)
+	pos, err := loadPosition(v.files, v.ident, v.cfg.Since != 0)
 	if err != nil {
 		unlock()
 		return nil, nil, err
