@@ -9,7 +9,9 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/rs/zerolog/log"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -72,6 +74,87 @@ func checkSchema(ctx context.Context, src, dst *mongo.Client, srcDB, dstDB strin
 		return nil, fmt.Errorf("схема цели: %w", err)
 	}
 	return compareSchema(srcDB, srcSchema, dstSchema, created), nil
+}
+
+// schemaTries — попыток итоговой сверки схемы по чекпойнту.
+const schemaTries = 3
+
+// finalSchema — итоговая сверка схемы. Расхождение может быть лагом
+// репликатора: DDL источника, которую он ещё не применил. Поэтому при
+// расхождении схема сверяется заново по чекпойнту (schemaAfterCkpt). Не вышло
+// (чекпойнт не дошёл до схемы источника, она менялась, ошибка чтения) — WARN и
+// расхождения первого чтения.
+func (v *Verifier) finalSchema(ctx context.Context) ([]SchemaDiff, error) {
+	diffs, err := checkSchema(ctx, v.src, v.dst, v.cfg.DB, v.cfg.DstDB, v.created)
+	if err != nil || !slices.ContainsFunc(diffs, func(d SchemaDiff) bool { return !d.Known }) {
+		return diffs, err
+	}
+	log.Info().Msg("схема: расхождения, сверяю заново, когда чекпойнт пройдёт схему источника")
+	for range schemaTries {
+		settled, ok, err := v.schemaAfterCkpt(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("схема: повторная сверка по чекпойнту не выполнена")
+			break
+		}
+		if ok {
+			return settled, nil
+		}
+	}
+	log.Warn().Msg("схема: расхождения могут быть лагом репликатора — перепроверьте: mongo-replicator verify --schema-only")
+	return diffs, nil
+}
+
+// schemaAfterCkpt читает схему источника, ждёт, пока чекпойнт пройдёт время
+// источника после чтения (репликатор применил всю DDL, которую чтение видело),
+// читает схему цели и снова источника. ok=false — схема источника между
+// чтениями изменилась: DDL этого окна цель могла уже применить, а первое
+// чтение источника её не видело.
+func (v *Verifier) schemaAfterCkpt(ctx context.Context) (_ []SchemaDiff, ok bool, err error) {
+	before, err := readSchema(ctx, v.src, v.cfg.DB)
+	if err != nil {
+		return nil, false, fmt.Errorf("схема источника: %w", err)
+	}
+	ts, err := srcTime(ctx, v.src)
+	if err != nil {
+		return nil, false, fmt.Errorf("время источника: %w", err)
+	}
+	err = v.waitCkptAfter(ctx, ts)
+	if err != nil {
+		return nil, false, err
+	}
+	dstSchema, err := readSchema(ctx, v.dst, v.cfg.DstDB)
+	if err != nil {
+		return nil, false, fmt.Errorf("схема цели: %w", err)
+	}
+	after, err := readSchema(ctx, v.src, v.cfg.DB)
+	if err != nil {
+		return nil, false, fmt.Errorf("схема источника: %w", err)
+	}
+	if len(compareSchema(v.cfg.DB, before, after, nil)) > 0 {
+		return nil, false, nil
+	}
+	return compareSchema(v.cfg.DB, after, dstSchema, v.created), true, nil
+}
+
+// waitCkptAfter опрашивает чекпойнт раз в pollEvery, пока его позиция не станет
+// строго позже ts (применено всё до ts включительно).
+func (v *Verifier) waitCkptAfter(ctx context.Context, ts bson.Timestamp) error {
+	t := time.NewTicker(pollEvery)
+	defer t.Stop()
+	for {
+		pos, ok, err := v.readCkpt(ctx)
+		switch {
+		case errors.Is(err, replicator.ErrDBMismatch):
+			return err
+		case err == nil && ok && pos.After(ts):
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("чекпойнт не прошёл время источника: %w", ctx.Err())
+		case <-t.C:
+		}
+	}
 }
 
 // readSchema читает с primary коллекции базы db (без system.* и служебной

@@ -5,6 +5,7 @@ package verify
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -140,4 +141,100 @@ func TestIntegrationSchemaCreatedKnown(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []SchemaDiff{{NS: db + ".log", Reason: "опции различаются: capped, size", Known: true}}, diffs)
+}
+
+// finalRun — finalSchema в горутине.
+type finalRun struct {
+	done  chan struct{}
+	diffs []SchemaDiff
+	err   error
+}
+
+func startFinalSchema(ctx context.Context, t *testing.T, db string) *finalRun {
+	t.Helper()
+	v := New(srcClient, dstClient, itConfig(db, bson.Timestamp{}))
+	fr := &finalRun{done: make(chan struct{})}
+	go func() {
+		defer close(fr.done)
+		fr.diffs, fr.err = v.finalSchema(ctx)
+	}()
+	t.Cleanup(func() { <-fr.done })
+	return fr
+}
+
+// returned — finalSchema вернулся; без t — для условий Eventually и Never.
+func (fr *finalRun) returned() bool {
+	select {
+	case <-fr.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// wait ждёт возврата finalSchema.
+func (fr *finalRun) wait(t *testing.T) ([]SchemaDiff, error) {
+	t.Helper()
+	select {
+	case <-fr.done:
+	case <-time.After(waitTimeout):
+		require.FailNow(t, "finalSchema не вернулся")
+	}
+	return fr.diffs, fr.err
+}
+
+// Итоговая схема: расхождение из-за лага репликатора (индекс источника ещё не
+// применён) — сверка ждёт, пока чекпойнт пройдёт схему источника, и
+// расхождения нет.
+func TestIntegrationSchemaFinalWaitsCheckpoint(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	ix := mongo.IndexModel{Keys: bson.D{{Key: "a", Value: 1}}}
+	createBoth(ctx, t, db, "items")
+	createIndex(ctx, t, srcClient, db, "items", ix)
+	writeCkpt(t, db, srcNow(t))
+	fr := startFinalSchema(ctx, t, db)
+
+	assert.Never(t, fr.returned, 2*time.Second, 50*time.Millisecond, "итоговая схема не ждёт чекпойнт")
+	createIndex(ctx, t, dstClient, db, "items", ix) // репликатор применил индекс
+	followCkpt(t, db)
+	diffs, err := fr.wait(t)
+
+	require.NoError(t, err)
+	assert.Empty(t, diffs)
+}
+
+// Итоговая схема: чекпойнт прошёл схему источника, а расхождение осталось —
+// дефект.
+func TestIntegrationSchemaFinalDefect(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	createBoth(ctx, t, db, "items")
+	createIndex(ctx, t, srcClient, db, "items", mongo.IndexModel{Keys: bson.D{{Key: "a", Value: 1}}})
+	followCkpt(t, db)
+
+	diffs, err := startFinalSchema(ctx, t, db).wait(t)
+
+	require.NoError(t, err)
+	assert.Equal(t, []SchemaDiff{{NS: db + ".items", Reason: "индекс a_1: нет на цели"}}, diffs)
+}
+
+// Итоговая схема: чекпойнт не дошёл до схемы источника (репликатор
+// остановлен) — расхождения первого чтения, без ошибки.
+func TestIntegrationSchemaFinalCheckpointBehind(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	createBoth(ctx, t, db, "items")
+	createIndex(ctx, t, srcClient, db, "items", mongo.IndexModel{Keys: bson.D{{Key: "a", Value: 1}}})
+	writeCkpt(t, db, srcNow(t))
+	fctx, fcancel := context.WithTimeout(ctx, 3*time.Second)
+	defer fcancel()
+
+	diffs, err := startFinalSchema(fctx, t, db).wait(t)
+
+	require.NoError(t, err)
+	assert.Equal(t, []SchemaDiff{{NS: db + ".items", Reason: "индекс a_1: нет на цели"}}, diffs)
 }

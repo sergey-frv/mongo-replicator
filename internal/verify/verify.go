@@ -35,7 +35,8 @@ const (
 	warnEvery   = time.Minute      // WARN «чекпойнта нет» и ошибки его чтения
 	retryPause  = 5 * time.Second  // пауза выдачи пачек после ошибки чтения
 	readTimeout = 30 * time.Second // одно чтение пачки или чекпойнта
-	// finalTimeout — итоговая сверка схемы, в том числе после отмены Run
+	// finalTimeout — итоговая сверка схемы с ожиданием чекпойнта при
+	// расхождении, в том числе после отмены Run
 	finalTimeout = 30 * time.Second
 )
 
@@ -194,7 +195,7 @@ func (v *Verifier) runStream(ctx context.Context) (Report, error) {
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalTimeout)
 	defer cancel()
 	// итоговая схема не прочитана — ошибка: без неё код 0 был бы по схеме на старте
-	final, err := checkSchema(fctx, v.src, v.dst, v.cfg.DB, v.cfg.DstDB, v.created)
+	final, err := v.finalSchema(fctx)
 	if err == nil {
 		diffs = final
 		logSchema(diffs)
