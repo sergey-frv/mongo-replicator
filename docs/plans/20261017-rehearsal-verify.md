@@ -354,12 +354,14 @@ mongo-replicator verify [опции сверки]
 - Create: `deploy/rehearsal/test-copy-schema.sh`
 - Modify: `Makefile`
 
-- [ ] compose цели по Technical Details: keyfile генерируется в контейнере, root из `.env`, порт `127.0.0.1:27117`, тома, healthcheck с аутентификацией, `rs.initiate`, `isWritablePrimary`
-- [ ] `dev-source.override.yml` — порт `127.0.0.1:27018` для `mongo-src` корневого compose
-- [ ] `create-user.js`: `readWrite` только на `DST_DB`, пароль через `passwordPrompt()`, повторный запуск — понятная ошибка «пользователь уже есть»
-- [ ] `copy-schema.js`: коллекции с опциями, индексы без `_id_`, views; непустая цель — отказ; ошибка создания — остановка с именем коллекции; вывод — список созданного
-- [ ] `test-copy-schema.sh` и цель `make test-copy-schema`: фикстура из Technical Details; `copy-schema.js` на `mongo-dst`; `verify --schema-only` в `app` → `0`; уборка `it_copy_schema`
-- [ ] `make test-copy-schema` — зелёная; `docker compose -f deploy/rehearsal/docker-compose.yml config` — без ошибок; стенд поднимается (`up -d`, healthy) и пускает root с хоста через `directConnection=true` (ручная проверка, не тест)
+- [x] compose цели по Technical Details: keyfile генерируется в контейнере, root из `.env`, порт `127.0.0.1:27117`, тома, healthcheck с аутентификацией, `rs.initiate`, `isMaster().ismaster` (`isWritablePrimary` в 4.4 нет)
+- [x] `dev-source.override.yml` — порт `127.0.0.1:27018` для `mongo-src` корневого compose
+- [x] `create-user.js`: `readWrite` только на `DST_DB`, пароль через `passwordPrompt()`, повторный запуск — понятная ошибка «пользователь уже есть»
+- [x] `copy-schema.js`: коллекции с опциями, индексы без `_id_`, views; непустая цель — отказ; ошибка создания — остановка с именем коллекции; вывод — список созданного
+- [x] `test-copy-schema.sh` и цель `make test-copy-schema`: фикстура из Technical Details; `copy-schema.js` на `mongo-dst`; `verify --schema-only` в `app` → `0`; уборка `it_copy_schema`
+- [x] `make test-copy-schema` — зелёная; `docker compose -f deploy/rehearsal/docker-compose.yml config` — без ошибок; стенд поднимается (`up -d`, healthy) и пускает root с хоста через `directConnection=true` (ручная проверка, не тест)
+- ➕ имя проекта compose стенда — `mongo-rehearsal` (тома `mongo-rehearsal_rehearsal-*`); без `.env` `config`/`up` падают с подсказкой задать root в `deploy/rehearsal/.env`
+- ➕ `copy-schema.js` убирает `version` из collation (её задаёт ICU сервера), создаёт view над view после базовой; проверено вручную: схема фикстуры с `mongo-src` 8.0 на стенд 4.4 → `verify --schema-only` под `repl` — код `0`, расхождений 8.0→4.4 на фикстуре нет (включая text-индекс)
 
 ### Task 10: Runbook репетиции
 
