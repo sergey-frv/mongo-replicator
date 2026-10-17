@@ -217,12 +217,12 @@ mongo-replicator verify [опции сверки]
 - Create: `internal/verify/verdict.go`
 - Create: `internal/verify/verdict_test.go`
 
-- [ ] `verdict(s1, d, s2 bson.Raw, eventInWindow bool) result` → `matched`/`defect`/`hot`; `nil` — «документа нет»; `S1 == S2 != D` при `eventInWindow` → `hot`
-- [ ] `sampled(id bson.RawValue, p float64) bool` — sha256, первые 8 байт, `p == 1` — всегда true
-- [ ] `diffFields(src, dst bson.Raw) []string` — различающиеся, отсутствующие и лишние верхнеуровневые поля, не больше 10, детерминированный порядок
-- [ ] табличные тесты `verdict`: равны; D==S2 при S1≠S2; S1==S2≠D без события → дефект; S1==S2≠D с событием в окне (ABA) → горячий; все разные; отсутствие на каждой стороне
-- [ ] тесты `sampled` (детерминизм; доля для p=0.1 на 10 000 синтетических `_id` из хелпера — в пределах ±2%; p=1) и `diffFields` (порядок, лимит 10)
-- [ ] `make test`, `make lint` — зелёные
+- [x] `verdict(s1, d, s2 bson.Raw, eventInWindow bool) result` → `matched`/`defect`/`hot`; `nil` — «документа нет»; `S1 == S2 != D` при `eventInWindow` → `hot`
+- [x] `sampled(id bson.RawValue, p float64) bool` — sha256, первые 8 байт, `p == 1` — всегда true
+- [x] `diffFields(src, dst bson.Raw) []string` — различающиеся, отсутствующие и лишние верхнеуровневые поля, не больше 10, детерминированный порядок
+- [x] табличные тесты `verdict`: равны; D==S2 при S1≠S2; S1==S2≠D без события → дефект; S1==S2≠D с событием в окне (ABA) → горячий; все разные; отсутствие на каждой стороне
+- [x] тесты `sampled` (детерминизм; доля для p=0.1 на 10 000 синтетических `_id` из хелпера — в пределах ±2%; p=1) и `diffFields` (порядок, лимит 10)
+- [x] `make test`, `make lint` — зелёные
 
 ### Task 4: Очередь ключей и ограничитель скорости
 
