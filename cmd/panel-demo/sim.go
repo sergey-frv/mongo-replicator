@@ -16,8 +16,9 @@ const (
 	retryErr  = "bulk write в urlshrinker.links: connection reset by peer (демо)"
 )
 
-// sim — мок-статус: запуск, догон с лагом больше суток, ровный поток, повтор на
-// 40–50-й секунде. Значения — функции времени с запуска, без случайности.
+// sim — мок-статус: запуск, догон с лагом больше суток, медленный хвост догона
+// (с 30-й секунды лаг идёт от 2 мин к 0 за 30 с), ровный поток с 60-й секунды,
+// повтор на 100–110-й секунде. Значения — функции времени с запуска, без случайности.
 type sim struct {
 	mu       sync.Mutex
 	st       replicator.Status
@@ -53,7 +54,7 @@ func (s *sim) step(now time.Time) (warns []string) {
 	switch {
 	case up < 2*time.Second:
 		return nil // «запуск»: поток ещё не открыт
-	case up >= 40*time.Second && up < 50*time.Second:
+	case up >= 100*time.Second && up < 110*time.Second:
 		if s.st.State != replicator.StateRetry {
 			s.st.State, s.st.Retry, s.st.LastErr = replicator.StateRetry, 1, retryErr
 			warns = append(warns, retryWarn)
@@ -62,13 +63,19 @@ func (s *sim) step(now time.Time) (warns []string) {
 	}
 	s.st.State, s.st.Retry, s.st.LastErr = replicator.StateRunning, 0, ""
 
-	// догон: лаг 28 ч тает к 30-й секунде, затем 0–1,5 с
+	// догон: лаг 28 ч тает к 30-й секунде, хвост — от 2 мин к 0 к 60-й секунде
+	// (полоса, оценка и выход ниже 10 с), затем ровный поток с лагом 0–1,5 с
 	sec := int(up / time.Second)
-	catchUp := 28*time.Hour - up*3360
-	lag := max(catchUp, time.Duration(sec%16)*100*time.Millisecond)
-	rate := 12000.0
-	if catchUp <= 0 {
-		rate = 5 + float64(sec%21)
+	catchUp, tail := 28*time.Hour-up*3360, (60*time.Second-up)*4
+	var lag time.Duration
+	var rate float64
+	switch {
+	case catchUp > tail:
+		lag, rate = catchUp, 12000
+	case tail > 0:
+		lag, rate = tail, 300
+	default:
+		lag, rate = time.Duration(sec%16)*100*time.Millisecond, 5+float64(sec%21)
 	}
 	// операций за шаг 200 мс; n — то же для байт трафика: из float, не uint64(ops) —
 	// на такой конверсии range-анализ gosec падает («not an Int»)

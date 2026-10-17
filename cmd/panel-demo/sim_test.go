@@ -27,13 +27,16 @@ func TestSimStep(t *testing.T) {
 		{"запуск", time.Second, replicator.StateStarting, 0, 0, -1, 0, ""},
 		{"начало потока", 2 * time.Second, replicator.StateRunning, 2401, 12000, 26*time.Hour + 8*time.Minute, 0, ""},
 		{"догон", 10 * time.Second, replicator.StateRunning, 2401, 12000, 18*time.Hour + 40*time.Minute, 0, ""},
-		{"конец догона", 30 * time.Second, replicator.StateRunning, 3, 14, 1400 * time.Millisecond, 0, ""},
-		{"ровный поток", 35 * time.Second, replicator.StateRunning, 4, 19, 300 * time.Millisecond, 0, ""},
-		{"начало повтора", 40 * time.Second, replicator.StateRetry, 0, 0, -1, 1,
+		{"хвост выше догона", 29970 * time.Millisecond, replicator.StateRunning, 61, 300, 120120 * time.Millisecond, 0, ""},
+		{"начало хвоста", 30 * time.Second, replicator.StateRunning, 61, 300, 2 * time.Minute, 0, ""},
+		{"хвост", 45 * time.Second, replicator.StateRunning, 61, 300, time.Minute, 0, ""},
+		{"конец хвоста", 58 * time.Second, replicator.StateRunning, 61, 300, 8 * time.Second, 0, ""},
+		{"ровный поток", 60 * time.Second, replicator.StateRunning, 5, 23, 1200 * time.Millisecond, 0, ""},
+		{"начало повтора", 100 * time.Second, replicator.StateRetry, 0, 0, -1, 1,
 			"bulk write в urlshrinker.links: connection reset by peer (демо)"},
-		{"повтор", 45 * time.Second, replicator.StateRetry, 0, 0, -1, 1,
+		{"повтор", 105 * time.Second, replicator.StateRetry, 0, 0, -1, 1,
 			"bulk write в urlshrinker.links: connection reset by peer (демо)"},
-		{"конец повтора", 50 * time.Second, replicator.StateRunning, 3, 13, 200 * time.Millisecond, 0, ""},
+		{"конец повтора", 110 * time.Second, replicator.StateRunning, 3, 10, 1400 * time.Millisecond, 0, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			demo := newSim(simStart)
@@ -54,9 +57,9 @@ func TestSimStep(t *testing.T) {
 // После окна повтора поток снова идёт: повтор и ошибка сброшены.
 func TestSimLeavesRetry(t *testing.T) {
 	demo := newSim(simStart)
-	demo.step(simStart.Add(45 * time.Second))
+	demo.step(simStart.Add(105 * time.Second))
 
-	demo.step(simStart.Add(55 * time.Second))
+	demo.step(simStart.Add(115 * time.Second))
 
 	st := demo.status()
 	assert.Equal(t, replicator.StateRunning, st.State)
@@ -70,7 +73,7 @@ func TestSimRetryKeepsCounters(t *testing.T) {
 	demo.step(simStart.Add(10 * time.Second))
 	demo.step(simStart.Add(10*time.Second + 200*time.Millisecond))
 
-	demo.step(simStart.Add(45 * time.Second))
+	demo.step(simStart.Add(105 * time.Second))
 
 	st := demo.status()
 	assert.Equal(t, int64(4802), st.Applied, "два шага догона по 2401")
@@ -81,26 +84,26 @@ func TestSimRetryKeepsCounters(t *testing.T) {
 func TestSimAppliedAt(t *testing.T) {
 	demo := newSim(simStart)
 
-	demo.step(simStart.Add(35 * time.Second))
+	demo.step(simStart.Add(77 * time.Second))
 
-	assert.Equal(t, time.Date(2026, 10, 17, 12, 0, 34, 700_000_000, time.UTC), demo.status().AppliedAt)
+	assert.Equal(t, time.Date(2026, 10, 17, 12, 1, 15, 700_000_000, time.UTC), demo.status().AppliedAt)
 }
 
 // Пачка, трафик процесса и сводка машины на ровном потоке: 4 операции за шаг.
 func TestSimBatchAndTraffic(t *testing.T) {
 	demo := newSim(simStart)
 
-	demo.step(simStart.Add(35 * time.Second))
+	demo.step(simStart.Add(77 * time.Second))
 
 	st := demo.status()
 	assert.Equal(t, &replicator.BatchInfo{
-		At:    time.Date(2026, 10, 17, 12, 0, 35, 0, time.UTC),
+		At:    time.Date(2026, 10, 17, 12, 1, 17, 0, time.UTC),
 		Ops:   replicator.OpCounts{Ins: 2, Upd: 1, Del: 1},
 		Colls: []string{"PrivateUrls", "Counters", "PublicUrls"},
 	}, st.LastBatch)
 	assert.Equal(t, traffic.Info{SrcIn: 2040, SrcOut: 60, DstIn: 88, DstOut: 680}, st.Traffic)
 	assert.Equal(t, &statefile.Machine{
-		At: time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC), Processes: 3, Active: 2,
+		At: time.Date(2026, 10, 17, 12, 1, 0, 0, time.UTC), Processes: 3, Active: 2,
 		Traffic: traffic.Info{SrcIn: 12_884_903_928, SrcOut: 314_572_860, DstIn: 209_715_288, DstOut: 11_811_160_744},
 	}, st.Machine)
 }
@@ -128,8 +131,8 @@ func TestSimLastDDL(t *testing.T) {
 func TestSimRetryWarn(t *testing.T) {
 	demo := newSim(simStart)
 
-	enter := demo.step(simStart.Add(45 * time.Second))
-	again := demo.step(simStart.Add(46 * time.Second))
+	enter := demo.step(simStart.Add(105 * time.Second))
+	again := demo.step(simStart.Add(106 * time.Second))
 
 	assert.Equal(t, []string{"ошибка репликации, повтор (демо)"}, enter, "вход в повтор")
 	assert.Empty(t, again, "второй шаг в окне повтора")
