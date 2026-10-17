@@ -414,9 +414,9 @@ mongo-replicator verify [опции сверки]
 - ➕ граничные случаи, которых не было на уровне `Run`, — интеграционные тесты `TestIntegrationVerify{Transaction,NoCheckpoint,OtherPair,Locked,Rename,Drop}`; горячий документ и ABA — `TestIntegrationVerifyABA` и юнит-тесты очереди
 
 ### Task 12: [Final] Update documentation
-- [ ] README «Требования»: цель — replica set MongoDB 4.4+ (интеграционные тесты — на 8.0; возможности 8.0, которых нет в 4.4, не используются)
-- [ ] README: раздел «Сверка» — назначение, опции, вердикт, нагрузка и стоп-кран, чтения только с primary, файлы позиции и отчётов, коды выхода, ссылка на `docs/runbook-rehearsal.md`; в таблице опций — пометка, какие опции относятся к какой форме
-- [ ] CLAUDE.md:
+- [x] README «Требования»: цель — replica set MongoDB 4.4+ (интеграционные тесты — на 8.0; возможности 8.0, которых нет в 4.4, не используются)
+- [x] README: раздел «Сверка» — назначение, опции, вердикт, нагрузка и стоп-кран, чтения только с primary, файлы позиции и отчётов, коды выхода, ссылка на `docs/runbook-rehearsal.md`; в таблице опций — пометка, какие опции относятся к какой форме
+- [x] CLAUDE.md:
   - раскладка: `internal/verify`, подкоманда в `cmd/mongo-replicator/verify.go`, `deploy/rehearsal/`;
   - зависимости: `replicator, statefile ← verify ← main`;
   - файл позиции в `<state-dir>/verify/` (имя совпало бы с файлом состояния репликатора);
@@ -424,7 +424,7 @@ mongo-replicator verify [опции сверки]
   - исключение из правила `newIT` для сквозного теста `verify`;
   - `make test-copy-schema`;
   - стенд репетиции на `mongo:4.4`: в образе нет `mongosh`, скрипты — `mongosh` с хоста
-- [ ] move this plan to `docs/plans/completed/`
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems — no checkboxes, informational only*

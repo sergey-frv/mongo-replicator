@@ -2,20 +2,23 @@
 
 Репликация одной базы MongoDB между кластерами через change streams. Модуль `github.com/sergey-frv/mongo-replicator`:
 ```
-cmd/mongo-replicator/   package main — CLI: опции, учётные данные (пароль с терминала), лог, маскирование, подсказки, запуск
+cmd/mongo-replicator/   package main — CLI: опции, учётные данные (пароль с терминала), лог, маскирование, подсказки, запуск; подкоманда сверки — `verify.go`
 internal/replicator/    ядро: *Replicator (поток, запись, DDL, чекпойнт, аренда, статус)
+internal/verify/        сверка цели с источником: *Verifier (свой поток, очередь ключей, вердикт, схема, позиция, отчёты)
 internal/statefile/     файл состояния на машине: путь, чтение/запись, сводка
 internal/traffic/       счётчики байт клиентов (диалер)
 internal/panel/         панель статуса (bubbletea; отрисовка — `render.go`, история — `history.go`), выбор ввода (`Input`), `SignalSelf`, `ClearScreen`
 cmd/panel-demo/         package main — демо панели на мок-данных, без кластеров
+deploy/rehearsal/       стенд репетиции: compose цели `mongo:4.4`, `create-user.js`, `copy-schema.js`, `test-copy-schema.sh`
 ```
-Зависимости — в одну сторону: `traffic ← statefile ← replicator ← panel ← main, panel-demo`.
+Зависимости — в одну сторону: `traffic ← statefile ← replicator ← panel ← main, panel-demo`; `replicator, statefile ← verify ← main`.
 
 ## Команды
 - `make test` — unit-тесты в контейнере `app`
 - `make test-integration` — интеграционные (`-tags integration`, `-p 1`); compose поднимает `mongo-src`, `mongo-dst`, `toxiproxy`
 - `make lint`, `make build` (`build` делает `go mod tidy` + `go mod vendor`, зависимости вендорятся)
 - `make panel-demo` — `bin/mongo-replicator-panel`, демо панели на мок-данных (сборка на хосте, без `tidy`/`vendor`)
+- `make test-copy-schema` — фикстура `it_copy_schema` на `mongo-src`, `copy-schema.js` (mongosh из одноразового `mongo:8.0`) на `mongo-dst`, `verify --schema-only` в `app` → код `0`, уборка
 
 ## Где живёт состояние
 - **на цели** — один документ `{_id: "checkpoint"}` в `<dst-db>._replicator_checkpoint` (`ckptColl`/`ckptID`, `internal/replicator/checkpoint.go`): позиция, пара баз, аренда. Отдельной служебной базы нет, на цели нужен только `readWrite` на `--dst-db`; `SystemDBs` — только `admin`, `config`, `local`
@@ -28,6 +31,16 @@ cmd/panel-demo/         package main — демо панели на мок-да�
 - файл пишет только владелец аренды: загрузка — после `acquireLease` и `checkDBs` и только со свежей арендой (`checkLease`), писатель пропускает запись при устаревшей аренде, последняя запись в `Release` — после подтверждающего `renewOnce` и **до** снятия аренды (иначе преемник прочитает файл без неё)
 - повторный `Run` захватил аренду не у себя (`acquireLease` → `ours=false`: в паузе повтора базой мог владеть другой процесс этой машины и дописать в файл свой трафик) — `retakeState`: писатель останавливается, файл загружается заново, к нему прибавляется трафик процесса только после последней успешной записи (`stateFrom = stateSaved`)
 - `statefile.MoveAside` не заменяет занятое имя переноса (`Rename` на Unix заменил бы прежний `.corrupt-*`)
+
+## Сверка (`verify`)
+- форма CLI — по первому аргументу `verify` (`mainVerify`, `parseVerifyOpts`), механизм команд go-flags не используется: он пропускал бы опции родителя после имени команды. Общие опции — встроенная `commonOptions` в `runOptions` и `verifyOptions`; позиционный аргумент в форме запуска — ошибка «`verify` должна быть первым аргументом»
+- `verify` на цель не пишет и аренду не берёт: обращения к серверу — `Watch`, `ListCollections`, `Indexes().List`, `Find`, `ping` и `replicator.AppliedPosition`. Не добавлять записи и код аренды
+- позиция чекпойнта (`replicator.AppliedPosition`) значит «применено всё **строго до** неё»: токен сохраняется и посреди группы событий с одним `clusterTime`. Ключ готов и ожидание после S1 кончается только при позиции **строго больше** времени — не `>=`
+- файлы сверки — в `<state-dir>/verify/` (`positionPaths`): с именем `statefile.Name` в корне `--state-dir` файл совпал бы с файлом состояния репликатора — тот загрузил бы и перезаписал его, а `statefile.Summary` посчитал бы процессом (каталоги `Summary` пропускает)
+- чтения сверки — только primary и read concern majority, независимо от URI: отстающая secondary дала бы ложные дефекты
+- предел очереди мягкий: при `full()` поток всё равно читается, пока проверки ждут его время (иначе взаимоблокировка)
+- блокировка — `lock_unix.go` (`unix && !aix`: в `x/sys/unix` для AIX нет `Flock`), заглушка — `lock_other.go`
+- стенд репетиции — `mongo:4.4`: в образе нет `mongosh` (только старый `mongo` — им пользуется healthcheck), скрипты `deploy/rehearsal/*.js` запускаются `mongosh` с хоста; с хоста к стенду — только `directConnection=true`. Тестов на 4.4 нет: возможности 8.0, которых нет в 4.4, не используются
 
 ## Панель и терминал
 - панель читает клавиатуру, bubbletea держит терминал в raw-режиме: `ISIG` выключен, поэтому клавиши сигналов переводит сама панель (`panel.key`): Ctrl+C → `SIGINT` своему процессу (дальше прежний путь `main`), Ctrl+\ → `SIGQUIT` только после выхода программы панели (`p.Run` в `panel.Start`; `exitSig`; иначе дамп в raw-режиме и терминал не восстановлен), Ctrl+Z → `tea.Suspend` только при управлении заданиями (`jobControl`: в осиротевшей группе и при унаследованном SIG_IGN SIGTSTP отбрасывается, и bubbletea повис бы в ожидании SIGCONT; SIG_IGN — по `SigIgn` из `/proc/self/status`, `signal.Ignored` унаследованный SIG_IGN для SIGTSTP не видит)
@@ -68,7 +81,8 @@ cmd/panel-demo/         package main — демо панели на мок-да�
 
 ## Интеграционные тесты
 - обвязка (`TestMain`, `newIT`, `start`/`startOn`, `runner`, `withState`, `writeCkpt`, `readLease`, `populateProxies`…) — в `harness_integration_test.go`
-- репликатор — только через `newIT`/`newTrafficIT`/`nc.newIT` (короткие аренда и `stateEvery`), не через голый `New`; менять поля репликатора (`stateEvery`) — до `startOn`, иначе гонка с `Run`
+- репликатор — только через `newIT`/`newTrafficIT`/`nc.newIT` (короткие аренда и `stateEvery`), не через голый `New`; менять поля репликатора (`stateEvery`) — до `startOn`, иначе гонка с `Run`. Исключение — сквозной тест `internal/verify` (`TestIntegrationVerifyReplicator`): обвязка `replicator` неэкспортированная, поэтому там свой маленький runner на `replicator.New` (аренда по умолчанию, `Release` в cleanup)
+- обвязка `internal/verify` — своя (`harness_integration_test.go` пакета: `prepare`, `srcNow`, `writeCkpt`, `appendSrcNote`); в большинстве тестов сверки чекпойнт пишется вручную (`writeCkpt`), без репликатора
 - файлы состояния включает `withState(cfg, t.TempDir())`; сводки в тестах — `statefile.Summary(dir, time.Now(), itActiveFor)` (окно активности 1 с вместо `statefile.DefaultActiveFor`); `t.Parallel` в `internal/replicator` нельзя: тесты делят кластеры
 
 ## Сетевые тесты (Toxiproxy)
