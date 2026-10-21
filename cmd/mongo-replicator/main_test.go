@@ -26,7 +26,7 @@ func TestWithPanelRestoresConsoleLog(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			restoreLogger(t)
 			stdout := captureStdout(t)
-			stop, kill := withPanel(options{LogLevel: "info", LogFileLevel: "info"},
+			stop, kill := withPanel(commonOptions{LogLevel: "info", LogFileLevel: "info"},
 				func() replicator.Status { return replicator.Status{Lag: -1} }, nil, nil)
 
 			log.Info().Msg("INFO под панелью")

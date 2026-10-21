@@ -11,10 +11,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// tokenTime достаёт время кластера из resume token. _data — hex KeyString:
+// TokenTime достаёт время кластера из resume token. _data — hex KeyString:
 // первый байт 0x82 (тип Timestamp), затем 8 байт big-endian: T и I.
 // Формат внутренний, но стабилен с 4.2.
-func tokenTime(token bson.Raw) (bson.Timestamp, error) {
+func TokenTime(token bson.Raw) (bson.Timestamp, error) {
 	v, err := token.LookupErr("_data")
 	if err != nil {
 		return bson.Timestamp{}, fmt.Errorf("в токене нет _data: %w", err)

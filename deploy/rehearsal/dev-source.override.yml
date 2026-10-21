@@ -1,0 +1,9 @@
+# Ручная проверка runbook на машине разработки: публикует mongo-src корневого
+# compose на хост, источником репетиции служит он.
+#   docker compose -f docker-compose.yml -f deploy/rehearsal/dev-source.override.yml up -d --wait mongo-src
+#   mongosh "mongodb://127.0.0.1:27018/?directConnection=true"
+# directConnection=true обязателен: член replica set — mongo-src:27017, с хоста это имя не разрешается.
+services:
+  mongo-src:
+    ports:
+      - "127.0.0.1:27018:27017"

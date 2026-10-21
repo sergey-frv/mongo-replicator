@@ -286,3 +286,81 @@ func TestIntegrationSaveTokenUnparsedTime(t *testing.T) {
 	assert.Equal(t, r.lastTS, r2.appliedTS)
 	assert.Equal(t, r.lastTS, (&runner{t: t, r: r2}).ckptTime())
 }
+
+// Чекпойнта на цели нет: позиции нет, ошибки нет.
+func TestIntegrationAppliedPositionNoDoc(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+
+	ts, ok, err := AppliedPosition(ctx, dstClient, db, db)
+
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Equal(t, bson.Timestamp{}, ts)
+}
+
+// Документ создан захватом аренды и позиции ещё не несёт.
+func TestIntegrationAppliedPositionLeaseOnly(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	r := newIT(dstClient, Config{BatchSize: 1000, DB: db})
+	_, err := r.acquireLease(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { release(t, r) })
+
+	ts, ok, err := AppliedPosition(ctx, dstClient, db, db)
+
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Equal(t, bson.Timestamp{}, ts)
+}
+
+// Позиция — время из токена, а неразбираемый токен — clusterTime документа.
+func TestIntegrationAppliedPosition(t *testing.T) {
+	for _, tc := range []struct {
+		name, data string
+		want       bson.Timestamp
+	}{
+		{"токен", eventToken, bson.Timestamp{T: 1791910133, I: 2}},
+		{"clusterTime", "zz", bson.Timestamp{T: 1000, I: 3}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := prepare(t)
+			ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+			defer cancel()
+			putCkpt(t, db, bson.M{"token": bson.M{"_data": tc.data}, "clusterTime": bson.Timestamp{T: 1000, I: 3},
+				"db": db, "dst_db": db})
+
+			ts, ok, err := AppliedPosition(ctx, dstClient, db, db)
+
+			require.NoError(t, err)
+			assert.True(t, ok)
+			assert.Equal(t, tc.want, ts)
+		})
+	}
+}
+
+// Чекпойнт записан для другой базы источника: позиция чужая.
+func TestIntegrationAppliedPositionOtherPair(t *testing.T) {
+	db := prepare(t)
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	putCkpt(t, db, bson.M{"token": bson.M{"_data": eventToken}, "db": db + "_other", "dst_db": db})
+
+	_, ok, err := AppliedPosition(ctx, dstClient, db, db)
+
+	require.ErrorIs(t, err, ErrDBMismatch)
+	assert.False(t, ok)
+}
+
+// putCkpt заменяет документ чекпойнта базы цели dstDB полями doc.
+func putCkpt(t *testing.T, dstDB string, doc bson.M) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
+	defer cancel()
+	doc["_id"] = ckptID
+	_, err := ckptOf(dstDB).ReplaceOne(ctx, bson.M{"_id": ckptID}, doc, options.Replace().SetUpsert(true))
+	require.NoError(t, err)
+}

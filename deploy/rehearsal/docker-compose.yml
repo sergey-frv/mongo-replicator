@@ -1,0 +1,52 @@
+# Цель репетиции: пустая mongo 4.4 (replica set из одного узла) с авторизацией.
+#   cp .env.example .env   # задать пароль root
+#   docker compose up -d --wait
+# С хоста — только с directConnection=true: иначе драйвер пойдёт на localhost:27017
+# из конфигурации replica set, а там может быть другая mongod.
+name: mongo-rehearsal
+
+services:
+  mongo-target:
+    image: mongo:4.4
+    # keyfile обязателен для replica set с авторизацией; генерируется в томе при первом
+    # старте (без openssl: его в образе может не быть). Официальный entrypoint создаёт
+    # root во временной mongod без --replSet/--keyFile, поэтому root есть до rs.initiate
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -e
+        key=/data/key/keyfile
+        if [ ! -s "$$key" ]; then
+          head -c 756 /dev/urandom | base64 > "$$key.tmp"
+          mv "$$key.tmp" "$$key"
+        fi
+        chmod 400 "$$key"
+        chown mongodb:mongodb "$$key"
+        exec docker-entrypoint.sh mongod --replSet rsrehearsal --keyFile "$$key" --bind_ip_all
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:?задайте в deploy/rehearsal/.env (образец — .env.example)}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?задайте в deploy/rehearsal/.env (образец — .env.example)}
+    ports:
+      - "127.0.0.1:27117:27017"
+    volumes:
+      - rehearsal-data:/data/db
+      - rehearsal-key:/data/key
+    healthcheck:
+      # в образе 4.4 нет mongosh — старый шелл mongo; rs.status() в нём не бросает,
+      # а возвращает ok: 0 (94 — NotYetInitialized); isWritablePrimary в 4.4 нет — ismaster.
+      # --eval всегда exit 0 — поэтому явный quit
+      test:
+        - CMD-SHELL
+        - >-
+          mongo --quiet -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD"
+          --authenticationDatabase admin --eval
+          "if (rs.status().code === 94) rs.initiate({_id: 'rsrehearsal', members: [{_id: 0, host: 'localhost:27017'}]});
+          quit(db.isMaster().ismaster ? 0 : 1)"
+      interval: 2s
+      start_period: 60s
+      retries: 30
+
+volumes:
+  rehearsal-data:
+  rehearsal-key:

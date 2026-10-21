@@ -67,7 +67,7 @@
   - На источник идут второй change stream и чтения по `_id` пачками `$in`. Второй поток повторяет просмотр oplog, но без `updateLookup`.
   - `--rate` ограничивает чтения документов в секунду, `--sample` проверяет детерминированную долю ключей по хэшу `_id`.
   - Пачки идут конвейером: S1 у следующих пачек выполняется, пока предыдущие ждут чекпойнт.
-  - Если очередь ключей доходит до предела, чтение потока приостанавливается. Если поток `verify` выпадет из окна oplog (`ChangeStreamHistoryLost`), это перманентная ошибка с подсказкой.
+  - Если очередь ключей доходит до предела, чтение потока приостанавливается (✅ итог: мягко, см. ➕ Task 7). Если поток `verify` выпадет из окна oplog (`ChangeStreamHistoryLost`), это перманентная ошибка с подсказкой.
 - **Продолжение.** Позиция потока `verify`, непроверенные ключи и счётчики хранятся в своём файле под блокировкой `flock`. Повторный запуск продолжает с него, второй одновременный запуск получает отказ.
 - **Форма CLI.** Если первый аргумент — `verify`, разбирается форма сверки, иначе — запуск репликатора, как сейчас. Общие опции — встроенная структура `commonOptions` в обеих формах. Механизм команд go-flags не используется: он пропускал бы опции родителя после имени команды. Позиционные аргументы в форме запуска — ошибка с подсказкой «`verify` должна быть первым аргументом».
 - **Стенд.** Цель — `mongo:4.4` в Docker с авторизацией: root для подготовки, пользователь репликатора с `readWrite` только на `--dst-db`. Так репетиция подтверждает, что минимальных прав хватает. Схема копируется скриптом mongosh, данные не читаются, а результат проверяет `verify --schema-only`.
@@ -89,7 +89,7 @@ mongo-replicator verify [опции сверки]
 | `--rate` | `VERIFY_RATE` | `200` | максимум чтений документов в секунду с источника, `>= 1` |
 | `--sample` | `VERIFY_SAMPLE` | `1` | доля ключей `(0, 1]`, выбор по хэшу `_id`; когда `--rate` не успевает за потоком изменений |
 | `--until-caught-up` | `VERIFY_UNTIL_CAUGHT_UP` | — | закончить, когда проверены все ключи с временем события < позиции чекпойнта на момент, когда поток `verify` её достиг |
-| `--ids` | — | — | файл `unverified.json`/`defects.json`: перепроверить эти ключи и выйти (без потока, без файла позиции) |
+| `--ids` | — | — | файл `unverified.json`/`defects.json`: перепроверить эти ключи и выйти (без потока, без файла позиции) — ✅ итог: поток открывается с текущего момента (события только этих ключей), без файла позиции и блокировки |
 | `--schema-only` | — | — | сверить только схему и выйти |
 
 - Взаимоисключения (иначе код `2`): `--ids` и `--schema-only` между собой; с ними — `--since`, `--until-caught-up`, `--sample`.
@@ -112,7 +112,7 @@ mongo-replicator verify [опции сверки]
 ### Очередь ключей
 - Ключ — `(ns, raw _id)`. Для ключа хранятся `first` (самое раннее непроверенное время события), `last` (самое позднее) и число попыток. Готовность определяется по `first`.
 - Пока ключ проверяется, его новые события копятся отдельно. После вердикта, если пришло событие новее T1, ключ возвращается в очередь с `first` = время этого события.
-- Предел — 100 000 ключей. При достижении поток не читается, пока очередь не уменьшится.
+- Предел — 100 000 ключей. При достижении поток не читается, пока очередь не уменьшится. ✅ итог: предел мягкий — поток читается, пока проверки ждут его время (см. ➕ Task 7).
 - `rename a → b`: ключи `a` переносятся под `b`. Документы после rename живут в `b` на обеих сторонах. Если `updateLookup` их потерял (ограничение (a)), это честный дефект.
 - `drop` коллекции: её ключи уходят в «не проверено» с причиной `drop`. `dropDatabase`/`invalidate` — поток окончен, итоговый отчёт.
 - `create` в потоке: имя коллекции запоминается. Расхождение опций у неё в сверке схемы — «известное ограничение» (опции `create` не переносятся), а не дефект.
@@ -186,11 +186,11 @@ mongo-replicator verify [опции сверки]
 - Modify: `internal/statefile/statefile.go`
 - Modify: `internal/statefile/statefile_test.go`
 
-- [ ] `replicator.AppliedPosition(ctx, dst, srcDB, dstDB)`: чтение с primary, `appliedAt()`, `ok=false` при отсутствии документа или пустой позиции, ошибка пары баз через `checkDBs`; doc-комментарий о строгом сравнении
-- [ ] `statefile`: экспорт имени файла без каталога (`Name(dstDB, dstURI) (name, cluster string)`, `Path` выражен через него), ключа кластера (`ClusterKey`) и атомарной записи JSON (`WriteJSON(path string, v any) error` поверх `writeTemp`, `Write` выражен через неё)
-- [ ] юнит-тесты `Name`/`ClusterKey` (тот же ключ для разного порядка хостов, `srv:`) и `WriteJSON` (содержимое, отсутствие временных файлов после записи)
-- [ ] интеграционные тесты `AppliedPosition`: нет документа; документ аренды без позиции; позиция из токена; позиция из `clusterTime` при неразбираемом токене; чужая пара баз
-- [ ] `make test`, `make test-integration`, `make lint` — зелёные
+- [x] `replicator.AppliedPosition(ctx, dst, srcDB, dstDB)`: чтение с primary, `appliedAt()`, `ok=false` при отсутствии документа или пустой позиции, ошибка пары баз через `checkDBs`; doc-комментарий о строгом сравнении
+- [x] `statefile`: экспорт имени файла без каталога (`Name(dstDB, dstURI) (name, cluster string)`, `Path` выражен через него), ключа кластера (`ClusterKey`) и атомарной записи JSON (`WriteJSON(path string, v any) error` поверх `writeTemp`, `Write` выражен через неё)
+- [x] юнит-тесты `Name`/`ClusterKey` (тот же ключ для разного порядка хостов, `srv:`) и `WriteJSON` (содержимое, отсутствие временных файлов после записи)
+- [x] интеграционные тесты `AppliedPosition`: нет документа; документ аренды без позиции; позиция из токена; позиция из `clusterTime` при неразбираемом токене; чужая пара баз
+- [x] `make test`, `make test-integration`, `make lint` — зелёные
 
 ### Task 2: Разделить опции на общие, репликации и сверки
 
@@ -200,15 +200,16 @@ mongo-replicator verify [опции сверки]
 - Modify: `cmd/mongo-replicator/main.go`
 - Modify: `cmd/mongo-replicator/main_test.go`
 - Modify: `cmd/mongo-replicator/log.go`
-- Modify: `cmd/mongo-replicator/credentials.go`
+- Modify: `cmd/mongo-replicator/credentials.go` (✅ итог: не понадобилось)
 
-- [ ] `commonOptions` (встраивается), `runOptions`, `verifyOptions` по таблице из Technical Details; общие проверки — одна функция для обеих форм; `setupLog` и `withPanel` принимают то, что им нужно (общие опции / опции запуска)
-- [ ] разбор: режим по первому аргументу `verify`; `parseOpts` (запуск) отвергает любой позиционный аргумент с подсказкой «`verify` должна быть первым аргументом»; `parseVerifyOpts` (сверка); `--help` у каждой формы своя справка
-- [ ] проверки сверки: `--rate >= 1`, `--sample` в `(0, 1]`, взаимоисключения `--ids`/`--schema-only`/`--since`/`--until-caught-up`/`--sample` (код `2`); `flagGiven` смотрит аргументы без ведущего `verify`
-- [ ] `main` разветвляется по режиму; поведение запуска репликатора не меняется (существующие тесты остаются зелёными)
-- [ ] тесты `parseVerifyOpts`: успешные формы, env `VERIFY_*`, каждое взаимоисключение, опции репликации в `verify` (`--start-ts`, `--apply-drop`, `--progress`) → ошибка
-- [ ] тесты `parseOpts`: `--log-level debug verify` и `-- verify` → ошибка с подсказкой; `verify --help` и `--help` → `isHelp(err)` и разные тексты справки
-- [ ] `make test`, `make lint` — зелёные
+- [x] `commonOptions` (встраивается), `runOptions`, `verifyOptions` по таблице из Technical Details; общие проверки — одна функция для обеих форм; `setupLog` и `withPanel` принимают то, что им нужно (общие опции / опции запуска)
+- [x] разбор: режим по первому аргументу `verify`; `parseOpts` (запуск) отвергает любой позиционный аргумент с подсказкой «`verify` должна быть первым аргументом»; `parseVerifyOpts` (сверка); `--help` у каждой формы своя справка
+- [x] проверки сверки: `--rate >= 1`, `--sample` в `(0, 1]`, взаимоисключения `--ids`/`--schema-only`/`--since`/`--until-caught-up`/`--sample` (код `2`); `flagGiven` смотрит аргументы без ведущего `verify`
+- [x] `main` разветвляется по режиму; поведение запуска репликатора не меняется (существующие тесты остаются зелёными)
+- [x] тесты `parseVerifyOpts`: успешные формы, env `VERIFY_*`, каждое взаимоисключение, опции репликации в `verify` (`--start-ts`, `--apply-drop`, `--progress`) → ошибка
+- [x] тесты `parseOpts`: `--log-level debug verify` и `-- verify` → ошибка с подсказкой; `verify --help` и `--help` → `isHelp(err)` и разные тексты справки
+- [x] `make test`, `make lint` — зелёные
+- ➕ `runVerify` пока заглушка в `main.go` (ERROR «сверка ещё не реализована», код `1`); в Task 8 переезжает в `verify.go`
 
 ### Task 3: Вердикт, выборка и дифф (`internal/verify`)
 
@@ -216,12 +217,12 @@ mongo-replicator verify [опции сверки]
 - Create: `internal/verify/verdict.go`
 - Create: `internal/verify/verdict_test.go`
 
-- [ ] `verdict(s1, d, s2 bson.Raw, eventInWindow bool) result` → `matched`/`defect`/`hot`; `nil` — «документа нет»; `S1 == S2 != D` при `eventInWindow` → `hot`
-- [ ] `sampled(id bson.RawValue, p float64) bool` — sha256, первые 8 байт, `p == 1` — всегда true
-- [ ] `diffFields(src, dst bson.Raw) []string` — различающиеся, отсутствующие и лишние верхнеуровневые поля, не больше 10, детерминированный порядок
-- [ ] табличные тесты `verdict`: равны; D==S2 при S1≠S2; S1==S2≠D без события → дефект; S1==S2≠D с событием в окне (ABA) → горячий; все разные; отсутствие на каждой стороне
-- [ ] тесты `sampled` (детерминизм; доля для p=0.1 на 10 000 синтетических `_id` из хелпера — в пределах ±2%; p=1) и `diffFields` (порядок, лимит 10)
-- [ ] `make test`, `make lint` — зелёные
+- [x] `verdict(s1, d, s2 bson.Raw, eventInWindow bool) result` → `matched`/`defect`/`hot`; `nil` — «документа нет»; `S1 == S2 != D` при `eventInWindow` → `hot`
+- [x] `sampled(id bson.RawValue, p float64) bool` — sha256, первые 8 байт, `p == 1` — всегда true
+- [x] `diffFields(src, dst bson.Raw) []string` — различающиеся, отсутствующие и лишние верхнеуровневые поля, не больше 10, детерминированный порядок
+- [x] табличные тесты `verdict`: равны; D==S2 при S1≠S2; S1==S2≠D без события → дефект; S1==S2≠D с событием в окне (ABA) → горячий; все разные; отсутствие на каждой стороне
+- [x] тесты `sampled` (детерминизм; доля для p=0.1 на 10 000 синтетических `_id` из хелпера — в пределах ±2%; p=1) и `diffFields` (порядок, лимит 10)
+- [x] `make test`, `make lint` — зелёные
 
 ### Task 4: Очередь ключей и ограничитель скорости
 
@@ -231,14 +232,17 @@ mongo-replicator verify [опции сверки]
 - Create: `internal/verify/limiter.go`
 - Create: `internal/verify/limiter_test.go`
 
-- [ ] очередь:
+- [x] очередь:
   - добавление с дедупликацией (`first`, `last`), выдача готовых (`first` < позиции) пачками по коллекции до `min(500, rate)`, предел 100 000 (`full()`);
   - учёт событий у ключей в работе; `eventIn(key, t1, t2)` для вердикта; повторная постановка после вердикта;
   - rename (перенос ключей), drop (ключи → «не проверено», причина `drop`), счётчик попыток и «не проверено» после 5
-- [ ] ограничитель «маркерное ведро» с подставляемыми часами: `wait(ctx, n)` при `n <= ёмкости`, отмена контекстом; `n > ёмкости` — ошибка программиста (паника в тесте не нужна: батч ограничен вызывающим)
-- [ ] тесты очереди: дедупликация; готовность по `first` при частых событиях; пачки по коллекции; предел; событие во время проверки → повторная постановка; `eventIn` на границах (T1 исключено, T2 включено); rename; drop; 5 попыток → «не проверено»
-- [ ] тесты ограничителя на подставных часах: начальный запас = ёмкость, дальше не больше `rate` маркеров в секунду, пачка размером с ёмкость не блокируется навсегда, отмена контекстом
-- [ ] `make test`, `make lint` — зелёные
+- [x] ограничитель «маркерное ведро» с подставляемыми часами: `wait(ctx, n)` при `n <= ёмкости`, отмена контекстом; `n > ёмкости` — ошибка программиста (паника в тесте не нужна: батч ограничен вызывающим)
+- [x] тесты очереди: дедупликация; готовность по `first` при частых событиях; пачки по коллекции; предел; событие во время проверки → повторная постановка; `eventIn` на границах (T1 исключено, T2 включено); rename; drop; 5 попыток → «не проверено»
+- [x] тесты ограничителя на подставных часах: начальный запас = ёмкость, дальше не больше `rate` маркеров в секунду, пачка размером с ёмкость не блокируется навсегда, отмена контекстом
+- [x] `make test`, `make lint` — зелёные
+- ➕ API для Task 7: `newQueue(rate)`, `add(ns, id, t)`, `next(pos) (batch, bool)` (ключи пачки — `*item` на проверке), `eventIn(it, t1, t2)`, `done(it, r, t1) string` (причина «не проверено» или ""), `rename(from, to, t)`, `drop(ns) []*item` (ждавшие ключи — «не проверено» с `reasonDrop`), `len()`, `full()`; `newLimiter(rate, now, after)`, `wait(ctx, n)`
+- ➕ `eventIn` учитывает и промежуток `[first, last]` событий до проверки (обычно не позже T1, но отдельные события в нём не хранятся); rename во время проверки — событие ключа, после вердикта ключ повторяется под новым именем; ключи на проверке при drop выходят из учёта, чтобы события пересозданной коллекции встали в очередь заново
+- ➕ ограничитель резервирует маркеры сразу (порядок вызовов, отмена возвращает резерв); `n > ёмкости` — ошибка, не паника
 
 ### Task 5: Файл позиции, блокировка и отчёты
 
@@ -249,17 +253,20 @@ mongo-replicator verify [опции сверки]
 - Create: `internal/verify/lock_other.go`
 - Create: `internal/verify/lock_unix_test.go`
 
-- [ ] `positionPath(stateDir, dstDB, dstURI)` → `<state-dir>/verify/<имя>`, создание каталога
-- [ ] загрузка:
+- [x] `positionPath(stateDir, dstDB, dstURI)` → `<state-dir>/verify/<имя>`, создание каталога
+- [x] загрузка:
   - нет файла → пусто;
   - битый файл → `statefile.MoveAside(…, "corrupt")`;
   - чужие `db`/`dst_db`/`cluster`/`src_cluster` → `MoveAside(…, "mismatch")`;
   - `_id` сериализуется в canonical extended JSON, ключи восстанавливаются побайтно
-- [ ] запись позиции через `statefile.WriteJSON`; `defects.json`/`unverified.json` с обрезкой документов до 4 КиБ и лимитом 10 000 записей
-- [ ] блокировка `flock` на `<имя>.lock` (unix) и заглушка (вне unix)
-- [ ] тесты: круговая запись и чтение (`_id`: ObjectId, строка, вложенный документ, Decimal128); битый файл и чужая пара переносятся в сторону; обрезка и лимит отчётов; `statefile.Summary` по каталогу с подкаталогом `verify/` считает только файлы состояния
-- [ ] тест блокировки: второй захват той же блокировки → ошибка, после освобождения — успех
-- [ ] `make test`, `make lint` — зелёные
+- [x] запись позиции через `statefile.WriteJSON`; `defects.json`/`unverified.json` с обрезкой документов до 4 КиБ и лимитом 10 000 записей
+- [x] блокировка `flock` на `<имя>.lock` (unix) и заглушка (вне unix)
+- [x] тесты: круговая запись и чтение (`_id`: ObjectId, строка, вложенный документ, Decimal128); битый файл и чужая пара переносятся в сторону; обрезка и лимит отчётов; `statefile.Summary` по каталогу с подкаталогом `verify/` считает только файлы состояния
+- [x] тест блокировки: второй захват той же блокировки → ошибка, после освобождения — успех
+- [x] `make test`, `make lint` — зелёные
+- ➕ API для Task 7: `positionPaths(stateDir, dstDB, dstURI) (paths, cluster, error)` — `paths{position, lock, defects, unverified}`, имена `<dst-db>.<hash>.{json,lock,defects.json,unverified.json}`; `position{ident, Since, Token, StreamTime, Pending []*item, Counts}`, `loadPosition(path, ident) (*position, error)` (`nil` — начать с `--since`; не перенесённый файл — ошибка), `writePosition`; `report.add(ns, id, reason, src, dst)`, `writeReport` (пустой — `[]`), `readReport` и `reportEntry.id()` — для `--ids`; `lock(path) (unlock func(), error)`, занято — экспортированная `ErrLocked`
+- ➕ документы в отчётах — строки canonical extended JSON (видна разница типов), обрезанные по границе руны с «…»; `null` — документа нет. Отчёты пишутся целиком при выходе: при продолжении Task 7 должна загрузить отчёты прошлого запуска (`readReport`), иначе они затрутся
+- ➕ `lock_unix.go` — `unix && !aix`: в `x/sys/unix` для AIX нет `Flock`
 
 ### Task 6: Сверка схемы
 
@@ -269,12 +276,15 @@ mongo-replicator verify [опции сверки]
 - Create: `internal/verify/schema_integration_test.go`
 - Create: `internal/verify/harness_integration_test.go`
 
-- [ ] чтение `listCollections`/`listIndexes` обеих сторон, нормализация по Technical Details (служебные поля, версионные поля, порядок полей), сравнение, список расхождений с причинами
-- [ ] «известное ограничение» для коллекций из множества `created`
-- [ ] обвязка интеграционных тестов пакета (`harness_integration_test.go`): `TestMain` с клиентами `IT_SRC_URI`/`IT_DST_URI`, имя базы `it_` + `snake(t.Name())`, удаление баз в cleanup, запись чекпойнта вручную (`writeCkpt`), чтение текущего времени источника (`srcNow`) по правилам `Eventually`
-- [ ] юнит-тесты нормализации и сравнения на литералах документов (в том числе разный порядок полей, служебные и версионные поля)
-- [ ] интеграционные: одинаковая схема → без расхождений; нет индекса на цели; другой validator; лишняя коллекция на цели; view; коллекция из `created` с другими опциями → известное ограничение
-- [ ] `make test`, `make test-integration`, `make lint` — зелёные
+- [x] чтение `listCollections`/`listIndexes` обеих сторон, нормализация по Technical Details (служебные поля, версионные поля, порядок полей), сравнение, список расхождений с причинами
+- [x] «известное ограничение» для коллекций из множества `created`
+- [x] обвязка интеграционных тестов пакета (`harness_integration_test.go`): `TestMain` с клиентами `IT_SRC_URI`/`IT_DST_URI`, имя базы `it_` + `snake(t.Name())`, удаление баз в cleanup, запись чекпойнта вручную (`writeCkpt`), чтение текущего времени источника (`srcNow`) по правилам `Eventually`
+- [x] юнит-тесты нормализации и сравнения на литералах документов (в том числе разный порядок полей, служебные и версионные поля)
+- [x] интеграционные: одинаковая схема → без расхождений; нет индекса на цели; другой validator; лишняя коллекция на цели; view; коллекция из `created` с другими опциями → известное ограничение
+- [x] `make test`, `make test-integration`, `make lint` — зелёные
+- ➕ API для Task 7: `checkSchema(ctx, src, dst, srcDB, dstDB, created map[string]bool) ([]SchemaDiff, error)`, `SchemaDiff{NS, Reason, Known}` (ns — источника, порядок по имени); `replicator.CheckpointColl` — экспорт имени служебной коллекции; обвязка: `prepare`, `srcNow(t) bson.Timestamp`, `writeCkpt(t, db, at)` (одноимённая пара, позиция из `clusterTime`), `appendSrcNote` для условий `Eventually`
+- ➕ `info` коллекции сравнивается вместе с опциями (поля `info.*`), `idIndex` — нет (индекс `_id_` есть в `listIndexes`); из `collation` убирается `version` (версия ICU); у коллекции из `created` известное ограничение — и расхождение типа, и view, которого нет на цели (репликатор view не создаёт); индексы такой коллекции — дефект
+- ⚠️ числа сравниваются с типом: если `copy-schema.js` (mongosh) запишет ключ индекса или `expireAfterSeconds` другим числовым типом, `--schema-only` покажет расхождение — разобрать в Task 9 — ✅ закрыто в Task 9: на фикстуре `make test-copy-schema` расхождений типов нет
 
 ### Task 7: Цикл сверки (`Verifier.Run`)
 
@@ -283,11 +293,11 @@ mongo-replicator verify [опции сверки]
 - Create: `internal/verify/stream.go`
 - Create: `internal/verify/verify_integration_test.go`
 
-- [ ] `Config` (src, dst, DB, DstDB, Since, Rate, Sample, UntilCaughtUp, StateDir, SrcCluster, DstCluster, IDs, SchemaOnly) и `Verifier` с `Run(ctx) (Report, error)`
-- [ ] поток: `watch` базы с `startAtOperationTime` (или токеном из позиции), `showExpandedEvents`, `$project` с `_id` (токен), `operationType`, `ns`, `documentKey._id`, `clusterTime`, `to`; без `updateLookup`; события → очередь; пауза чтения при `full()`; `ChangeStreamHistoryLost` → перманентная ошибка с подсказкой («поток сверки выпал из окна oplog: удалите позицию и начните с более позднего --since»)
-- [ ] обработчик: готовые пачки по `AppliedPosition` (строго `>`), конвейер до 8 пачек; S1 (primary, majority) → ожидание чекпойнта > T1 → D → S2 → ожидание потока `verify` за T2 → вердикт с `eventIn`; сопоставление по точному `raw _id`; ограничитель на S1 и S2
-- [ ] `--until-caught-up`, `--ids` (без потока и позиции), `--schema-only`; лог раз в 10 с, ERROR на дефект, итоговый `Report`, запись позиции раз в 10 с и при выходе, отчёты при выходе
-- [ ] интеграционные тесты на вручную записанном чекпойнте:
+- [x] `Config` (src, dst, DB, DstDB, Since, Rate, Sample, UntilCaughtUp, StateDir, SrcCluster, DstCluster, IDs, SchemaOnly) и `Verifier` с `Run(ctx) (Report, error)`
+- [x] поток: `watch` базы с `startAtOperationTime` (или токеном из позиции), `showExpandedEvents`, `$project` с `_id` (токен), `operationType`, `ns`, `documentKey._id`, `clusterTime`, `to`; без `updateLookup`; события → очередь; пауза чтения при `full()`; `ChangeStreamHistoryLost` → перманентная ошибка с подсказкой («поток сверки выпал из окна oplog: удалите позицию и начните с более позднего --since»)
+- [x] обработчик: готовые пачки по `AppliedPosition` (строго `>`), конвейер до 8 пачек; S1 (primary, majority) → ожидание чекпойнта > T1 → D → S2 → ожидание потока `verify` за T2 → вердикт с `eventIn`; сопоставление по точному `raw _id`; ограничитель на S1 и S2
+- [x] `--until-caught-up`, `--ids` (без позиции; поток — см. ➕), `--schema-only`; лог раз в 10 с, ERROR на дефект, итоговый `Report`, запись позиции раз в 10 с и при выходе, отчёты при выходе
+- [x] интеграционные тесты на вручную записанном чекпойнте:
   - совпадение: документы скопированы на цель руками;
   - испорченный документ цели → дефект с диффом;
   - лишний документ на цели;
@@ -296,9 +306,16 @@ mongo-replicator verify [опции сверки]
   - `--sample`;
   - `--ids`;
   - ABA (документ изменён и возвращён между S1 и S2) → не дефект
-- [ ] интеграционный тест продолжения: остановить `Run` с непустой очередью, запустить снова → каждый ключ проверен ровно один раз (счётчики), поток продолжен с токена
-- [ ] сквозной интеграционный тест: настоящий репликатор через маленький runner пакета (`replicator.New`, `Run` в горутине, отмена, ожидание возврата, `Release` в cleanup; аренда по умолчанию 60 с) при живых записях писателя → `--until-caught-up` даёт 0 дефектов; затем испорченный документ на цели → дефект
-- [ ] `make test`, `make test-integration`, `make lint` — зелёные
+- [x] интеграционный тест продолжения: остановить `Run` с непустой очередью, запустить снова → каждый ключ проверен ровно один раз (счётчики), поток продолжен с токена
+- [x] сквозной интеграционный тест: настоящий репликатор через маленький runner пакета (`replicator.New`, `Run` в горутине, отмена, ожидание возврата, `Release` в cleanup; аренда по умолчанию 60 с) при живых записях писателя → `--until-caught-up` даёт 0 дефектов; затем испорченный документ на цели → дефект
+- [x] `make test`, `make test-integration`, `make lint` — зелёные
+- ➕ `Config`: вместо `SrcCluster`/`DstCluster` — `SrcURI`/`DstURI` как написаны (ключ кластера и имя файла позиции считаются в пакете); пустой `StateDir` — без позиции, блокировки и отчётов (так большинство интеграционных тестов)
+- ➕ API для Task 8: `New(src, dst, cfg)`, `Run(ctx) (Report, error)` (отмена ctx — штатный выход без ошибки), `Report{counts, Queue, Schema, DefectsFile, UnverifiedFile}` и `Report.Clean()` (нет дефектов документов и схемы, `Known` не в счёт); ошибки `ErrNoSince`, `ErrHistoryLost` (с путём позиции в тексте), `ErrLocked`, `replicator.ErrDBMismatch`; чекпойнта нет — WARN раз в минуту и ожидание (уже в `Run`); итог `итог сверки` и ERROR `перепроверьте: mongo-replicator verify --ids <файл>` пишет пакет
+- ➕ `--ids`: поток открывается с текущего момента и учитывает события только ключей из файла — без него вердикт не видел бы изменений в окне (ABA) и давал ложный дефект; файла позиции и блокировки нет, отчёты — `<имя>.ids.defects.json`/`<имя>.ids.unverified.json`, отчёты основной сверки не затираются
+- ➕ предел очереди мягкий: при `full()` поток всё равно читается, пока проверки ждут его время (иначе взаимоблокировка: ключи на проверке ждут поток, а поток ждёт, пока очередь уменьшится)
+- ➕ `checked` — вердикты, включая горячие повторы; `sampled_out` — отброшенные события (ключи не запоминаются); ошибка чтения пачки — WARN, ключи возвращаются в очередь без попытки, выдача пачек — через 5 с; коллекции из `create` сохраняются в позиции (`created`)
+- ➕ `replicator.TokenTime` экспортирован (время потока сверки из токена)
+- ⚠️ `--until-caught-up` фиксирует цель в момент догона: если чекпойнт стоит на токене последнего события (источник затих), это событие в цель не входит (позиция строго больше). Runbook (Task 10): запускать `--until-caught-up`, когда позиция репликатора ушла за последнюю интересующую запись (живые записи или no-op сервера раз в 10 с)
 
 ### Task 8: Подкоманда `verify` в `main`
 
@@ -307,21 +324,23 @@ mongo-replicator verify [опции сверки]
 - Create: `cmd/mongo-replicator/verify_test.go`
 - Create: `cmd/mongo-replicator/verify_integration_test.go`
 - Modify: `cmd/mongo-replicator/main.go`
-- Modify: `cmd/mongo-replicator/errors.go`
+- Modify: `cmd/mongo-replicator/errors.go` (✅ итог: не понадобилось, подсказки — в `verify.go`)
 
-- [ ] `runVerify(opts, srcOpts, dstOpts, logFile) int`:
+- [x] `runVerify(opts, srcOpts, dstOpts, logFile) int`:
   - `prepareClients` (пароль с терминала для обеих сторон), `appName` источника `mongo-replicator-verify`;
   - лог как у репликатора, без панели; `connect`, `stateDir`;
   - SIGINT/SIGTERM → отмена контекста; коды `0`/`1`/`2`
-- [ ] подсказки оператору:
+- [x] подсказки оператору:
   - нет `--since` и нет позиции;
   - файл позиции занят;
   - поток выпал из окна oplog;
   - чужая пара баз в чекпойнте;
   - чекпойнта на цели ещё нет: `verify` ждёт и пишет WARN раз в минуту, а не падает
-- [ ] юнит-тесты: код выхода по `Report` и ошибке, тексты подсказок (важен сам текст)
-- [ ] интеграционный тест на compose: `runVerify` со схемой без расхождений и без ключей → код `0`; с подложенным дефектом → код `1`
-- [ ] `make test`, `make test-integration`, `make lint` — зелёные
+- [x] юнит-тесты: код выхода по `Report` и ошибке, тексты подсказок (важен сам текст)
+- [x] интеграционный тест на compose: `runVerify` со схемой без расхождений и без ключей → код `0`; с подложенным дефектом → код `1`
+- [x] `make test`, `make test-integration`, `make lint` — зелёные
+- ➕ `runVerify(opts, srcOpts, dstOpts) int` — без `logFile`: панели у сверки нет, файл лога нужен только `setupLog`; `mainVerify` и `runVerify` перенесены в `verify.go`; `appName` `mongo-replicator-verify` — у клиентов обеих сторон
+- ➕ код выхода — `verifyCode(ctx, rep, err)`: ошибка после сигнала — остановка, код по итогу; подсказка — поле `hint` ERROR `сверка прервана` (`verifyHint`); WARN «чекпойнта ещё нет» в пакете дополнен подсказкой проверить, что репликатор запущен на эту базу цели
 
 ### Task 9: Стенд репетиции и копия схемы
 
@@ -335,33 +354,35 @@ mongo-replicator verify [опции сверки]
 - Create: `deploy/rehearsal/test-copy-schema.sh`
 - Modify: `Makefile`
 
-- [ ] compose цели по Technical Details: keyfile генерируется в контейнере, root из `.env`, порт `127.0.0.1:27117`, тома, healthcheck с аутентификацией, `rs.initiate`, `isWritablePrimary`
-- [ ] `dev-source.override.yml` — порт `127.0.0.1:27018` для `mongo-src` корневого compose
-- [ ] `create-user.js`: `readWrite` только на `DST_DB`, пароль через `passwordPrompt()`, повторный запуск — понятная ошибка «пользователь уже есть»
-- [ ] `copy-schema.js`: коллекции с опциями, индексы без `_id_`, views; непустая цель — отказ; ошибка создания — остановка с именем коллекции; вывод — список созданного
-- [ ] `test-copy-schema.sh` и цель `make test-copy-schema`: фикстура из Technical Details; `copy-schema.js` на `mongo-dst`; `verify --schema-only` в `app` → `0`; уборка `it_copy_schema`
-- [ ] `make test-copy-schema` — зелёная; `docker compose -f deploy/rehearsal/docker-compose.yml config` — без ошибок; стенд поднимается (`up -d`, healthy) и пускает root с хоста через `directConnection=true` (ручная проверка, не тест)
+- [x] compose цели по Technical Details: keyfile генерируется в контейнере, root из `.env`, порт `127.0.0.1:27117`, тома, healthcheck с аутентификацией, `rs.initiate`, `isMaster().ismaster` (`isWritablePrimary` в 4.4 нет)
+- [x] `dev-source.override.yml` — порт `127.0.0.1:27018` для `mongo-src` корневого compose
+- [x] `create-user.js`: `readWrite` только на `DST_DB`, пароль через `passwordPrompt()`, повторный запуск — понятная ошибка «пользователь уже есть»
+- [x] `copy-schema.js`: коллекции с опциями, индексы без `_id_`, views; непустая цель — отказ; ошибка создания — остановка с именем коллекции; вывод — список созданного
+- [x] `test-copy-schema.sh` и цель `make test-copy-schema`: фикстура из Technical Details; `copy-schema.js` на `mongo-dst`; `verify --schema-only` в `app` → `0`; уборка `it_copy_schema`
+- [x] `make test-copy-schema` — зелёная; `docker compose -f deploy/rehearsal/docker-compose.yml config` — без ошибок; стенд поднимается (`up -d`, healthy) и пускает root с хоста через `directConnection=true` (ручная проверка, не тест)
+- ➕ имя проекта compose стенда — `mongo-rehearsal` (тома `mongo-rehearsal_rehearsal-*`); без `.env` `config`/`up` падают с подсказкой задать root в `deploy/rehearsal/.env`
+- ➕ `copy-schema.js` убирает `version` из collation (её задаёт ICU сервера), создаёт view над view после базовой; проверено вручную: схема фикстуры с `mongo-src` 8.0 на стенд 4.4 → `verify --schema-only` под `repl` — код `0`, расхождений 8.0→4.4 на фикстуре нет (включая text-индекс)
 
 ### Task 10: Runbook репетиции
 
 **Files:**
 - Create: `docs/runbook-rehearsal.md`
 
-- [ ] предпроверка:
+- [x] предпроверка:
   - README «Проверка перед запуском» (поток по базе, `--start-ts` в окне);
   - Docker и `mongosh` на машине (пакет `mongodb-mongosh`, AVX не нужен), сборка бинарника;
   - цель репетиции — `mongo:4.4` (на машине переливки mongo 5.0+ не запускается); исходим из того, что возможности 8.0, которых нет в 4.4, не используются;
   - свободное место — оценить по скорости изменений источника за первые минуты догона (`applied`/с × средний размер документа × длительность репетиции) с запасом в 2 раза
-- [ ] стенд:
+- [x] стенд:
   - `.env`, `docker compose up -d`, `create-user.js`, `copy-schema.js`;
   - `verify --schema-only` → `0`, любое расхождение разобрать до старта;
   - везде `directConnection=true`
-- [ ] запуск:
+- [x] запуск:
   - `START_TS` = час назад, с пробой окна `startAtOperationTime`;
   - окна tmux, свой `--log-file` у каждого процесса: 1 — репликатор под `repl`, 2 — `verify --since $START_TS --rate 200`, 3 — оператор;
   - в первые минуты сравнить рост очереди `verify` со скоростью сверки и при росте подобрать `--rate`/`--sample`;
   - ожидание догона до лага < 10 с с записью скорости догона
-- [ ] сценарии F1–F7 с действием, ожиданием и критерием:
+- [x] сценарии F1–F7 с действием, ожиданием и критерием:
   - F1 — Ctrl+C и перезапуск;
   - F2 — `kill -9`: перезапуск сразу даёт код `1` с подсказкой про аренду, через ≥60 с работает с чекпойнта;
   - F3 — `docker restart` цели;
@@ -371,27 +392,31 @@ mongo-replicator verify [опции сверки]
   - F7 — 1–2 ч ровной работы: лаг, RSS через `ps -o rss`, ERROR в логе.
 
   После каждого: лаг < 10 с и 0 дефектов. Фактическое поведение F2, F4 и F5 сверить с кодом и интеграционными тестами аренды.
-- [ ] известные ситуации:
+- [x] известные ситуации:
   - E11000 по уникальному индексу: повторяющийся WARN `ошибка репликации, повтор` с E11000 → удалить мешающий документ на цели (README «Уникальные индексы»); в журнал; на готовность не влияет, если после удаления сверка чистая;
   - DDL между `START_TS` и копией схемы (окно, аналог окна дампа): `create` существующей коллекции терпится, `drop` останавливает репликатор (решение по README «После остановки на drop»), upsert в удалённую коллекцию создаёт её без опций — ссылка на README «Ограничения»
-- [ ] «стоп-кран» нагрузки: сначала `verify`, затем при необходимости репликатор (продолжит с чекпойнта, пока позиция в окне oplog); второй поток `verify` повторяет просмотр oplog — это его основная цена
-- [ ] финал:
+- [x] «стоп-кран» нагрузки: сначала `verify`, затем при необходимости репликатор (продолжит с чекпойнта, пока позиция в окне oplog); второй поток `verify` повторяет просмотр oplog — это его основная цена
+- [x] финал:
   - остановить `verify` в окне 2, затем `verify --until-caught-up`, перепроверить «не проверено» через `--ids`;
   - критерии готовности;
   - журнал репетиции — таблица: `START_TS`, время и скорость догона, итог F1–F7, финальный отчёт, неожиданные события (rename/drop/E11000);
   - уборка: `down -v`, файлы состояния, каталог `verify/`, `.env`
-- [ ] проверить runbook вручную на машине разработки: `mongo-src` через `dev-source.override.yml` → стенд репетиции, до F1 включительно; расхождения исправить в runbook
+- [x] проверить runbook вручную на машине разработки: `mongo-src` через `dev-source.override.yml` → стенд репетиции, до F1 включительно; расхождения исправить в runbook
+- ➕ проверено вручную на машине разработки (`mongo-src` 8.0 через `dev-source.override.yml` с живым писателем → стенд 4.4): `create-user.js` (и повтор — «уже есть»), проба записи, `copy-schema.js` под `repl` (коллекции с опциями, индексы, view), `verify --schema-only` → `0`, проба `START_TS`, репликатор и `verify --since`, F1 (код `0`, продолжение с токена, `ckpt_lag` сверки вырос и вернулся, дефектов `0`), затем `--until-caught-up` → `0` и `--ids` по `unverified.json` → `0`, уборка
+- ➕ по итогам проверки в runbook: `stream_lag`/`ckpt_lag` — в миллисекундах; `checked` включает повторы горячих ключей; WARN `коллекция создана без опций источника` / `view не создаётся автоматически` при повторе `create` из окна после `START_TS` ожидаемы (коллекции уже создал `copy-schema.js`)
 
 ### Task 11: Verify acceptance criteria
-- [ ] все требования Overview реализованы: `verify` не пишет на цель и не берёт аренду (по коду — только `find`/`watch`/`listCollections`/`listIndexes` и чтение чекпойнта)
-- [ ] остановка `verify` не влияет на работающий репликатор (сквозной тест из Task 7 или ручная проверка на compose)
-- [ ] граничные случаи: горячий документ, ABA, события с одним `clusterTime`, rename в окне, drop в окне, отсутствие чекпойнта, позиция чужой пары, занятый файл позиции
-- [ ] `make test`, `make test-integration`, `make test-copy-schema`, `make lint` — зелёные
+- [x] все требования Overview реализованы: `verify` не пишет на цель и не берёт аренду (по коду — только `find`/`watch`/`listCollections`/`listIndexes` и чтение чекпойнта)
+- [x] остановка `verify` не влияет на работающий репликатор (сквозной тест из Task 7 или ручная проверка на compose)
+- [x] граничные случаи: горячий документ, ABA, события с одним `clusterTime`, rename в окне, drop в окне, отсутствие чекпойнта, позиция чужой пары, занятый файл позиции
+- [x] `make test`, `make test-integration`, `make test-copy-schema`, `make lint` — зелёные
+- ➕ аудит кода: обращения `internal/verify` к серверу — `Watch`, `ListCollections`, `Indexes().List`, `Find`, `ping` и `replicator.AppliedPosition` (чтение чекпойнта); кода аренды и записи нет. Остановка сверки: в `TestIntegrationVerifyReplicator` репликатор после выхода сверки продолжает применять (`waitApplied`), ручная проверка F1/F6 — Task 10
+- ➕ граничные случаи, которых не было на уровне `Run`, — интеграционные тесты `TestIntegrationVerify{Transaction,NoCheckpoint,OtherPair,Locked,Rename,Drop}`; горячий документ и ABA — `TestIntegrationVerifyABA` и юнит-тесты очереди
 
 ### Task 12: [Final] Update documentation
-- [ ] README «Требования»: цель — replica set MongoDB 4.4+ (интеграционные тесты — на 8.0; возможности 8.0, которых нет в 4.4, не используются)
-- [ ] README: раздел «Сверка» — назначение, опции, вердикт, нагрузка и стоп-кран, чтения только с primary, файлы позиции и отчётов, коды выхода, ссылка на `docs/runbook-rehearsal.md`; в таблице опций — пометка, какие опции относятся к какой форме
-- [ ] CLAUDE.md:
+- [x] README «Требования»: цель — replica set MongoDB 4.4+ (интеграционные тесты — на 8.0; возможности 8.0, которых нет в 4.4, не используются)
+- [x] README: раздел «Сверка» — назначение, опции, вердикт, нагрузка и стоп-кран, чтения только с primary, файлы позиции и отчётов, коды выхода, ссылка на `docs/runbook-rehearsal.md`; в таблице опций — пометка, какие опции относятся к какой форме
+- [x] CLAUDE.md:
   - раскладка: `internal/verify`, подкоманда в `cmd/mongo-replicator/verify.go`, `deploy/rehearsal/`;
   - зависимости: `replicator, statefile ← verify ← main`;
   - файл позиции в `<state-dir>/verify/` (имя совпало бы с файлом состояния репликатора);
@@ -399,7 +424,7 @@ mongo-replicator verify [опции сверки]
   - исключение из правила `newIT` для сквозного теста `verify`;
   - `make test-copy-schema`;
   - стенд репетиции на `mongo:4.4`: в образе нет `mongosh`, скрипты — `mongosh` с хоста
-- [ ] move this plan to `docs/plans/completed/`
+- [x] move this plan to `docs/plans/completed/`
 
 ## Post-Completion
 *Items requiring manual intervention or external systems — no checkboxes, informational only*

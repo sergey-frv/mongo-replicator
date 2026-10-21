@@ -32,27 +32,40 @@ func TestClusterKey(t *testing.T) {
 		{"без схемы", "h1,h2", "h1:27017,h2:27017"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, clusterKey(tc.uri))
+			assert.Equal(t, tc.want, ClusterKey(tc.uri))
 		})
 	}
 
-	srv := clusterKey("mongodb+srv://c.example.net/?srvMaxHosts=1")
+	srv := ClusterKey("mongodb+srv://c.example.net/?srvMaxHosts=1")
 
-	assert.Equal(t, srv, clusterKey("mongodb+srv://c.example.net/?srvMaxHosts=3&appName=x"),
+	assert.Equal(t, srv, ClusterKey("mongodb+srv://c.example.net/?srvMaxHosts=3&appName=x"),
 		"srvMaxHosts и параметры не влияют")
-	assert.Equal(t, clusterKey("mongodb://h1,h2:27017"), clusterKey("mongodb://h2,H1:27017/db"))
-	assert.NotEqual(t, clusterKey("mongodb://h1,h2"), clusterKey("mongodb://h1,h3"), "разные кластеры")
-	assert.NotEqual(t, clusterKey("mongodb://h1"), clusterKey("mongodb+srv://h1"), "srv и список хостов")
+	assert.Equal(t, ClusterKey("mongodb://h1,h2:27017"), ClusterKey("mongodb://h2,H1:27017/db"))
+	assert.NotEqual(t, ClusterKey("mongodb://h1,h2"), ClusterKey("mongodb://h1,h3"), "разные кластеры")
+	assert.NotEqual(t, ClusterKey("mongodb://h1"), ClusterKey("mongodb+srv://h1"), "srv и список хостов")
 }
 
-func TestStateFileName(t *testing.T) {
-	a := stateFileName("app", clusterKey("mongodb://h1,h2"))
+func TestName(t *testing.T) {
+	a, cluster := Name("app", "mongodb://u:p@h1,h2/app?replicaSet=rs0")
 
 	assert.Regexp(t, regexp.MustCompile(`^app\.[0-9a-f]{8}\.json$`), a)
-	assert.Equal(t, a, stateFileName("app", clusterKey("mongodb://h2:27017,H1/")))
-	assert.NotEqual(t, a, stateFileName("app", clusterKey("mongodb://h3")), "другой кластер")
-	assert.NotEqual(t, a, stateFileName("app2", clusterKey("mongodb://h1,h2")), "другая база")
+	assert.Equal(t, "h1:27017,h2:27017", cluster)
+	assert.Equal(t, a, first(Name("app", "mongodb://h2:27017,H1/")), "порядок и регистр хостов")
+	assert.NotEqual(t, a, first(Name("app", "mongodb://h3")), "другой кластер")
+	assert.NotEqual(t, a, first(Name("app2", "mongodb://h1,h2")), "другая база")
 }
+
+func TestNameSRV(t *testing.T) {
+	name, cluster := Name("app", "mongodb+srv://u:p@Cluster0.Example.NET/?srvMaxHosts=2")
+
+	assert.Equal(t, "srv:cluster0.example.net", cluster)
+	assert.Equal(t, name, first(Name("app", "mongodb+srv://cluster0.example.net/?srvMaxHosts=3")),
+		"srvMaxHosts не влияет")
+	assert.NotEqual(t, name, first(Name("app", "mongodb://cluster0.example.net")), "srv и список хостов")
+}
+
+// first — первое из двух возвращаемых значений.
+func first(a, _ string) string { return a }
 
 func TestWriteReadState(t *testing.T) {
 	dir := t.TempDir()
@@ -93,6 +106,37 @@ func TestWriteStateNoDir(t *testing.T) {
 	err := Write(filepath.Join(t.TempDir(), "missing", "app.json"), State{})
 
 	require.Error(t, err)
+}
+
+func TestWriteJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.0123abcd.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"old": true}`), 0o640))
+
+	err := WriteJSON(path, map[string]any{"db": "app", "pending": []int{1, 2}}, 0o600)
+
+	require.NoError(t, err)
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"db": "app", "pending": [1, 2]}`, string(b), "содержимое заменено целиком")
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "временных файлов нет")
+	assert.Equal(t, "app.0123abcd.json", entries[0].Name())
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), fi.Mode().Perm(), "права из perm, не прежнего файла")
+}
+
+func TestWriteJSONUnmarshalable(t *testing.T) {
+	dir := t.TempDir()
+
+	err := WriteJSON(filepath.Join(dir, "app.json"), map[string]any{"ch": make(chan int)}, 0o600)
+
+	require.Error(t, err)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "ни файла, ни временного файла")
 }
 
 func TestReadStateCorrupt(t *testing.T) {
@@ -219,5 +263,5 @@ func TestStatePath(t *testing.T) {
 	path, cluster := Path(dir, "app", "mongodb://u:p@H2,h1:27017/app?replicaSet=rs0")
 
 	assert.Equal(t, "h1:27017,h2:27017", cluster)
-	assert.Equal(t, filepath.Join(dir, stateFileName("app", cluster)), path)
+	assert.Equal(t, filepath.Join(dir, first(Name("app", "mongodb://h1,h2"))), path)
 }

@@ -47,12 +47,12 @@ type Machine struct {
 	Traffic   traffic.Info // сумма накопленного в файлах
 }
 
-// clusterKey — ключ кластера цели по URI как написан: разрешённые хосты не
+// ClusterKey — ключ кластера по URI как написан: разрешённые хосты не
 // годятся — SRV с srvMaxHosts даёт случайное подмножество, а замена узла меняла
 // бы ключ. mongodb+srv — "srv:<host>"; mongodb — хосты строки в нижнем регистре,
 // с портом 27017 по умолчанию, отсортированные, через запятую. Разбор строковый:
 // multi-host URI net/url может не разобрать.
-func clusterKey(uri string) string {
+func ClusterKey(uri string) string {
 	scheme, rest := "", uri
 	if i := strings.Index(uri, "://"); i >= 0 {
 		scheme, rest = strings.ToLower(uri[:i]), uri[i+len("://"):]
@@ -87,14 +87,16 @@ func clusterKey(uri string) string {
 // Path — путь файла состояния процесса в каталоге dir и ключ кластера цели
 // (Config.StateFile, Config.Cluster) по базе цели и URI цели как написан.
 func Path(dir, dstDB, dstURI string) (path, cluster string) {
-	cluster = clusterKey(dstURI)
-	return filepath.Join(dir, stateFileName(dstDB, cluster)), cluster
+	name, cluster := Name(dstDB, dstURI)
+	return filepath.Join(dir, name), cluster
 }
 
-// stateFileName — имя файла состояния процесса: "<dst-db>.<8 hex sha256(key)>.json".
-func stateFileName(dstDB, key string) string {
-	sum := sha256.Sum256([]byte(key))
-	return dstDB + "." + hex.EncodeToString(sum[:4]) + ".json"
+// Name — имя файла состояния процесса без каталога и ключ кластера цели:
+// "<dst-db>.<8 hex sha256(ClusterKey(dstURI))>.json".
+func Name(dstDB, dstURI string) (name, cluster string) {
+	cluster = ClusterKey(dstURI)
+	sum := sha256.Sum256([]byte(cluster))
+	return dstDB + "." + hex.EncodeToString(sum[:4]) + ".json", cluster
 }
 
 // Load читает файл состояния; отсутствие файла — ошибка fs.ErrNotExist.
@@ -110,42 +112,48 @@ func Load(path string) (State, error) {
 	return s, nil
 }
 
-// Write заменяет файл состояния целиком: временный файл в том же каталоге,
-// Sync, Rename, Sync каталога — после сбоя остаётся старое или новое содержимое.
+// Write заменяет файл состояния целиком (WriteJSON). Права 0640: в общем
+// --state-dir сводку пользователей одной группы собирают из чужих файлов.
 func Write(path string, s State) error {
-	b, err := json.Marshal(s)
-	if err != nil {
-		return fmt.Errorf("файл состояния: %w", err)
-	}
-	dir := filepath.Dir(path)
-	tmp, err := writeTemp(dir, "."+filepath.Base(path)+".tmp-*", b)
-	if err != nil {
-		return fmt.Errorf("файл состояния: %w", err)
-	}
-	if err = os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("файл состояния: %w", err)
-	}
-	d, err := os.Open(dir) //nolint:gosec // каталог из --state-dir
-	if err != nil {
-		return fmt.Errorf("файл состояния: %w", err)
-	}
-	defer d.Close()
-	if err = d.Sync(); err != nil {
+	if err := WriteJSON(path, s, 0o640); err != nil {
 		return fmt.Errorf("файл состояния: %w", err)
 	}
 	return nil
 }
 
-// writeTemp пишет b во временный файл каталога dir с Sync и возвращает его путь;
-// при ошибке файл удаляется. Права 0640 (CreateTemp создаёт 0600): в общем
-// --state-dir сводку пользователей одной группы собирают из чужих файлов.
-func writeTemp(dir, pattern string, b []byte) (string, error) {
+// WriteJSON заменяет файл path на JSON v целиком с правами perm: временный файл
+// в том же каталоге, Sync, Rename, Sync каталога — после сбоя остаётся старое
+// или новое содержимое.
+func WriteJSON(path string, v any, perm os.FileMode) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	tmp, err := writeTemp(dir, "."+filepath.Base(path)+".tmp-*", b, perm)
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	d, err := os.Open(dir) //nolint:gosec // каталог из --state-dir
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// writeTemp пишет b во временный файл каталога dir с правами perm (CreateTemp
+// создаёт 0600) и Sync и возвращает его путь; при ошибке файл удаляется.
+func writeTemp(dir, pattern string, b []byte, perm os.FileMode) (string, error) {
 	f, err := os.CreateTemp(dir, pattern)
 	if err != nil {
 		return "", err
 	}
-	err = f.Chmod(0o640)
+	err = f.Chmod(perm)
 	if err == nil {
 		_, err = f.Write(b)
 	}

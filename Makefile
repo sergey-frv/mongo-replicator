@@ -31,6 +31,12 @@ test-integration:
 	docker compose run --rm app /bin/sh -c "\
 		CGO_ENABLED=1 go test -count=1 -race -v -p 1 -timeout=\"600s\" -tags integration ./..."
 
+# copy-schema.js стенда репетиции: фикстура на mongo-src, копия на mongo-dst,
+# verify --schema-only — код 0
+.PHONY: test-copy-schema
+test-copy-schema:
+	./deploy/rehearsal/test-copy-schema.sh
+
 # без --start-ts на пустом чекпойнте Run вернёт ErrNoStartPoint
 .PHONY: run
 run:

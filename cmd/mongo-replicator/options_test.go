@@ -14,7 +14,8 @@ import (
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{"SRC_URI", "DST_URI", "START_TS", "BATCH_SIZE", "DB", "DST_DB", "APPLY_DROP",
-		"LOG_LEVEL", "LOG_FILE", "LOG_FILE_LEVEL", "PROGRESS", "NO_CLEAR", "STATE_DIR"} {
+		"LOG_LEVEL", "LOG_FILE", "LOG_FILE_LEVEL", "PROGRESS", "NO_CLEAR", "STATE_DIR",
+		"VERIFY_SINCE", "VERIFY_RATE", "VERIFY_SAMPLE", "VERIFY_UNTIL_CAUGHT_UP"} {
 		t.Setenv(k, "") // восстановит исходное значение после теста
 		require.NoError(t, os.Unsetenv(k))
 	}
@@ -44,8 +45,11 @@ func TestParseOptsEnv(t *testing.T) {
 	opts, err := parseOpts(nil)
 
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", StartTS: 1791900000, BatchSize: 50, DB: "urlshrinker", DstDB: "urlshrinker",
-		LogLevel: "debug", LogFile: "/var/log/repl.log", LogFileLevel: "warn", Progress: "plain", StateDir: "/var/lib/repl"}, opts)
+	assert.Equal(t, runOptions{
+		commonOptions: commonOptions{Src: "mongodb://src", Dst: "mongodb://dst", DB: "urlshrinker", DstDB: "urlshrinker",
+			LogLevel: "debug", LogFile: "/var/log/repl.log", LogFileLevel: "warn", StateDir: "/var/lib/repl"},
+		StartTS: 1791900000, BatchSize: 50, Progress: "plain",
+	}, opts)
 }
 
 func TestStateDir(t *testing.T) {
@@ -109,8 +113,11 @@ func TestParseOptsDefaults(t *testing.T) {
 	opts, err := parseOpts([]string{"--src", "mongodb://src", "--dst", "mongodb://dst", "--db", "urlshrinker"})
 
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src", Dst: "mongodb://dst", BatchSize: 1000, DB: "urlshrinker", DstDB: "urlshrinker",
-		LogLevel: "info", LogFileLevel: "info", Progress: "auto"}, opts)
+	assert.Equal(t, runOptions{
+		commonOptions: commonOptions{Src: "mongodb://src", Dst: "mongodb://dst", DB: "urlshrinker", DstDB: "urlshrinker",
+			LogLevel: "info", LogFileLevel: "info"},
+		BatchSize: 1000, Progress: "auto",
+	}, opts)
 }
 
 func TestParseOptsFlagsOverrideEnv(t *testing.T) {
@@ -129,8 +136,11 @@ func TestParseOptsFlagsOverrideEnv(t *testing.T) {
 		"--log-level", "debug", "--log-file", "flag.log", "--log-file-level", "info", "--progress", "tty"})
 
 	require.NoError(t, err)
-	assert.Equal(t, options{Src: "mongodb://src-flag", Dst: "mongodb://dst-env", StartTS: 2, BatchSize: 7, DB: "flag", DstDB: "flag",
-		LogLevel: "debug", LogFile: "flag.log", LogFileLevel: "info", Progress: "tty"}, opts)
+	assert.Equal(t, runOptions{
+		commonOptions: commonOptions{Src: "mongodb://src-flag", Dst: "mongodb://dst-env", DB: "flag", DstDB: "flag",
+			LogLevel: "debug", LogFile: "flag.log", LogFileLevel: "info"},
+		StartTS: 2, BatchSize: 7, Progress: "tty",
+	}, opts)
 }
 
 func TestParseOptsProgress(t *testing.T) {
@@ -545,4 +555,185 @@ func TestParseOptsHelp(t *testing.T) {
 	assert.Contains(t, err.Error(), "--no-clear")
 	assert.Contains(t, err.Error(), "NO_CLEAR")
 	assert.NotContains(t, err.Error(), "--dbg")
+	assert.Contains(t, err.Error(), "verify --help") // где искать справку сверки
+	assert.NotContains(t, err.Error(), "--since")
+	assert.NotContains(t, err.Error(), "--schema-only")
+}
+
+// Позиционный аргумент формы запуска — ошибка: verify распознаётся только первым аргументом.
+func TestParseOptsPositional(t *testing.T) {
+	base := []string{"--src", "s", "--dst", "d", "--db", "db"}
+	for _, c := range []struct {
+		name string
+		args []string
+	}{
+		{"после значения опции", []string{"--log-level", "debug", "verify"}},
+		{"после --", []string{"--", "verify"}},
+		{"любой", []string{"extra"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clearEnv(t)
+
+			_, err := parseOpts(append(base, c.args...))
+
+			require.Error(t, err)
+			assert.False(t, isHelp(err), "ошибка — не --help")
+			assert.Contains(t, err.Error(), "verify должна быть первым аргументом")
+		})
+	}
+}
+
+func TestParseVerifyOptsDefaults(t *testing.T) {
+	clearEnv(t)
+
+	opts, err := parseVerifyOpts([]string{"--src", "mongodb://src", "--dst", "mongodb://dst", "--db", "urlshrinker"})
+
+	require.NoError(t, err)
+	assert.Equal(t, verifyOptions{
+		commonOptions: commonOptions{Src: "mongodb://src", Dst: "mongodb://dst", DB: "urlshrinker", DstDB: "urlshrinker",
+			LogLevel: "info", LogFileLevel: "info"},
+		Rate: 200, Sample: 1,
+	}, opts)
+}
+
+func TestParseVerifyOptsEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("SRC_URI", "mongodb://src")
+	t.Setenv("DST_URI", "mongodb://dst")
+	t.Setenv("DB", "urlshrinker")
+	t.Setenv("DST_DB", "urlshrinker_v2")
+	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("LOG_FILE", "/var/log/verify.log")
+	t.Setenv("LOG_FILE_LEVEL", "warn")
+	t.Setenv("STATE_DIR", "/var/lib/repl")
+	t.Setenv("VERIFY_SINCE", "1791900000")
+	t.Setenv("VERIFY_RATE", "50")
+	t.Setenv("VERIFY_SAMPLE", "0.1")
+	t.Setenv("VERIFY_UNTIL_CAUGHT_UP", "true")
+
+	opts, err := parseVerifyOpts(nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, verifyOptions{
+		commonOptions: commonOptions{Src: "mongodb://src", Dst: "mongodb://dst", DB: "urlshrinker", DstDB: "urlshrinker_v2",
+			LogLevel: "debug", LogFile: "/var/log/verify.log", LogFileLevel: "warn", StateDir: "/var/lib/repl"},
+		Since: 1791900000, Rate: 50, Sample: 0.1, UntilCaughtUp: true,
+	}, opts)
+}
+
+func TestParseVerifyOptsFlagsOverrideEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("VERIFY_SINCE", "1")
+	t.Setenv("VERIFY_RATE", "50")
+	t.Setenv("VERIFY_SAMPLE", "0.1")
+
+	opts, err := parseVerifyOpts([]string{"--src", "s", "--dst", "d", "--db", "db",
+		"--since", "1791900000", "--rate", "1", "--sample", "1", "--until-caught-up"})
+
+	require.NoError(t, err)
+	assert.Equal(t, verifyOptions{
+		commonOptions: commonOptions{Src: "s", Dst: "d", DB: "db", DstDB: "db", LogLevel: "info", LogFileLevel: "info"},
+		Since:         1791900000, Rate: 1, Sample: 1, UntilCaughtUp: true,
+	}, opts)
+}
+
+func TestParseVerifyOptsIDs(t *testing.T) {
+	clearEnv(t)
+
+	opts, err := parseVerifyOpts([]string{"--src", "s", "--dst", "d", "--db", "db", "--ids", "/tmp/db.defects.json"})
+
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/db.defects.json", opts.IDs, "файл ключей")
+	assert.False(t, opts.SchemaOnly, "только схема")
+}
+
+func TestParseVerifyOptsSchemaOnly(t *testing.T) {
+	clearEnv(t)
+
+	opts, err := parseVerifyOpts([]string{"--src", "s", "--dst", "d", "--db", "db", "--schema-only"})
+
+	require.NoError(t, err)
+	assert.True(t, opts.SchemaOnly, "только схема")
+	assert.Empty(t, opts.IDs, "файл ключей")
+}
+
+func TestParseVerifyOptsErrors(t *testing.T) {
+	base := []string{"--src", "s", "--dst", "d", "--db", "db"}
+	for _, c := range []struct {
+		name string
+		env  map[string]string
+		args []string
+		want string // подстрока ошибки: случай падает по своей причине
+	}{
+		{"--rate 0", nil, []string{"--rate", "0"}, "--rate должен быть не меньше 1"},
+		{"VERIFY_RATE<0", map[string]string{"VERIFY_RATE": "-1"}, nil, "--rate должен быть не меньше 1"},
+		{"--sample 0", nil, []string{"--sample", "0"}, "--sample должна быть в (0, 1]"},
+		{"--sample больше 1", nil, []string{"--sample", "1.5"}, "--sample должна быть в (0, 1]"},
+		{"--sample NaN", nil, []string{"--sample", "NaN"}, "--sample должна быть в (0, 1]"},
+		{"VERIFY_SAMPLE отрицательная", map[string]string{"VERIFY_SAMPLE": "-0.5"}, nil, "--sample должна быть в (0, 1]"},
+		{"--since 0", nil, []string{"--since", "0"}, "--since должна быть больше 0"},
+		{"пустой --ids", nil, []string{"--ids", ""}, "--ids не может быть пустой"},
+		{"--ids и --schema-only", nil, []string{"--ids", "f.json", "--schema-only"}, "--ids и --schema-only несовместимы"},
+		{"--since с --ids", nil, []string{"--ids", "f.json", "--since", "1"}, "--since несовместима с --ids"},
+		{"VERIFY_SINCE с --ids", map[string]string{"VERIFY_SINCE": "1"}, []string{"--ids", "f.json"}, "--since несовместима с --ids"},
+		{"--until-caught-up с --ids", nil, []string{"--ids", "f.json", "--until-caught-up"}, "--until-caught-up несовместима с --ids"},
+		{"--sample с --ids", nil, []string{"--ids", "f.json", "--sample", "1"}, "--sample несовместима с --ids"},
+		{"--since с --schema-only", nil, []string{"--schema-only", "--since", "1"}, "--since несовместима с --schema-only"},
+		{"--until-caught-up с --schema-only", nil, []string{"--schema-only", "--until-caught-up"}, "--until-caught-up несовместима с --schema-only"},
+		{"VERIFY_SAMPLE с --schema-only", map[string]string{"VERIFY_SAMPLE": "0.5"}, []string{"--schema-only"}, "--sample несовместима с --schema-only"},
+		{"--start-ts", nil, []string{"--start-ts", "1"}, "unknown flag `start-ts'"},
+		{"--apply-drop", nil, []string{"--apply-drop", "db.a"}, "unknown flag `apply-drop'"},
+		{"--progress", nil, []string{"--progress", "plain"}, "unknown flag `progress'"},
+		{"позиционный аргумент", nil, []string{"extra"}, "неожиданный аргумент \"extra\""},
+		{"нет --db", nil, []string{"--db", ""}, "--db не может быть пустой"},
+		{"служебная --dst-db", nil, []string{"--dst-db", "admin"}, "служебная база"},
+		{"--log-file-level без --log-file", nil, []string{"--log-file-level", "debug"}, "--log-file-level задан без --log-file"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clearEnv(t)
+			setEnv(t, c.env)
+
+			_, err := parseVerifyOpts(append(base, c.args...))
+
+			require.Error(t, err)
+			assert.False(t, isHelp(err), "ошибка — не --help")
+			assert.Contains(t, err.Error(), c.want)
+		})
+	}
+}
+
+// VERIFY_UNTIL_CAUGHT_UP=false и пустые env опций сверки не задают опцию: с --ids не конфликтуют.
+func TestParseVerifyOptsIDsEnvNotGiven(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("VERIFY_UNTIL_CAUGHT_UP", "false")
+
+	opts, err := parseVerifyOpts([]string{"--src", "s", "--dst", "d", "--db", "db", "--ids", "f.json"})
+
+	require.NoError(t, err)
+	assert.False(t, opts.UntilCaughtUp, "до догона")
+}
+
+// У формы сверки своя справка: опции сверки без опций запуска.
+func TestParseVerifyOptsHelp(t *testing.T) {
+	clearEnv(t)
+
+	_, err := parseVerifyOpts([]string{"--help"})
+
+	require.Error(t, err)
+	assert.True(t, isHelp(err), "ошибка — --help")
+	assert.Contains(t, err.Error(), "verify [OPTIONS]")
+	assert.Contains(t, err.Error(), "SRC_URI")
+	assert.Contains(t, err.Error(), "--dst-db")
+	assert.Contains(t, err.Error(), "--state-dir")
+	assert.Contains(t, err.Error(), "--since")
+	assert.Contains(t, err.Error(), "VERIFY_SINCE")
+	assert.Contains(t, err.Error(), "--rate")
+	assert.Contains(t, err.Error(), "--sample")
+	assert.Contains(t, err.Error(), "--until-caught-up")
+	assert.Contains(t, err.Error(), "--ids")
+	assert.Contains(t, err.Error(), "--schema-only")
+	assert.NotContains(t, err.Error(), "--start-ts")
+	assert.NotContains(t, err.Error(), "--apply-drop")
+	assert.NotContains(t, err.Error(), "--progress")
+	assert.NotContains(t, err.Error(), "--no-clear")
 }
